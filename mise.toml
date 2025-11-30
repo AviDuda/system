@@ -1,0 +1,76 @@
+# Task runner config
+# mise is installed via Nix, or you can install it via https://mise.jdx.dev/
+# Run tasks with: mise run <task> or mise <task>
+
+[env]
+# Load from .env file (copy .env.example to .env)
+_.file = ".env"
+
+[tasks.switch]
+description = "Build & activate this host's profile"
+depends = ["fmt", "fast-switch"]
+
+[tasks.fast-switch]
+alias = "fs"
+description = "Switch without formatting, for rapid iteration"
+depends = ["_check-git"]
+run = "sudo darwin-rebuild --flake \".#${FLAKE_HOST:-$(hostname)}\" switch"
+
+[tasks.build]
+alias = "b"
+description = "Build this host's profile"
+depends = ["_check-git"]
+run = "darwin-rebuild --flake \".#${FLAKE_HOST:-$(hostname)}\" build"
+
+[tasks.fmt]
+description = "Format nix files"
+run = "nixpkgs-fmt ."
+
+[tasks.fmt-check]
+description = "Check nix formatting"
+run = "nixpkgs-fmt --check ."
+
+[tasks.check]
+description = "Run checks"
+depends = ["fmt-check"]
+
+[tasks.diff]
+description = "Diff this host's closure against current system"
+run = """
+#!/usr/bin/env bash
+nix build ".#darwinConfigurations.${FLAKE_HOST:-$(hostname)}.system" -o ./new-system
+nvd --color always diff /run/current-system ./new-system | less -FR
+rm ./new-system
+"""
+
+[tasks.repl]
+description = "Start a REPL with flake outputs"
+run = """
+nix repl --expr 'let
+  flake = builtins.getFlake "'$(pwd)'";
+  pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem}; in
+  { inherit flake pkgs; inherit (pkgs) lib; configs = flake.darwinConfigurations // flake.nixosConfigurations; }'
+"""
+
+[tasks.gc]
+description = "Garbage-collect the Nix store (usage: mise gc -- 60)"
+run = """
+#!/usr/bin/env bash
+age="${1:-60}"
+sudo nix-collect-garbage --delete-older-than "${age}d"
+nix-collect-garbage
+"""
+
+[tasks._check-git]
+hide = true
+description = "Check for untracked .nix files"
+run = """
+#!/usr/bin/env bash
+untracked=$(git ls-files --others --exclude-standard '*.nix' '*/*.nix')
+if [[ -n "$untracked" ]]; then
+    echo "Error: Untracked .nix files found (flakes only see git-tracked files):"
+    echo "$untracked" | sed 's/^/  /'
+    echo "Run 'git add' on these files first."
+    exit 1
+fi
+"""
