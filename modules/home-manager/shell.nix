@@ -17,7 +17,7 @@
 
     shellAliases = {
       vault = "cd \"$VAULT_PATH\""; # Jump to Obsidian vault
-      nix-switch = "(cd ~/system && mise switch)"; # Build and activate system config
+      nix-switch = "if [[ $TERM_PROGRAM == 'Apple_Terminal' ]]; then (cd ~/system && mise switch); else echo 'Opening Terminal.app to run switch...' && osascript -e 'tell app \"Terminal\" to do script \"cd ~/system && /etc/profiles/per-user/$USER/bin/mise switch\"'; fi"; # Build and activate system config (in Terminal.app to avoid Homebrew killing current terminal)
       nix-build = "(cd ~/system && mise build)"; # Build system config without activating
       nix-diff = "(cd ~/system && mise diff)"; # Show pending changes vs current system
     };
@@ -58,8 +58,8 @@
       [[ -n "''${key[Left]}" ]] && bindkey "''${key[Left]}" backward-char
       [[ -n "''${key[Right]}" ]] && bindkey "''${key[Right]}" forward-char
 
-      # mise activation
-      eval "$(mise activate zsh)"
+      # mise activation (full path to avoid race condition during shell init)
+      eval "$(/etc/profiles/per-user/$USER/bin/mise activate zsh)"
 
       ${lib.optionalString pkgs.stdenvNoCC.isDarwin ''
         # OrbStack CLI and completions
@@ -106,8 +106,8 @@
   programs.bash = {
     enable = true;
     initExtra = ''
-      # mise activation
-      eval "$(mise activate bash)"
+      # mise activation (full path to avoid race condition during shell init)
+      eval "$(/etc/profiles/per-user/$USER/bin/mise activate bash)"
     '';
   };
 }

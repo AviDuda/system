@@ -14,7 +14,7 @@ depends = ["fmt", "fast-switch"]
 alias = "fs"
 description = "Switch without formatting, for rapid iteration"
 depends = ["_check-git"]
-run = "sudo darwin-rebuild --flake \".#${FLAKE_HOST:-$(hostname)}\" switch"
+run = "./scripts/darwin-switch.sh"
 
 [tasks.build]
 alias = "b"

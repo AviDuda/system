@@ -62,6 +62,7 @@
       pv # Pipe viewer
       rclone # Remote storage
       ripgrep # Search tool
+      shellcheck # Shell script linter
       scc # Code complexity analyzer
       tree # Directory tree viewer
       watch # Execute a command periodically
