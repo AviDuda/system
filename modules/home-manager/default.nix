@@ -1,5 +1,11 @@
 # Home-manager configuration
 { config, lib, pkgs, pkgs-unstable, ... }:
+let
+  isDarwin = pkgs.stdenvNoCC.isDarwin;
+
+  # Custom macOS packages not in nixpkgs (only evaluated on Darwin)
+  applaymidi = if isDarwin then pkgs.callPackage ../../packages/applaymidi.nix { } else null;
+in
 {
   imports = [
     ./1password.nix
@@ -46,6 +52,7 @@
       exiftool # Image metadata editor
       fastfetch # System info
       fswatch # File system watcher
+      furnace # Multi-system chiptune tracker
       gh # GitHub CLI
       htop # Process viewer
       imagemagick # Image processing
@@ -73,6 +80,9 @@
   # Dotfiles managed by Home Manager (symlinked from Nix store)
   home.file = {
     # Example: ".screenrc".source = ./dotfiles/screenrc;
+  } // lib.optionalAttrs isDarwin {
+    # Custom macOS apps (symlinked to ~/Applications for Finder/Spotlight)
+    "Applications/APPlayMIDI.app".source = "${applaymidi}/Applications/APPlayMIDI.app";
   };
 
   # Environment variables for user session
