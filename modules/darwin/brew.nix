@@ -23,6 +23,7 @@
 
     taps = [
       "f/mcptools"
+      "steamre/tools"
       "stripe/stripe-cli"
       "ungive/music-presence"
     ];
@@ -104,6 +105,10 @@
       }
       {
         name = "cursor"; # IDE
+        greedy = true;
+      }
+      {
+        name = "steamre/tools/depotdownloader"; # Steam DepotDownloader
         greedy = true;
       }
       {
@@ -220,6 +225,10 @@
       }
       {
         name = "steam"; # Game launcher
+        greedy = true;
+      }
+      {
+        name = "steelseries-gg"; # SteelSeries device manager
         greedy = true;
       }
       {
