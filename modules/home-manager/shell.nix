@@ -2,8 +2,25 @@
 { config
 , lib
 , pkgs
+, systemFlakeDir
 , ...
-}: {
+}:
+let
+  # Platform-aware command that handles Terminal.app requirement on macOS
+  # (Homebrew can kill the current terminal during switch)
+  nixCommand = cmd:
+    if pkgs.stdenvNoCC.isDarwin then ''
+      if [[ $TERM_PROGRAM == 'Apple_Terminal' ]]; then
+        (cd ${systemFlakeDir} && mise ${cmd})
+      else
+        echo 'Opening Terminal.app to run ${cmd}...'
+        osascript -e 'tell app "Terminal" to do script "cd ${systemFlakeDir} && /etc/profiles/per-user/$USER/bin/mise ${cmd}"'
+      fi
+    '' else ''
+      (cd ${systemFlakeDir} && mise ${cmd})
+    '';
+in
+{
   # zoxide: smarter cd that learns your habits
   # Usage: z <partial-path> (e.g., "z proj" jumps to ~/dev/project-name)
   programs.zoxide = {
@@ -17,9 +34,10 @@
 
     shellAliases = {
       vault = "cd \"$VAULT_PATH\""; # Jump to Obsidian vault
-      nix-switch = "if [[ $TERM_PROGRAM == 'Apple_Terminal' ]]; then (cd ~/system && mise switch); else echo 'Opening Terminal.app to run switch...' && osascript -e 'tell app \"Terminal\" to do script \"cd ~/system && /etc/profiles/per-user/$USER/bin/mise switch\"'; fi"; # Build and activate system config (in Terminal.app to avoid Homebrew killing current terminal)
-      nix-build = "(cd ~/system && mise build)"; # Build system config without activating
-      nix-diff = "(cd ~/system && mise diff)"; # Show pending changes vs current system
+      nix-switch = nixCommand "nix-switch"; # Build and activate system config
+      nix-upgrade = nixCommand "nix-upgrade"; # Update flake inputs and switch
+      nix-build = "(cd ${systemFlakeDir} && mise nix-build)"; # Build without activating
+      nix-diff = "(cd ${systemFlakeDir} && mise nix-diff)"; # Show pending changes
     };
 
     history = {

@@ -49,8 +49,7 @@ in
   };
   programs.ssh = {
     enable = true;
-    controlMaster = "auto";
-    controlPersist = "10m";
+    enableDefaultConfig = false;
     includes = lib.optionals pkgs.stdenvNoCC.isDarwin [
       # Added by OrbStack: 'orb' SSH host for Linux machines
       # This only works if it's at the top of ssh_config (before any Host blocks).
@@ -60,6 +59,11 @@ in
       "~/.ssh/1Password/config"
     ];
     matchBlocks = {
+      # Default settings for all hosts
+      "*" = {
+        controlMaster = "auto";
+        controlPersist = "10m";
+      };
       "gamediscoverco" = {
         user = "discoverer";
         localForwards = [{

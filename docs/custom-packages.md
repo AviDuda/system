@@ -225,7 +225,7 @@ curl -s https://api.github.com/repos/owner/repo/releases | jq -r '.[].tag_name' 
 3. Update `version` and `sha256` in the package file
 4. Rebuild:
    ```bash
-   nix-switch  # or: mise switch
+   mise nix-switch  # or: nix-switch (from anywhere)
    ```
 
 ### Automating update checks

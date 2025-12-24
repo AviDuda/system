@@ -17,7 +17,7 @@ in
   # WARNING: Do not change without reading Home Manager release notes first.
   # This helps avoid breakage when HM introduces backwards incompatible changes.
   # https://nix-community.github.io/home-manager/release-notes.xhtml
-  home.stateVersion = "24.11";
+  home.stateVersion = "25.11";
 
   # Prefer Nix packages here over Homebrew (brew.nix) when possible
   # See docs/homebrew-vs-nixpkgs.md for details and version checking
@@ -48,7 +48,7 @@ in
     (with pkgs-unstable; [
       act # GitHub Actions local runner
       coreutils # GNU core utilities
-      csvkit # CSV tools
+      # csvkit # CSV tools - broken in 25.11 (agate test failure)
       exiftool # Image metadata editor
       fastfetch # System info
       fswatch # File system watcher

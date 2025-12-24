@@ -25,10 +25,10 @@ One-liners to check latest release branches:
 gh api repos/NixOS/nixpkgs/branches --paginate --jq '.[].name' | grep -E '^nixos-[0-9]+\.[0-9]+$' | sort -V | tail -3
 
 # nix-darwin
-gh api repos/LnL7/nix-darwin/branches --jq '.[].name' | grep -E '^nix-darwin-[0-9]+\.[0-9]+$' | sort -V | tail -3
+gh api repos/LnL7/nix-darwin/branches --paginate --jq '.[].name' | grep -E '^nix-darwin-[0-9]+\.[0-9]+$' | sort -V | tail -3
 
 # home-manager
-gh api repos/nix-community/home-manager/branches --jq '.[].name' | grep -E '^release-[0-9]+\.[0-9]+$' | sort -V | tail -3
+gh api repos/nix-community/home-manager/branches --paginate --jq '.[].name' | grep -E '^release-[0-9]+\.[0-9]+$' | sort -V | tail -3
 ```
 
 Note: nix-darwin often lags behind nixpkgs/home-manager by one release.
@@ -36,8 +36,8 @@ Note: nix-darwin often lags behind nixpkgs/home-manager by one release.
 Lix uses tags instead of branches. Check the tags page manually or:
 
 ```bash
-# lix-module (requires curl + jq, not gh)
-curl -s "https://git.lix.systems/api/v1/repos/lix-project/nixos-module/tags" | jq -r '.[].name' | sort -V | tail -5
+# lix-module (requires curl + jq, not gh; limit=100 for pagination)
+curl -s "https://git.lix.systems/api/v1/repos/lix-project/nixos-module/tags?limit=100" | jq -r '.[].name' | sort -V | tail -5
 ```
 
 The flake URL format for Lix is:
@@ -60,9 +60,9 @@ Lix maintains multiple version lines (e.g., 2.91.x, 2.92.x, 2.93.x). Pick the la
 2. Update version strings in `flake.nix`
 3. Run the upgrade:
    ```bash
-   nix flake update
-   mise switch  # or: nix-switch (from anywhere)
+   mise nix-upgrade  # or: nix-upgrade (from anywhere)
    ```
+   This runs `nix flake update` followed by `mise nix-switch`.
 4. If something breaks, roll back:
    ```bash
    sudo darwin-rebuild switch --rollback

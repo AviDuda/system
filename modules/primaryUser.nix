@@ -20,6 +20,12 @@ in
       type = types.attrs;
       default = { };
     };
+
+    systemFlakeDir = mkOption {
+      description = "Path to the system flake repository";
+      type = types.str;
+      default = "${config.user.home}/system";
+    };
   };
 
   config = {

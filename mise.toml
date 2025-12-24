@@ -6,9 +6,13 @@
 # Load from .env file (copy .env.example to .env)
 _.file = ".env"
 
-[tasks.switch]
+[tasks.nix-switch]
 description = "Build & activate this host's profile"
 depends = ["fmt", "fast-switch"]
+
+[tasks.nix-upgrade]
+description = "Update flake inputs and switch"
+run = "nix flake update && mise nix-switch"
 
 [tasks.fast-switch]
 alias = "fs"
@@ -16,7 +20,7 @@ description = "Switch without formatting, for rapid iteration"
 depends = ["_check-git"]
 run = "./scripts/darwin-switch.sh"
 
-[tasks.build]
+[tasks.nix-build]
 alias = "b"
 description = "Build this host's profile"
 depends = ["_check-git"]
@@ -34,7 +38,7 @@ run = "nixpkgs-fmt --check ."
 description = "Run checks"
 depends = ["fmt-check"]
 
-[tasks.diff]
+[tasks.nix-diff]
 description = "Diff this host's closure against current system"
 run = """
 #!/usr/bin/env bash

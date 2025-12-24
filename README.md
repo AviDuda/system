@@ -36,8 +36,16 @@ Personal Nix flake for macOS (nix-darwin) and NixOS.
 
 After initial setup:
 ```bash
-mise switch          # from ~/system directory
+mise nix-switch      # from ~/system directory
 nix-switch           # from anywhere (shell alias)
+```
+
+## Upgrading
+
+Update flake inputs and rebuild:
+```bash
+mise nix-upgrade     # from ~/system directory
+nix-upgrade          # from anywhere (shell alias)
 ```
 
 
