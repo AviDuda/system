@@ -65,6 +65,11 @@ sudo nix-collect-garbage --delete-older-than "${age}d"
 nix-collect-garbage
 """
 
+[tasks."tailscale:push-acl"]
+alias = "ts-push"
+description = "Push Tailscale ACL policy to the admin console"
+run = "./tailscale/push-acl.sh"
+
 [tasks._check-git]
 hide = true
 description = "Check for untracked .nix files"

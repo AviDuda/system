@@ -1,0 +1,169 @@
+{
+	// Tailscale ACL policy - managed in system repo
+	// Push changes with: mise ts-push
+	// Last updated: 2025-12-26 18:39 UTC
+
+	// Define the tags which can be applied to devices and by which users.
+	"tagOwners": {
+		// Devices provisioned via system repo auth key
+		"tag:nix-managed": [],
+
+		// Stationary home devices (Apple TV, etc.)
+		"tag:home": [],
+
+		// Cloud servers (Hetzner, etc.)
+		"tag:server": [],
+
+		// Capability: can host Tailscale Services (dev servers, apps, etc.)
+		"tag:service-host": [],
+
+		// Portable devices that may leave home (phones, laptops, tablets)
+		"tag:mobile": [],
+
+		// Home infrastructure (Raspberry Pi, Mac mini, NAS, etc.)
+		"tag:homelab": [],
+	},
+
+	// Define access control lists for users, groups, autogroups, tags,
+	// Tailscale IP addresses, and subnet ranges.
+	"acls": [
+		// Allow all connections
+		{
+			"action": "accept",
+			"src":    ["*"],
+			"dst":    ["*:*"],
+		},
+		// Allow using exit nodes
+		{
+			"action": "accept",
+			"src":    ["autogroup:member"],
+			"dst":    ["autogroup:internet:*"],
+		},
+	],
+
+	// Define users and devices that can use Tailscale SSH.
+	"ssh": [
+		// Users to their own devices
+		{
+			"action": "accept",
+			"src":    ["autogroup:member"],
+			"dst":    ["autogroup:self"],
+			"users":  ["root", "autogroup:nonroot"],
+		},
+
+		// Home devices: always allowed (low theft risk)
+		{
+			"action": "accept",
+			"src":    ["tag:home"],
+			"dst":    ["tag:home", "tag:server", "tag:homelab"],
+			"users":  ["autogroup:nonroot", "root"],
+		},
+
+		// Mobile devices (iPhone, iPad, Steam Deck): nonroot only (use sudo for root)
+		// Note: check mode doesn't support tags in src (Tailscale limitation)
+		{
+			"action": "accept",
+			"src":    ["tag:mobile"],
+			"dst":    ["tag:server", "tag:homelab"],
+			"users":  ["autogroup:nonroot"],
+		},
+
+		// Homelab to homelab and servers: nonroot only (use sudo for root)
+		{
+			"action": "accept",
+			"src":    ["tag:homelab"],
+			"dst":    ["tag:homelab", "tag:server"],
+			"users":  ["autogroup:nonroot"],
+		},
+	],
+
+	// Define node attributes for specific devices or groups.
+	"nodeAttrs": [
+		// Mullvad exit nodes
+		{
+			"target": ["100.124.112.91"], // titanium-trashcan
+			"attr":   ["mullvad"],
+		},
+
+		// Route iOS DNS always via Tailscale
+		{
+			"target": ["autogroup:member"],
+			"attr":   ["disable-split-dns-when-no-custom-resolvers"],
+		},
+
+		// Funnel for Tailscale Services
+		{
+			"target": ["tag:service-host"],
+			"attr":   ["funnel"],
+		},
+	],
+
+	// Auto-approve service hosts for Tailscale Services.
+	"autoApprovers": {
+		"services": {
+			"svc:nocturnal-scribbles": ["tag:service-host"],
+		},
+	},
+
+	// Test ACL rules on every policy change.
+	"tests": [
+		// All devices can reach servers and homelab
+		{
+			"src":    "tag:home",
+			"accept": ["tag:server:22", "tag:server:443", "tag:homelab:22", "tag:homelab:443"],
+		},
+		{
+			"src":    "tag:mobile",
+			"accept": ["tag:server:22", "tag:server:443", "tag:homelab:22", "tag:homelab:443"],
+		},
+		{
+			"src":    "tag:homelab",
+			"accept": ["tag:server:22", "tag:server:443"],
+		},
+	],
+
+	// Test SSH rules on every policy change.
+	"sshTests": [
+		// Home devices can SSH to home, server, and homelab
+		{
+			"src":    "tag:home",
+			"dst":    ["tag:server", "tag:homelab"],
+			"accept": ["avi", "root"],
+		},
+		{
+			"src":    "tag:home",
+			"dst":    ["tag:home"],
+			"accept": ["avi", "root"],
+		},
+
+		// Mobile devices can SSH to server and homelab (nonroot only)
+		{
+			"src":    "tag:mobile",
+			"dst":    ["tag:server", "tag:homelab"],
+			"accept": ["avi"],
+			"deny":   ["root"],
+		},
+
+		// Homelab can SSH to servers and other homelab devices (nonroot only)
+		{
+			"src":    "tag:homelab",
+			"dst":    ["tag:server", "tag:homelab"],
+			"accept": ["avi"],
+			"deny":   ["root"],
+		},
+
+		// Servers cannot SSH to client devices
+		{
+			"src":  "tag:server",
+			"dst":  ["tag:home", "tag:mobile", "tag:homelab"],
+			"deny": ["avi", "root"],
+		},
+
+		// Homelab cannot SSH to client devices (only to servers and other homelab)
+		{
+			"src":  "tag:homelab",
+			"dst":  ["tag:home", "tag:mobile"],
+			"deny": ["avi", "root"],
+		},
+	],
+}

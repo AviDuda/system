@@ -87,7 +87,9 @@ in
   };
 
   # Environment variables for user session
-  home.sessionVariables = lib.mkIf pkgs.stdenvNoCC.isDarwin {
+  home.sessionVariables = {
+    EDITOR = "nvim";
+  } // lib.optionalAttrs pkgs.stdenvNoCC.isDarwin {
     # Obsidian vault path (iCloud)
     VAULT_PATH = "${config.home.homeDirectory}/Library/Mobile Documents/iCloud~md~obsidian/Documents/raccoon-life";
   };
