@@ -33,21 +33,92 @@ in
     # Stable packages (versions match homebrew)
     (with pkgs; [
       age # Encryption tool
+      assimp # 3D model importer
+      bat # Cat with syntax highlighting
+      beets # Music library manager
       binwalk # Firmware analysis
+      chromaprint # Audio fingerprinting
+      cmus # Terminal music player
+      csvlens # CSV viewer TUI
       curl # HTTP client
+      dasel # Query JSON, YAML, TOML, XML
+      delta # Git diff viewer
+      difftastic # Structural diff (syntax-aware)
+      dive # Docker image layer explorer
+      doggo # Modern dig replacement
+      duf # Disk usage (better df)
+      dust # Disk usage (better du)
+      entr # Run commands on file changes
+      eza # Modern ls replacement
+      fd # Modern find replacement
       ffmpeg # Video processing
+      flac # FLAC encoder/decoder
+      fluidsynth # SoundFont synthesizer
+      fx # Interactive JSON viewer
+      fzf # Fuzzy finder
+      glfw # OpenGL windowing
+      git-absorb # Auto-fixup commits
+      gifsicle # GIF optimizer
+      glow # Markdown viewer
+      graphviz # DOT diagrams to images
+      grpcurl # curl for gRPC
+      gum # TUI components for scripts
+      hexyl # Hex viewer
+      htmlq # jq for HTML
+      hyperfine # CLI benchmarking
+      jless # Interactive JSON viewer
+      jpegoptim # JPEG optimizer
+      lame # MP3 encoder
+      libavif # AVIF encoder/decoder
+      libheif # HEIF/HEIC encoder/decoder
+      libjxl # JPEG XL encoder/decoder
+      libwebp # WebP tools (cwebp, dwebp)
+      # lilypond - music notation, build fails on darwin
+      love # LÖVE 2D game framework
+      mediainfo # Media file metadata
+      mermaid-cli # Diagrams as code
+      miller # CSV/JSON swiss-army knife
+      openal # 3D audio library
+      optipng # PNG optimizer
+      opusTools # Opus encoder/decoder
+      p7zip # 7z archive support
+      pigz # Parallel gzip
+      plantuml # UML diagrams
+      pngquant # PNG compressor
+      procs # Modern ps replacement
+      qpdf # PDF manipulation
+      raylib # Game programming library
+      SDL2 # Game dev library
+      # sfml - multimedia library, no darwin (miniaudio dep)
+      # sfxr - retro sound effect generator, no darwin (miniaudio dep)
+      fontforge # Font editor
       gnupg # GPG encryption
       google-cloud-sdk # GCloud CLI
       mosh # Mobile shell
       nil # Nix language server
       rsync # File transfer
+      sd # Modern sed replacement
       speedtest-cli # Internet speed test
+      svgo # SVG optimizer
+      tealdeer # Tldr pages (simplified man)
+      tig # Git TUI (history, blame)
+      timidity # MIDI player
+      tokei # Code statistics
+      vhs # Record terminal to GIF
+      watchexec # Run commands on file changes
       wget # Downloader
+      woff2 # WOFF2 font converter
+      xh # HTTP client (httpie in Rust)
+      yq-go # YAML processor (jq for YAML)
+      zstd # Fast compression
     ])
     ++
     # Unstable packages (stable too outdated)
     (with pkgs-unstable; [
+      abcmidi # ABC notation to MIDI
       act # GitHub Actions local runner
+      ast-grep # Structural code search
+      btop # Process viewer (prettier htop)
       coreutils # GNU core utilities
       # csvkit # CSV tools - broken in 25.11 (agate test failure)
       exiftool # Image metadata editor
@@ -56,8 +127,10 @@ in
       furnace # Multi-system chiptune tracker
       gh # GitHub CLI
       htop # Process viewer
+      lazygit # Git TUI
       imagemagick # Image processing
       jq # JSON processor
+      just # Command runner (Makefile alternative)
       lynx # Text-based web browser
       mise # Runtime manager
       mtr # Network diagnostic tool
@@ -65,6 +138,7 @@ in
       ncdu # Disk usage analyzer
       neovim # Vim fork
       nmap # Network scanner
+      oxipng # PNG optimizer (multithreaded)
       pandoc # Markdown to PDF converter
       poppler # PDF rendering library
       pv # Pipe viewer
@@ -74,6 +148,7 @@ in
       scc # Code complexity analyzer
       tree # Directory tree viewer
       watch # Execute a command periodically
+      yazi # Terminal file manager
       yt-dlp # YouTube downloader
       yubikey-manager # YubiKey manager
     ]);

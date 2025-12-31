@@ -1,5 +1,23 @@
 # Core darwin settings: nix config, shell, locale, binary caches
 { config, ... }: {
+  # sops-nix: use age key for decryption (not SSH host keys)
+  # Key location on macOS - see docs/secrets.md for setup
+  sops.age.keyFile = "/Users/${config.user.name}/Library/Application Support/sops/age/keys.txt";
+
+  # GitHub token for nix flake operations (avoids API rate limits)
+  # Requires age key to be set up first - see docs/secrets.md
+  sops.secrets.github_access_token = {
+    sopsFile = ../../secrets/github.yaml;
+    key = "access_token";
+  };
+  sops.templates."nix-github.conf" = {
+    content = ''
+      access-tokens = github.com=${config.sops.placeholder.github_access_token}
+    '';
+  };
+  nix.extraOptions = ''
+    !include ${config.sops.templates."nix-github.conf".path}
+  '';
   # Required in nix-darwin 25.05+: specifies which user system options apply to
   system.primaryUser = config.user.name;
 

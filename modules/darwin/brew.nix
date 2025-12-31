@@ -31,6 +31,8 @@
     # Most CLI tools are in nixpkgs - see modules/home-manager/personal/pkgs.nix
     # Only keeping packages that must stay in Homebrew
     brews = [
+      "comby" # Structural find/replace (nixpkgs broken)
+      "lilypond" # Music notation (nixpkgs build fails)
       "mas" # Mac App Store CLI (macOS-specific)
       "f/mcptools/mcp" # MCP tools (custom tap)
       "ollama" # LLM runtime (nixpkgs build broken)

@@ -1,5 +1,12 @@
 # Homebrew vs nixpkgs
 
+## Where packages are defined
+
+- **nixpkgs**: `modules/home-manager/default.nix` - CLI tools managed by Nix
+- **Homebrew brews**: `modules/darwin/brew.nix` - CLI tools that must stay in Homebrew
+- **Homebrew casks**: `modules/darwin/brew.nix` - GUI apps (managed by nix-darwin)
+- **Mac App Store**: `modules/darwin/brew.nix` - Apps installed via `mas`
+
 ## When to use which
 
 Prefer nixpkgs when possible:

@@ -104,6 +104,17 @@ On a fresh machine without your age key:
 2. Copy your age key from backup/password manager to the correct location
 3. Run `nix-switch`
 
+**Important:** The age key is required before first switch because:
+- GitHub API token (in `secrets/github.yaml`) is used to avoid rate limits
+- Without it, `nix flake update` may fail with HTTP 403
+
+If you hit rate limits during bootstrap, either:
+- Wait ~1 hour for rate limit to reset
+- Or temporarily add token to `~/.config/nix/nix.conf`:
+  ```
+  access-tokens = github.com=ghp_YOUR_TOKEN
+  ```
+
 Alternatively, generate a new key and re-encrypt secrets from another machine.
 
 ## Rotating keys

@@ -72,12 +72,12 @@ run = "./tailscale/push-acl.sh"
 
 [tasks._check-git]
 hide = true
-description = "Check for untracked .nix files"
+description = "Check for untracked flake files"
 run = """
 #!/usr/bin/env bash
-untracked=$(git ls-files --others --exclude-standard '*.nix' '*/*.nix')
+untracked=$(git ls-files --others --exclude-standard '*.nix' '*/*.nix' 'secrets/*.yaml')
 if [[ -n "$untracked" ]]; then
-    echo "Error: Untracked .nix files found (flakes only see git-tracked files):"
+    echo "Error: Untracked files found (flakes only see git-tracked files):"
     echo "$untracked" | sed 's/^/  /'
     echo "Run 'git add' on these files first."
     exit 1

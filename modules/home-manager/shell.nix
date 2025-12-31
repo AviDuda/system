@@ -21,6 +21,25 @@ let
     '';
 in
 {
+  # atuin: shell history in SQLite with fuzzy search
+  # Usage: Ctrl+R for interactive search, `atuin search <query>` for CLI
+  # Docs: https://docs.atuin.sh/cli/configuration/config/
+  programs.atuin = {
+    enable = true;
+    enableZshIntegration = true;
+    enableBashIntegration = true;
+    settings = {
+      auto_sync = false; # No cloud sync - local only
+      update_check = false; # Managed by nix
+      style = "compact"; # Less vertical space
+      inline_height = 20; # Max rows for inline display
+      enter_accept = true; # Execute immediately on Enter
+      filter_mode_shell_up_key_binding = "session"; # Up arrow = current session only
+      workspaces = true; # Filter by git repo when in one
+      # show_help = false; # Uncomment once familiar with keybindings
+    };
+  };
+
   # zoxide: smarter cd that learns your habits
   # Usage: z <partial-path> (e.g., "z proj" jumps to ~/dev/project-name)
   programs.zoxide = {
