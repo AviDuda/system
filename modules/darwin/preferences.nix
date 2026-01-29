@@ -17,16 +17,13 @@
         "/System/Applications/Apps.app"
         "/Applications/Orion.app"
         "/Applications/Warp.app"
-        "/Applications/Cursor.app"
+        "/Applications/Zed.app"
         "/Applications/Bruno.app"
         "/Applications/TablePlus.app"
         "/Applications/Notion.app"
         "/Applications/Telegram.app"
         "/Applications/Discord.app"
         "/System/Applications/Music.app"
-        "/System/Applications/Podcasts.app"
-        "/System/Applications/Calendar.app"
-        "/System/Applications/Maps.app"
         "/System/Applications/System Settings.app"
       ];
     };

@@ -40,6 +40,7 @@ in
     ./git.nix
     ./llm.nix
     ./shell.nix
+    ./zed.nix
   ];
 
   # WARNING: Do not change without reading Home Manager release notes first.
@@ -124,6 +125,7 @@ in
       google-cloud-sdk # GCloud CLI
       mosh # Mobile shell
       nil # Nix language server
+      nixd # Nix language server (full-featured)
       rsync # File transfer
       sd # Modern sed replacement
       speedtest-cli # Internet speed test
@@ -146,6 +148,7 @@ in
       abcmidi # ABC notation to MIDI
       act # GitHub Actions local runner
       ast-grep # Structural code search
+      biome # JS/TS/JSON linter and formatter
       btop # Process viewer (prettier htop)
       coreutils # GNU core utilities
       # csvkit # CSV tools - broken in 25.11 (agate test failure)

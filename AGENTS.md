@@ -38,10 +38,10 @@ mise repl             # REPL with flake outputs
 - **Nix implementation**: Lix (Nix fork), not standard Nix.
 - **Secrets**: sops-nix with age encryption. Keys in `.sops.yaml`.
 - **Formatter**: nixpkgs-fmt. Run `mise fmt` before committing.
-- **Flake requirements**: All files must be git-tracked. The `_check-git` task warns about untracked `.nix` files.
 
 ## Guidelines
 
+- Stage new files with `git add` before running nix-switch. Flakes only see git-tracked files. Run `mise run _check-git` to verify.
 - Run `mise nix-diff` before `mise nix-switch` when testing changes. Shows what would change without applying.
 - Use `callPackage` pattern for custom packages. See existing `packages/*.nix` for examples.
 - macOS app bundles from custom packages need symlinks in `modules/home-manager/default.nix` to appear in `~/Applications`.
