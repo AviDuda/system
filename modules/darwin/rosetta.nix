@@ -1,5 +1,6 @@
 # Rosetta 2: x86_64 emulation on Apple Silicon
-{ ... }: {
+{ ... }:
+{
   system.activationScripts.rosetta = {
     enable = true;
     text = ''

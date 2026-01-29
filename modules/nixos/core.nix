@@ -1,5 +1,6 @@
 # Core NixOS settings: nix config, locale, system packages
-{ pkgs, ... }: {
+{ pkgs, ... }:
+{
   nix.settings = {
     # Necessary for using flakes on this system.
     experimental-features = "nix-command flakes";

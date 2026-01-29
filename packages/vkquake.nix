@@ -1,7 +1,11 @@
 # vkQuake - Vulkan Quake engine (QuakeSpasm fork)
 # https://github.com/Novum/vkQuake
 # Signed and notarized macOS build from Mac Source Ports
-{ lib, stdenvNoCC, fetchurl }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+}:
 
 stdenvNoCC.mkDerivation rec {
   pname = "vkquake";

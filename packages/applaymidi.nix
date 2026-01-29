@@ -1,6 +1,11 @@
 # APPlayMIDI - macOS MIDI file player
 # https://github.com/benwiggy/applaymidi
-{ lib, stdenvNoCC, fetchurl, unzip }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+  unzip,
+}:
 
 stdenvNoCC.mkDerivation rec {
   pname = "applaymidi";

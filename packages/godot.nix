@@ -1,7 +1,14 @@
 # Godot - Game engine
 # https://godotengine.org/
 # Pass `version` and `sha256` to get a specific release.
-{ lib, stdenvNoCC, fetchurl, unzip, version, sha256 }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+  unzip,
+  version,
+  sha256,
+}:
 
 stdenvNoCC.mkDerivation {
   pname = "godot";

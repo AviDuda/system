@@ -1,5 +1,10 @@
 # LLM agent configuration (Claude Code, OpenCode)
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   isDarwin = pkgs.stdenvNoCC.isDarwin;
 
@@ -15,11 +20,9 @@ let
   compactionReminder = "Capture: what you learned, decisions made, what is unfinished, what the next agent should know.\nThis is part of the work, not extra work.";
 
   # Global instructions (shared between Claude Code and OpenCode)
-  globalInstructions =
-    builtins.replaceStrings
-      [ "~/" ]
-      [ "${config.home.homeDirectory}/" ]
-      (builtins.readFile ../../config/llm/instructions.md);
+  globalInstructions = builtins.replaceStrings [ "~/" ] [ "${config.home.homeDirectory}/" ] (
+    builtins.readFile ../../config/llm/instructions.md
+  );
 
   # ============================================================================
   # Claude Code
@@ -163,10 +166,11 @@ let
 
   # Journal plugin for OpenCode - external file with placeholder substitution
   # Must be a real file (not symlink) so bun can resolve node_modules
-  journalPluginContent = builtins.replaceStrings
-    [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" ]
-    [ notesDir noNotesReminder journalReminder compactionReminder ]
-    (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
+  journalPluginContent =
+    builtins.replaceStrings
+      [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" ]
+      [ notesDir noNotesReminder journalReminder compactionReminder ]
+      (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
 
   journalPluginFile = pkgs.writeText "journal.ts" journalPluginContent;
 
@@ -196,17 +200,20 @@ in
   };
 
   # Custom skills
-  home.file.".claude/skills/avi-init-agents/SKILL.md".source = ../../config/llm/skills/avi-init-agents/SKILL.md;
-  home.file.".claude/skills/avi-init-agents/checklist.md".source = ../../config/llm/skills/avi-init-agents/checklist.md;
+  home.file.".claude/skills/avi-init-agents/SKILL.md".source =
+    ../../config/llm/skills/avi-init-agents/SKILL.md;
+  home.file.".claude/skills/avi-init-agents/checklist.md".source =
+    ../../config/llm/skills/avi-init-agents/checklist.md;
 
   # Helium browser integration (macOS only)
   # Claude Code hardcodes Chrome's config path for extension detection.
   # Symlink extension from Helium to Chrome's path to trick detection.
   # See: https://github.com/anthropics/claude-code/issues/14391
   home.file."${heliumSupport}/NativeMessagingHosts/com.anthropic.claude_browser_extension.json" =
-    lib.mkIf isDarwin {
-      text = nativeMessagingConfig;
-    };
+    lib.mkIf isDarwin
+      {
+        text = nativeMessagingConfig;
+      };
 
   home.activation.claudeCodeHeliumSetup = lib.mkIf isDarwin (
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''

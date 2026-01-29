@@ -1,5 +1,11 @@
 # Zed editor configuration
-{ config, lib, pkgs, pkgs-unstable, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  pkgs-unstable,
+  ...
+}:
 let
   zedConfigDir = "${config.xdg.configHome}/zed";
 
@@ -12,7 +18,11 @@ let
 
   # Biome formatter config (reused across JS/TS/CSS/JSON languages)
   biomeFormatter = {
-    formatter = { language_server = { name = "biome"; }; };
+    formatter = {
+      language_server = {
+        name = "biome";
+      };
+    };
     code_actions_on_format = {
       "source.fixAll.biome" = true;
       "source.organizeImports.biome" = true;
@@ -78,15 +88,14 @@ let
       GraphQL = biomeFormatter;
       Nix = {
         formatter.external = {
-          command = "nixpkgs-fmt";
+          command = "nixfmt";
           arguments = [ ];
         };
       };
     };
   };
 
-  zedSettingsFile = pkgs.writeText "zed-settings.json"
-    (builtins.toJSON zedSettings);
+  zedSettingsFile = pkgs.writeText "zed-settings.json" (builtins.toJSON zedSettings);
 
 in
 {

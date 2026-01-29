@@ -1,6 +1,11 @@
 # ericw-tools - Quake map compiling tools (qbsp, vis, light)
 # https://github.com/ericwa/ericw-tools
-{ lib, stdenvNoCC, fetchurl, unzip }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+  unzip,
+}:
 
 stdenvNoCC.mkDerivation rec {
   pname = "ericw-tools";

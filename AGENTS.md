@@ -37,7 +37,7 @@ mise repl             # REPL with flake outputs
 - **Task runner**: mise (not make/just). Tasks defined in `mise.toml`.
 - **Nix implementation**: Lix (Nix fork), not standard Nix.
 - **Secrets**: sops-nix with age encryption. Keys in `.sops.yaml`.
-- **Formatter**: nixpkgs-fmt. Run `mise fmt` before committing.
+- **Formatter**: nixfmt (official). Run `mise fmt` before committing.
 
 ## Guidelines
 

@@ -1,5 +1,6 @@
 # Graphical desktop: KDE Plasma 6, networking, audio, printing
-{ config, pkgs, ... }: {
+{ config, pkgs, ... }:
+{
   # Enable networking
   networking.networkmanager.enable = true;
 

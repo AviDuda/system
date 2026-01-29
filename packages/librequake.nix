@@ -1,6 +1,11 @@
 # LibreQuake - Free Quake game data
 # https://github.com/MissLavender-LQ/LibreQuake
-{ lib, stdenvNoCC, fetchurl, unzip }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+  unzip,
+}:
 
 stdenvNoCC.mkDerivation rec {
   pname = "librequake";

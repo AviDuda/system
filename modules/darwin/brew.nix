@@ -3,9 +3,13 @@
 #
 # NOTE: Some casks are auto-restarted after upgrade to avoid stale process issues
 # (e.g. AltTab causes system lockups if not restarted). See scripts/darwin-switch.sh
-{ ... }: {
+{ ... }:
+{
   # Add Homebrew to PATH (Apple Silicon location)
-  environment.systemPath = [ "/opt/homebrew/bin" "/opt/homebrew/sbin" ];
+  environment.systemPath = [
+    "/opt/homebrew/bin"
+    "/opt/homebrew/sbin"
+  ];
 
   homebrew = {
     enable = true;
@@ -297,7 +301,6 @@
         greedy = true;
       }
     ];
-
 
     masApps = {
       # Apple

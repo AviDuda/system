@@ -1,24 +1,29 @@
 # Shell configuration: zsh with powerlevel10k, bash, keybindings, and mise
-{ config
-, lib
-, pkgs
-, systemFlakeDir
-, ...
+{
+  config,
+  lib,
+  pkgs,
+  systemFlakeDir,
+  ...
 }:
 let
   # Platform-aware command that handles Terminal.app requirement on macOS
   # (Homebrew can kill the current terminal during switch)
-  nixCommand = cmd:
-    if pkgs.stdenvNoCC.isDarwin then ''
-      if [[ $TERM_PROGRAM == 'Apple_Terminal' ]]; then
+  nixCommand =
+    cmd:
+    if pkgs.stdenvNoCC.isDarwin then
+      ''
+        if [[ $TERM_PROGRAM == 'Apple_Terminal' ]]; then
+          (cd ${systemFlakeDir} && mise ${cmd})
+        else
+          echo 'Opening Terminal.app to run ${cmd}...'
+          osascript -e 'tell app "Terminal" to do script "cd ${systemFlakeDir} && /opt/homebrew/bin/mise ${cmd}"'
+        fi
+      ''
+    else
+      ''
         (cd ${systemFlakeDir} && mise ${cmd})
-      else
-        echo 'Opening Terminal.app to run ${cmd}...'
-        osascript -e 'tell app "Terminal" to do script "cd ${systemFlakeDir} && /opt/homebrew/bin/mise ${cmd}"'
-      fi
-    '' else ''
-      (cd ${systemFlakeDir} && mise ${cmd})
-    '';
+      '';
 in
 {
   # atuin: shell history in SQLite with fuzzy search

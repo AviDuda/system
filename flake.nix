@@ -32,21 +32,28 @@
   };
 
   outputs =
-    { self
-    , nixpkgs
-    , nixpkgs-unstable
-    , lix-module
-    , darwin
-    , home-manager
-    , ...
-    } @ inputs:
+    {
+      self,
+      nixpkgs,
+      nixpkgs-unstable,
+      lix-module,
+      darwin,
+      home-manager,
+      ...
+    }@inputs:
     let
-      supportedSystems = [ "aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [
+        "aarch64-darwin"
+        "x86_64-darwin"
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
 
       # Overlay to fix packages with broken tests on Darwin
       # Only applied in mkDarwinHost, so no need for isDarwin check
-      darwinFixesOverlay = final: prev:
+      darwinFixesOverlay =
+        final: prev:
         let
           # 2026-01-11: setproctitle fork tests segfault on macOS 13.2+ (signal 11)
           # https://github.com/dvarrazzo/py-setproctitle/issues/113
@@ -55,9 +62,11 @@
               doCheck = false;
             };
           };
-          overridePython = python: python.override {
-            packageOverrides = fixSetproctitle;
-          };
+          overridePython =
+            python:
+            python.override {
+              packageOverrides = fixSetproctitle;
+            };
         in
         {
           python3 = overridePython prev.python3;
@@ -68,7 +77,10 @@
           # Can't use doCheck=false (removes rapidcheck dep needed for build)
           # Instead, skip running the actual tests while keeping deps
           nix = prev.nix.overrideAttrs { checkPhase = ":"; };
-          lix = prev.lix.overrideAttrs { doCheck = false; doInstallCheck = false; };
+          lix = prev.lix.overrideAttrs {
+            doCheck = false;
+            doInstallCheck = false;
+          };
           nixVersions = prev.nixVersions // {
             nix_2_28 = prev.nixVersions.nix_2_28.overrideAttrs { checkPhase = ":"; };
             nix_2_29 = prev.nixVersions.nix_2_29.overrideAttrs { checkPhase = ":"; };
@@ -78,14 +90,22 @@
         };
 
       # Unstable packages for when stable is too outdated
-      pkgs-unstable-for = system: import nixpkgs-unstable {
-        inherit system;
-        config.allowUnfree = true;
-      };
+      pkgs-unstable-for =
+        system:
+        import nixpkgs-unstable {
+          inherit system;
+          config.allowUnfree = true;
+        };
 
       # Helper to create darwin configurations with common settings
-      mkDarwinHost = { machine, system ? "aarch64-darwin" }:
-        let pkgs-unstable = pkgs-unstable-for system; in
+      mkDarwinHost =
+        {
+          machine,
+          system ? "aarch64-darwin",
+        }:
+        let
+          pkgs-unstable = pkgs-unstable-for system;
+        in
         darwin.lib.darwinSystem {
           inherit system;
           specialArgs = { inherit inputs self pkgs-unstable; };
@@ -93,15 +113,18 @@
             { nixpkgs.overlays = [ darwinFixesOverlay ]; }
             machine
             home-manager.darwinModules.home-manager
-            ({ config, ... }: {
-              home-manager.useUserPackages = true;
-              home-manager.useGlobalPkgs = true;
-              home-manager.backupFileExtension = "backup";
-              home-manager.extraSpecialArgs = {
-                inherit pkgs-unstable;
-                inherit (config) systemFlakeDir;
-              };
-            })
+            (
+              { config, ... }:
+              {
+                home-manager.useUserPackages = true;
+                home-manager.useGlobalPkgs = true;
+                home-manager.backupFileExtension = "backup";
+                home-manager.extraSpecialArgs = {
+                  inherit pkgs-unstable;
+                  inherit (config) systemFlakeDir;
+                };
+              }
+            )
             lix-module.nixosModules.default
             inputs.sops-nix.darwinModules.sops
           ];

@@ -1,5 +1,6 @@
 # Shared darwin (macOS) configuration for all machines
-{ ... }: {
+{ ... }:
+{
   imports = [
     ../common.nix
     ./rosetta.nix

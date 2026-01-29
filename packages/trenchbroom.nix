@@ -1,6 +1,11 @@
 # TrenchBroom - Quake map editor
 # https://github.com/TrenchBroom/TrenchBroom
-{ lib, stdenvNoCC, fetchurl, unzip }:
+{
+  lib,
+  stdenvNoCC,
+  fetchurl,
+  unzip,
+}:
 
 stdenvNoCC.mkDerivation rec {
   pname = "trenchbroom";

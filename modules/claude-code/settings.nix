@@ -11,19 +11,27 @@ let
   settings = {
     hooks = {
       # Runs at session start - injects recent journal context
-      SessionStart = [{
-        hooks = [{
-          type = "command";
-          command = "${hookScriptsPath}/session-start.sh";
-        }];
-      }];
+      SessionStart = [
+        {
+          hooks = [
+            {
+              type = "command";
+              command = "${hookScriptsPath}/session-start.sh";
+            }
+          ];
+        }
+      ];
       # Runs before context compaction - reminder to journal
-      PreCompact = [{
-        hooks = [{
-          type = "command";
-          command = "${hookScriptsPath}/pre-compact.sh";
-        }];
-      }];
+      PreCompact = [
+        {
+          hooks = [
+            {
+              type = "command";
+              command = "${hookScriptsPath}/pre-compact.sh";
+            }
+          ];
+        }
+      ];
     };
   };
 in

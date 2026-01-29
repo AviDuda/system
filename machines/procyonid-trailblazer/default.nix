@@ -1,5 +1,6 @@
 # MacBook Pro M4 Pro, 48 GB RAM, 1 TB SSD, nanotexture
-{ config, ... }: {
+{ config, ... }:
+{
   imports = [
     ../../profiles/personal.nix
     ../../modules/darwin
