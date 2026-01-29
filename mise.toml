@@ -75,7 +75,7 @@ hide = true
 description = "Check for untracked flake files"
 run = """
 #!/usr/bin/env bash
-untracked=$(git ls-files --others --exclude-standard '*.nix' '*/*.nix' 'secrets/*.yaml')
+untracked=$(git ls-files --others --exclude-standard '*.nix' '*/*.nix' 'config/**' 'secrets/*.yaml')
 if [[ -n "$untracked" ]]; then
     echo "Error: Untracked files found (flakes only see git-tracked files):"
     echo "$untracked" | sed 's/^/  /'

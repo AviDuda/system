@@ -1,14 +1,31 @@
-# LLM agent configuration (Claude Code, etc.)
+# LLM agent configuration (Claude Code, OpenCode)
 { config, lib, pkgs, ... }:
 let
-  notesDir = "${config.home.homeDirectory}/notes/llm";
-  jq = "${pkgs.jq}/bin/jq";
   isDarwin = pkgs.stdenvNoCC.isDarwin;
 
-  # Shared text for no-notes reminder
-  noNotesReminder = ''
-    File naming: YYYY-MM-DD-NN-topic.md (NN = sequence number for the day)
-    Journal after orientation, when stuck/surprised, when something clicks, and at session end.'';
+  # Shared paths
+  notesDir = "${config.home.homeDirectory}/notes/llm";
+  opencodeConfigDir = "${config.xdg.configHome}/opencode";
+
+  # Shared text (used in both Claude Code hooks and OpenCode plugin)
+  noNotesReminder = "File naming: YYYY-MM-DD-NN-topic.md (NN = sequence number for the day)\nJournal after orientation, when stuck/surprised, when something clicks, and at session end.";
+
+  journalReminder = "IMPORTANT: Do NOT write journal entries at session start. Only journal after doing actual work.\nGive a brief verbal summary of previous notes if relevant, then proceed with the user's task.\nJournal entries should capture learnings, decisions, and progress - not \"session started\" or orientation notes.";
+
+  compactionReminder = "Capture: what you learned, decisions made, what is unfinished, what the next agent should know.\nThis is part of the work, not extra work.";
+
+  # Global instructions (shared between Claude Code and OpenCode)
+  globalInstructions =
+    builtins.replaceStrings
+      [ "~/" ]
+      [ "${config.home.homeDirectory}/" ]
+      (builtins.readFile ../../config/llm/instructions.md);
+
+  # ============================================================================
+  # Claude Code
+  # ============================================================================
+
+  jq = "${pkgs.jq}/bin/jq";
 
   # Session start hook: reads recent journal notes and injects as context
   sessionStartScript = pkgs.writeShellScript "claude-session-start" ''
@@ -72,15 +89,12 @@ let
     ${jq} -n --arg dir "$PROJECT_NOTES" '{
       hookSpecificOutput: {
         hookEventName: "PreCompact",
-        additionalContext: ("CONTEXT COMPACTION IMMINENT - Journal now!\n\nWrite session notes to: " + $dir + "/\nCapture: what you learned, decisions made, what is unfinished, what the next agent should know.\n\nThis is part of the work, not extra work.")
+        additionalContext: ("CONTEXT COMPACTION IMMINENT - Journal now!\n\nWrite session notes to: " + $dir + "/\n${compactionReminder}")
       }
     }'
   '';
 
-  # Claude browser extension native messaging config
-  # Helium already reads Chrome's NativeMessagingHosts, so this is redundant but
-  # makes the dependency explicit and future-proofs against Helium changing behavior.
-  # Points to Claude.app's native host which creates a socket that Claude Code connects to.
+  # Browser extension native messaging config (for Helium)
   nativeMessagingConfig = builtins.toJSON {
     name = "com.anthropic.claude_browser_extension";
     description = "Claude Browser Extension Native Host";
@@ -93,26 +107,84 @@ let
     ];
   };
 
-  # Application Support paths
   heliumSupport = "Library/Application Support/net.imput.helium";
   chromeSupport = "Library/Application Support/Google/Chrome";
-
-  # Claude extension ID (public Chrome Web Store version)
   claudeExtensionId = "fcoeoabgfenejglbffodgkkbkcdhcgfn";
+
+  # ============================================================================
+  # OpenCode
+  # ============================================================================
+
+  opencodeConfig = {
+    "$schema" = "https://opencode.ai/config.json";
+    # AGENTS.md is read automatically by precedence rules
+    # AGENTS.local.md needs to be explicitly included for per-project private context
+    instructions = [ "AGENTS.local.md" ];
+    permission = {
+      "*" = "ask";
+      read = "allow";
+      glob = "allow";
+      grep = "allow";
+      list = "allow";
+      todoread = "allow";
+      todowrite = "allow";
+      read_journal = "allow"; # Custom tool from journal plugin
+    };
+    provider = {
+      lmstudio = {
+        npm = "@ai-sdk/openai-compatible";
+        name = "LM Studio (local)";
+        options = {
+          baseURL = "http://127.0.0.1:1234/v1";
+        };
+        models = {
+          "zai-org/glm-4.7-flash" = {
+            name = "GLM 4.7 Flash (local)";
+            variants = {
+              high = {
+                reasoningEffort = "high";
+                textVerbosity = "low";
+                reasoningSummary = "auto";
+              };
+              low = {
+                reasoningEffort = "low";
+                textVerbosity = "low";
+                reasoningSummary = "auto";
+              };
+            };
+          };
+          "openai/gpt-oss-20b" = {
+            name = "GPT OSS 20b (local)";
+          };
+        };
+      };
+    };
+  };
+
+  # Journal plugin for OpenCode - external file with placeholder substitution
+  # Must be a real file (not symlink) so bun can resolve node_modules
+  journalPluginContent = builtins.replaceStrings
+    [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" ]
+    [ notesDir noNotesReminder journalReminder compactionReminder ]
+    (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
+
+  journalPluginFile = pkgs.writeText "journal.ts" journalPluginContent;
+
 in
 {
-  # Generate global instructions with expanded home directory
-  # (Claude Code doesn't handle ~ well in paths)
-  home.file.".claude/CLAUDE.md".text =
-    builtins.replaceStrings
-      [ "~/" ]
-      [ "${config.home.homeDirectory}/" ]
-      (builtins.readFile ../../config/llm-instructions.md);
+  # ============================================================================
+  # Shared
+  # ============================================================================
 
   # Ensure notes directory exists
   home.file."notes/llm/.keep".text = "";
 
-  # Hook scripts (referenced by managed-settings.json)
+  # ============================================================================
+  # Claude Code
+  # ============================================================================
+
+  home.file.".claude/CLAUDE.md".text = globalInstructions;
+
   home.file.".claude/hooks/session-start.sh" = {
     source = sessionStartScript;
     executable = true;
@@ -123,20 +195,14 @@ in
     executable = true;
   };
 
-  # Claude Code + Helium browser integration (macOS only)
-  #
-  # Problem: Claude Code hardcodes Chrome's config path for extension detection.
-  # Even though native messaging works (Helium reads Chrome's NativeMessagingHosts),
-  # Claude Code reports "Extension: Not detected" because it looks for the extension
-  # in ~/Library/Application Support/Google/Chrome/Default/Extensions/.
-  #
-  # Solution:
-  # 1. Native messaging config in Helium's directory (explicit, future-proof)
-  # 2. Symlink extension from Helium to Chrome's path (tricks detection)
-  #
-  # See: https://github.com/anthropics/claude-code/issues/14391
-  #      https://github.com/anthropics/claude-code/issues/18075
+  # Custom skills
+  home.file.".claude/skills/avi-init-agents/SKILL.md".source = ../../config/llm/skills/avi-init-agents/SKILL.md;
+  home.file.".claude/skills/avi-init-agents/checklist.md".source = ../../config/llm/skills/avi-init-agents/checklist.md;
 
+  # Helium browser integration (macOS only)
+  # Claude Code hardcodes Chrome's config path for extension detection.
+  # Symlink extension from Helium to Chrome's path to trick detection.
+  # See: https://github.com/anthropics/claude-code/issues/14391
   home.file."${heliumSupport}/NativeMessagingHosts/com.anthropic.claude_browser_extension.json" =
     lib.mkIf isDarwin {
       text = nativeMessagingConfig;
@@ -147,11 +213,8 @@ in
       HELIUM_EXT="$HOME/${heliumSupport}/Default/Extensions/${claudeExtensionId}"
       CHROME_EXT="$HOME/${chromeSupport}/Default/Extensions/${claudeExtensionId}"
 
-      # Only set up if Helium has the Claude extension installed
       if [[ -d "$HELIUM_EXT" ]]; then
         mkdir -p "$(dirname "$CHROME_EXT")"
-
-        # Symlink extension for Claude Code detection (idempotent)
         if [[ ! -e "$CHROME_EXT" ]]; then
           $DRY_RUN_CMD ln -sf "$HELIUM_EXT" "$CHROME_EXT"
           $VERBOSE_ECHO "Created Claude extension symlink for Claude Code detection"
@@ -159,4 +222,33 @@ in
       fi
     ''
   );
+
+  # ============================================================================
+  # OpenCode
+  # ============================================================================
+
+  xdg.configFile."opencode/opencode.json".text = builtins.toJSON opencodeConfig;
+  xdg.configFile."opencode/AGENTS.md".text = globalInstructions;
+
+  # Plugin must be a real file (not symlink) so bun can resolve node_modules
+  # package.json is NOT managed by Nix - opencode needs it writable
+  home.activation.opencodePlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    plugin_target="${opencodeConfigDir}/plugins/journal.ts"
+    plugin_source="${journalPluginFile}"
+
+    $DRY_RUN_CMD mkdir -p "${opencodeConfigDir}/plugins"
+
+    if [[ -f "$plugin_target" ]] && ! ${pkgs.diffutils}/bin/diff -q "$plugin_source" "$plugin_target" > /dev/null 2>&1; then
+      echo "WARNING: opencode plugin differs from Nix-managed version"
+      echo "  Target: $plugin_target"
+      echo "  Source: $plugin_source"
+      echo "Diff (existing vs new):"
+      ${pkgs.diffutils}/bin/diff "$plugin_target" "$plugin_source" || true
+      echo ""
+      echo "Overwriting with Nix-managed version..."
+    fi
+
+    $DRY_RUN_CMD cp -f "$plugin_source" "$plugin_target"
+    $DRY_RUN_CMD chmod 644 "$plugin_target"
+  '';
 }

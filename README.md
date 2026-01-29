@@ -85,8 +85,12 @@ brew bundle cleanup    # list unexpected dependencies (--force to remove)
 
 ## Documentation
 
-- [Upgrading Nix versions](docs/upgrading.md)
-- [Homebrew vs nixpkgs](docs/homebrew-vs-nixpkgs.md)
+- [Architecture](docs/architecture.md) - Module structure, flake inputs
+- [Commands](docs/commands.md) - Build, inspect, maintain
+- [Custom packages](docs/custom-packages.md) - Creating derivations
+- [Homebrew vs nixpkgs](docs/homebrew-vs-nixpkgs.md) - Package placement
+- [Secrets](docs/secrets.md) - sops/age management
+- [Upgrading](docs/upgrading.md) - Version upgrades
 
 ## Resources
 

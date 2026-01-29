@@ -39,7 +39,6 @@ in
     ./direnv.nix
     ./git.nix
     ./llm.nix
-    ./opencode.nix
     ./shell.nix
   ];
 
