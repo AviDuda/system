@@ -32,6 +32,17 @@ let
           ];
         }
       ];
+      # Runs when subagent spawns - tells it not to journal
+      SubagentStart = [
+        {
+          hooks = [
+            {
+              type = "command";
+              command = "${hookScriptsPath}/subagent-start.sh";
+            }
+          ];
+        }
+      ];
     };
   };
 in

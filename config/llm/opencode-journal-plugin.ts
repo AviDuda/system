@@ -8,6 +8,7 @@ const NOTES_DIR = "__NOTES_DIR__";
 const NO_NOTES_REMINDER = `__NO_NOTES_REMINDER__`;
 const JOURNAL_REMINDER = `__JOURNAL_REMINDER__`;
 const COMPACTION_REMINDER = `__COMPACTION_REMINDER__`;
+const JOURNAL_SKIP_MESSAGE = `__JOURNAL_SKIP_MESSAGE__`;
 
 interface NotesResult {
 	exists: boolean;
@@ -74,6 +75,12 @@ ${NO_NOTES_REMINDER}`;
 		},
 
 		"experimental.chat.system.transform": async (_input, output) => {
+			// Allow skipping journal reading with NO_JOURNAL=1
+			if (process.env.NO_JOURNAL === "1") {
+				output.system.push(`## Session Notes\n\n${JOURNAL_SKIP_MESSAGE}`);
+				return;
+			}
+
 			const result = await getRecentNotes(projectName);
 
 			if (result.notes.length === 0) {

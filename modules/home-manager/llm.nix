@@ -19,6 +19,8 @@ let
 
   compactionReminder = "Capture: what you learned, decisions made, what is unfinished, what the next agent should know.\nThis is part of the work, not extra work.";
 
+  journalSkipMessage = "Journal reading was skipped for this session (NO_JOURNAL=1 environment variable set).\n\nThis means you do not have context from previous sessions. The user intentionally started fresh.\n\nYou should still write journal notes at the end of this session - the skip only affects reading, not writing.";
+
   # Global instructions (shared between Claude Code and OpenCode)
   globalInstructions = builtins.replaceStrings [ "~/" ] [ "${config.home.homeDirectory}/" ] (
     builtins.readFile ../../config/llm/instructions.md
@@ -33,6 +35,12 @@ let
   # Session start hook: reads recent journal notes and injects as context
   sessionStartScript = pkgs.writeShellScript "claude-session-start" ''
         set -euo pipefail
+
+        # Allow skipping journal reading with NO_JOURNAL=1
+        if [[ "''${NO_JOURNAL:-}" == "1" ]]; then
+          ${jq} -n --arg msg "${journalSkipMessage}" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $msg } }'
+          exit 0
+        fi
 
         NOTES_DIR="${notesDir}"
         PROJECT_NAME=$(basename "$PWD")
@@ -80,6 +88,16 @@ let
         done
 
         output_context "$CONTEXT"
+  '';
+
+  # Subagent start hook: tells subagents not to write journal entries
+  subagentStartScript = pkgs.writeShellScript "claude-subagent-start" ''
+    ${jq} -n '{
+      hookSpecificOutput: {
+        hookEventName: "SubagentStart",
+        additionalContext: "You are a subagent. Do not write journal entries - the parent agent handles journaling. You may read journal files if needed for your task."
+      }
+    }'
   '';
 
   # Pre-compact hook: reminds to journal before context is lost
@@ -168,8 +186,8 @@ let
   # Must be a real file (not symlink) so bun can resolve node_modules
   journalPluginContent =
     builtins.replaceStrings
-      [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" ]
-      [ notesDir noNotesReminder journalReminder compactionReminder ]
+      [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" "__JOURNAL_SKIP_MESSAGE__" ]
+      [ notesDir noNotesReminder journalReminder compactionReminder journalSkipMessage ]
       (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
 
   journalPluginFile = pkgs.writeText "journal.ts" journalPluginContent;
@@ -196,6 +214,11 @@ in
 
   home.file.".claude/hooks/pre-compact.sh" = {
     source = preCompactScript;
+    executable = true;
+  };
+
+  home.file.".claude/hooks/subagent-start.sh" = {
+    source = subagentStartScript;
     executable = true;
   };
 

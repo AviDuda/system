@@ -47,3 +47,4 @@ mise repl             # REPL with flake outputs
 - macOS app bundles from custom packages need symlinks in `modules/home-manager/default.nix` to appear in `~/Applications`.
 - Test format with `mise fmt-check` before proposing changes.
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
+- Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
