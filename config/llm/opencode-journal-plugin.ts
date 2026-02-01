@@ -9,6 +9,8 @@ const NO_NOTES_REMINDER = `__NO_NOTES_REMINDER__`;
 const JOURNAL_REMINDER = `__JOURNAL_REMINDER__`;
 const COMPACTION_REMINDER = `__COMPACTION_REMINDER__`;
 const JOURNAL_SKIP_MESSAGE = `__JOURNAL_SKIP_MESSAGE__`;
+const VANILLA_MESSAGE = `__VANILLA_MESSAGE__`;
+const GLOBAL_INSTRUCTIONS = `__GLOBAL_INSTRUCTIONS__`;
 
 interface NotesResult {
 	exists: boolean;
@@ -75,7 +77,16 @@ ${NO_NOTES_REMINDER}`;
 		},
 
 		"experimental.chat.system.transform": async (_input, output) => {
-			// Allow skipping journal reading with NO_JOURNAL=1
+			// Vanilla mode: skip all custom context
+			if (process.env.LLM_VANILLA === "1") {
+				output.system.push(`## Mode\n\n${VANILLA_MESSAGE}`);
+				return;
+			}
+
+			// Normal mode: inject instructions
+			output.system.push(`## Instructions\n\n${GLOBAL_INSTRUCTIONS}`);
+
+			// Journal notes (skip if NO_JOURNAL=1)
 			if (process.env.NO_JOURNAL === "1") {
 				output.system.push(`## Session Notes\n\n${JOURNAL_SKIP_MESSAGE}`);
 				return;
@@ -105,6 +116,14 @@ ${JOURNAL_REMINDER}
 		},
 
 		"experimental.session.compacting": async (_input, output) => {
+			// Vanilla mode: no custom context during compaction either
+			if (process.env.LLM_VANILLA === "1") {
+				return;
+			}
+
+			// Re-inject instructions during compaction
+			output.context.push(`## Instructions\n\n${GLOBAL_INSTRUCTIONS}`);
+
 			const result = await getRecentNotes(projectName);
 
 			output.context.push(`

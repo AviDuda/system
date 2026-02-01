@@ -21,10 +21,16 @@ let
 
   journalSkipMessage = "Journal reading was skipped for this session (NO_JOURNAL=1 environment variable set).\n\nThis means you do not have context from previous sessions. The user intentionally started fresh.\n\nYou should still write journal notes at the end of this session - the skip only affects reading, not writing.";
 
+  vanillaMessage = "Running in vanilla mode (LLM_VANILLA=1). Custom instructions skipped.";
+
   # Global instructions (shared between Claude Code and OpenCode)
+  # Injected via hooks/plugin, not CLAUDE.md/AGENTS.md, so we can conditionally skip
   globalInstructions = builtins.replaceStrings [ "~/" ] [ "${config.home.homeDirectory}/" ] (
     builtins.readFile ../../config/llm/instructions.md
   );
+
+  # Escaped for shell embedding (single quotes escaped)
+  globalInstructionsShell = builtins.replaceStrings [ "'" ] [ "'\"'\"'" ] globalInstructions;
 
   # ============================================================================
   # Claude Code
@@ -32,62 +38,87 @@ let
 
   jq = "${pkgs.jq}/bin/jq";
 
-  # Session start hook: reads recent journal notes and injects as context
+  # Session start hook: injects instructions and journal notes as context
+  # Env vars:
+  #   LLM_VANILLA=1 - skip all custom context (truly vanilla experience)
+  #   NO_JOURNAL=1  - skip journal reading only (fresh session, no prior context)
   sessionStartScript = pkgs.writeShellScript "claude-session-start" ''
-        set -euo pipefail
+    set -euo pipefail
 
-        # Allow skipping journal reading with NO_JOURNAL=1
-        if [[ "''${NO_JOURNAL:-}" == "1" ]]; then
-          ${jq} -n --arg msg "${journalSkipMessage}" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $msg } }'
-          exit 0
-        fi
-
-        NOTES_DIR="${notesDir}"
-        PROJECT_NAME=$(basename "$PWD")
-        PROJECT_NOTES="$NOTES_DIR/$PROJECT_NAME"
-
-        NO_NOTES_REMINDER="${noNotesReminder}"
-
-        output_context() {
-          ${jq} -n --arg ctx "$1" '{
-            hookSpecificOutput: {
-              hookEventName: "SessionStart",
-              additionalContext: $ctx
-            }
-          }'
+    # Vanilla mode: skip everything custom, exit immediately
+    if [[ "''${LLM_VANILLA:-}" == "1" ]]; then
+      ${jq} -n --arg ctx "${vanillaMessage}" '{
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: $ctx
         }
+      }'
+      exit 0
+    fi
 
-        # Create directory if missing
-        if [[ ! -d "$PROJECT_NOTES" ]]; then
-          mkdir -p "$PROJECT_NOTES"
-          output_context "No previous session notes for $PROJECT_NAME.
-    Notes directory created: $PROJECT_NOTES/
+    # Normal mode: start with instructions
+    CONTEXT='${globalInstructionsShell}'$'\n\n'
 
-    $NO_NOTES_REMINDER"
-          exit 0
-        fi
+    # Journal notes (skip if NO_JOURNAL=1)
+    if [[ "''${NO_JOURNAL:-}" == "1" ]]; then
+      CONTEXT+="${journalSkipMessage}"
+      ${jq} -n --arg ctx "$CONTEXT" '{
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: $ctx
+        }
+      }'
+      exit 0
+    fi
 
-        # Find recent note files (last 3, sorted by name which includes date)
-        RECENT_NOTES=$(find "$PROJECT_NOTES" -name "*.md" -type f | sort -r | head -3)
+    NOTES_DIR="${notesDir}"
+    PROJECT_NAME=$(basename "$PWD")
+    PROJECT_NOTES="$NOTES_DIR/$PROJECT_NAME"
 
-        # No notes yet
-        if [[ -z "$RECENT_NOTES" ]]; then
-          output_context "No previous session notes for $PROJECT_NAME.
-    Notes directory: $PROJECT_NOTES/
+    NO_NOTES_REMINDER="${noNotesReminder}"
 
-    $NO_NOTES_REMINDER"
-          exit 0
-        fi
+    output_context() {
+      ${jq} -n --arg ctx "$1" '{
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: $ctx
+        }
+      }'
+    }
 
-        # Build context from recent notes
-        CONTEXT="Previous session notes for $PROJECT_NAME:"$'\n\n'
-        for note in $RECENT_NOTES; do
-          FILENAME=$(basename "$note")
-          CONTENT=$(cat "$note")
-          CONTEXT+="--- $FILENAME ---"$'\n'"$CONTENT"$'\n\n'
-        done
+    # Create directory if missing
+    if [[ ! -d "$PROJECT_NOTES" ]]; then
+      mkdir -p "$PROJECT_NOTES"
+      output_context "$CONTEXT
+No previous session notes for $PROJECT_NAME.
+Notes directory created: $PROJECT_NOTES/
 
-        output_context "$CONTEXT"
+$NO_NOTES_REMINDER"
+      exit 0
+    fi
+
+    # Find recent note files (last 3, sorted by name which includes date)
+    RECENT_NOTES=$(find "$PROJECT_NOTES" -name "*.md" -type f | sort -r | head -3)
+
+    # No notes yet
+    if [[ -z "$RECENT_NOTES" ]]; then
+      output_context "$CONTEXT
+No previous session notes for $PROJECT_NAME.
+Notes directory: $PROJECT_NOTES/
+
+$NO_NOTES_REMINDER"
+      exit 0
+    fi
+
+    # Build context from recent notes
+    CONTEXT+="Previous session notes for $PROJECT_NAME:"$'\n\n'
+    for note in $RECENT_NOTES; do
+      FILENAME=$(basename "$note")
+      CONTENT=$(cat "$note")
+      CONTEXT+="--- $FILENAME ---"$'\n'"$CONTENT"$'\n\n'
+    done
+
+    output_context "$CONTEXT"
   '';
 
   # Subagent start hook: tells subagents not to write journal entries
@@ -186,8 +217,24 @@ let
   # Must be a real file (not symlink) so bun can resolve node_modules
   journalPluginContent =
     builtins.replaceStrings
-      [ "__NOTES_DIR__" "__NO_NOTES_REMINDER__" "__JOURNAL_REMINDER__" "__COMPACTION_REMINDER__" "__JOURNAL_SKIP_MESSAGE__" ]
-      [ notesDir noNotesReminder journalReminder compactionReminder journalSkipMessage ]
+      [
+        "__NOTES_DIR__"
+        "__NO_NOTES_REMINDER__"
+        "__JOURNAL_REMINDER__"
+        "__COMPACTION_REMINDER__"
+        "__JOURNAL_SKIP_MESSAGE__"
+        "__VANILLA_MESSAGE__"
+        "__GLOBAL_INSTRUCTIONS__"
+      ]
+      [
+        notesDir
+        noNotesReminder
+        journalReminder
+        compactionReminder
+        journalSkipMessage
+        vanillaMessage
+        globalInstructions
+      ]
       (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
 
   journalPluginFile = pkgs.writeText "journal.ts" journalPluginContent;
@@ -205,7 +252,8 @@ in
   # Claude Code
   # ============================================================================
 
-  home.file.".claude/CLAUDE.md".text = globalInstructions;
+  # Empty - instructions injected via SessionStart hook for conditional loading
+  home.file.".claude/CLAUDE.md".text = "";
 
   home.file.".claude/hooks/session-start.sh" = {
     source = sessionStartScript;
@@ -258,7 +306,8 @@ in
   # ============================================================================
 
   xdg.configFile."opencode/opencode.json".text = builtins.toJSON opencodeConfig;
-  xdg.configFile."opencode/AGENTS.md".text = globalInstructions;
+  # Empty - instructions injected via plugin for conditional loading
+  xdg.configFile."opencode/AGENTS.md".text = "";
 
   # Plugin must be a real file (not symlink) so bun can resolve node_modules
   # package.json is NOT managed by Nix - opencode needs it writable

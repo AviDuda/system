@@ -62,6 +62,9 @@ in
       nix-upgrade = nixCommand "nix-upgrade"; # Update flake inputs and switch
       nix-build = "(cd ${systemFlakeDir} && mise nix-build)"; # Build without activating
       nix-diff = "(cd ${systemFlakeDir} && mise nix-diff)"; # Show pending changes
+
+      # Vanilla Claude Code: skip all custom context (instructions + journal)
+      claude-fresh = "LLM_VANILLA=1 claude";
     };
 
     history = {

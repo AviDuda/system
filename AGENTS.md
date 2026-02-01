@@ -48,3 +48,4 @@ mise repl             # REPL with flake outputs
 - Test format with `mise fmt-check` before proposing changes.
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
 - Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
+- Do NOT run `mise nix-switch` or `mise fast-switch` yourself. Use `mise nix-diff` to verify changes build, then tell the user to run the switch. This is their live system - they control when changes are applied.
