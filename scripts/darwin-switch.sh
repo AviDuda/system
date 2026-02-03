@@ -39,7 +39,6 @@ if [[ -n "$upgraded" ]]; then
         "raycast:Raycast"
         "shottr:Shottr"
         "stats:Stats"
-        "steelseries-gg:SteelSeriesGG"
         "pallotron-yubiswitch:yubiswitch"
         "yubico-authenticator:Yubico Authenticator"
         "yubico-yubikey-manager:ykman-gui"
