@@ -60,8 +60,8 @@ let
 
     theme = {
       mode = "dark";
-      light = "One Dark";
-      dark = "Ayu Dark";
+      light = "Tokyo Night Light";
+      dark = "Tokyo Night";
     };
 
     lsp = {
@@ -107,7 +107,7 @@ in
 
     # Format JSON with biome and prepend JSONC header
     {
-      echo '${settingsHeader}'
+      printf '%s' '${settingsHeader}'
       ${pkgs-unstable.biome}/bin/biome format --stdin-file-path=settings.json < "${zedSettingsFile}"
     } > "$settings_formatted"
 

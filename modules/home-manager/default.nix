@@ -195,6 +195,7 @@ in
         shellcheck # Shell script linter
         scc # Code complexity analyzer
         tree # Directory tree viewer
+        typst # Modern typesetting system (Markdown/LaTeX alternative for PDF)
         watch # Execute a command periodically
         yazi # Terminal file manager
         yt-dlp # YouTube downloader

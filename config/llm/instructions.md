@@ -73,6 +73,8 @@ This can include observations, frustrations, half-formed ideas, questions you're
 
 The example above is just one style. Structure and headers can vary freely. The point is having a voice and opinions, not following a specific format.
 
+**Write journal files directly -- not via subagents.** Subagents lose the conversation context that makes journal entries valuable. Write entries yourself so they reflect what you actually experienced. Subagents can be used to search or summarize past journal entries on demand (e.g., "find journal entries about X").
+
 Read previous notes when starting a session for context. This isn't documentation. It's how you remember what you learned.
 
 ## Wrapping Up Sessions

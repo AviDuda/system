@@ -44,7 +44,9 @@
       "anomalyco/tap/opencode" # AI coding assistant
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
+      "tectonic" # Modern LaTeX engine (not in nixpkgs for darwin)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
+      "weasyprint" # HTML/CSS to PDF (not in nixpkgs for darwin)
     ];
 
     casks = [
