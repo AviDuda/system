@@ -32,6 +32,9 @@ let
   # Escaped for shell embedding (single quotes escaped)
   globalInstructionsShell = builtins.replaceStrings [ "'" ] [ "'\"'\"'" ] globalInstructions;
 
+  # Escaped for JS template literal embedding (backticks escaped)
+  globalInstructionsJS = builtins.replaceStrings [ "`" ] [ "\\`" ] globalInstructions;
+
   # ============================================================================
   # Claude Code
   # ============================================================================
@@ -233,11 +236,17 @@ $NO_NOTES_REMINDER"
         compactionReminder
         journalSkipMessage
         vanillaMessage
-        globalInstructions
+        globalInstructionsJS
       ]
       (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
 
-  journalPluginFile = pkgs.writeText "journal.ts" journalPluginContent;
+  # Validate generated TS with esbuild before deploying - catches syntax errors
+  # from template literal escaping issues (e.g. unescaped backticks in instructions)
+  journalPluginRaw = pkgs.writeText "journal-raw.ts" journalPluginContent;
+  journalPluginFile = pkgs.runCommand "journal.ts" { nativeBuildInputs = [ pkgs.esbuild ]; } ''
+    esbuild --bundle --external:@opencode-ai/plugin --platform=node --outfile=/dev/null ${journalPluginRaw}
+    cp ${journalPluginRaw} $out
+  '';
 
 in
 {
