@@ -73,6 +73,7 @@ in
       devenv # Development environments
       nixfmt # Official Nix formatter
       nvd # Nix version diff tool
+      rustup # Rust toolchain manager
       sops # Secrets management
     ])
     ++
