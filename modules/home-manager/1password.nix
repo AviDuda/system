@@ -28,6 +28,10 @@ in
     source = config.lib.file.mkOutOfStoreSymlink darwinSockPath;
     target = ".1password/agent.sock";
   };
+  home.activation.createSshControlMasterDir = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    mkdir -p "$HOME/.ssh/cm"
+    chmod 700 "$HOME/.ssh/cm"
+  '';
   programs.bash = {
     initExtra = lib.mkIf pkgs.stdenvNoCC.isDarwin ''
       if command -v op >/dev/null; then
@@ -68,6 +72,7 @@ in
       "*" = {
         controlMaster = "auto";
         controlPersist = "10m";
+        controlPath = "~/.ssh/cm/%C";
       };
       "gamediscoverco" = {
         user = "discoverer";
