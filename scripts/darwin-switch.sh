@@ -23,7 +23,8 @@ if [[ -n "$upgraded" ]]; then
     printf "   %s\n" $upgraded
 
     # Auto-restart apps after upgrade. These have no unsaved state.
-    # Format: "cask-name:ProcessName"
+    # Format: "cask-name:ProcessName:BundleName"
+    # BundleName is optional - defaults to ProcessName if omitted.
     # To find process name: pgrep -l <pattern> while app is running
     auto_restart_apps=(
         # REQUIRED: These hook into system input events. Running stale processes
@@ -41,21 +42,29 @@ if [[ -n "$upgraded" ]]; then
         "stats:Stats"
         "pallotron-yubiswitch:yubiswitch"
         "yubico-authenticator:Yubico Authenticator"
-        "yubico-yubikey-manager:ykman-gui"
+        "yubico-yubikey-manager:ykman-gui:YubiKey Manager"
     )
 
     restarted_casks=""
     for entry in "${auto_restart_apps[@]}"; do
         cask="${entry%%:*}"
-        app="${entry##*:}"
+        rest="${entry#*:}"
+        process="${rest%%:*}"
+        # Bundle name defaults to process name if not specified
+        if [[ "$rest" == *:* ]]; then
+            bundle="${rest#*:}"
+        else
+            bundle="$process"
+        fi
         if echo "$upgraded" | grep -q "$cask"; then
-            if pgrep -x "$app" > /dev/null; then
+            if pgrep -x "$process" > /dev/null; then
                 echo ""
-                echo "🔄 Restarting $app..."
-                killall "$app" 2>/dev/null
+                echo "🔄 Restarting $bundle..."
+                killall "$process" 2>/dev/null
                 sleep 1
-                open -a "$app"
-                echo "✓ $app restarted"
+                # Use direct path to bypass Launch Services (stale after cask upgrade)
+                open "/Applications/$bundle.app"
+                echo "✓ $bundle restarted"
                 restarted_casks+="$cask"$'\n'
             fi
         fi
