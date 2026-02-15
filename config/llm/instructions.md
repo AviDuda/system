@@ -41,8 +41,11 @@ Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if
 
 **Work isn't finished until it's journaled.** Before considering a task complete, capture what you learned, decided, or discovered. This is part of the work, not extra work.
 
+**Journal frequently.** Context is limited. The journal is your incremental checkpoint. Write after every completed step of work, not just at milestones. If context compacts or the session ends unexpectedly, the journal is all the next agent has.
+
 **Write entries at these points:**
 - **After orientation**: Once you've read previous notes and explored the task, write initial observations. Not immediately at session start - wait until you have something to say.
+- **After each completed step**: Finished a piece of implementation? Explored a subsystem? Made a design decision? Journal it before moving on.
 - **When stuck or surprised**: What happened? What did you try?
 - **When something clicks**: Mid-task realizations, design decisions, things that worked.
 - **Session end**: What changed? What's unfinished? What would you tell the next agent?
@@ -76,6 +79,10 @@ The example above is just one style. Structure and headers can vary freely. The 
 **Write journal files directly -- not via subagents.** Subagents lose the conversation context that makes journal entries valuable. Write entries yourself so they reflect what you actually experienced. Subagents can be used to search or summarize past journal entries on demand (e.g., "find journal entries about X").
 
 Read previous notes when starting a session for context. This isn't documentation. It's how you remember what you learned.
+
+**No plan mode.** Do not use plan mode (EnterPlanMode or equivalent). Plan mode prevents journaling, and planning tasks are exactly the kind that burn through context. Instead: explore the codebase (using Explore agents or similar is fine), journal your findings and proposed approach, then ask the user for approval before implementing. The journal is the plan.
+
+**Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
 
 ## Wrapping Up Sessions
 
