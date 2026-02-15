@@ -74,7 +74,11 @@ in
       nixfmt # Official Nix formatter
       nvd # Nix version diff tool
       rustup # Rust toolchain manager
+      go # Go compiler
+      nodejs # Node.js runtime
       sops # Secrets management
+      typescript # TypeScript compiler
+      nodePackages.typescript-language-server # TypeScript/JS language server
     ])
     ++
       # Stable packages (versions match homebrew)
@@ -167,6 +171,7 @@ in
         act # GitHub Actions local runner
         ast-grep # Structural code search
         biome # JS/TS/JSON linter and formatter
+        bun # JavaScript runtime and toolkit
         btop # Process viewer (prettier htop)
         coreutils # GNU core utilities
         # csvkit # CSV tools - broken in 25.11 (agate test failure)

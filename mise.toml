@@ -12,7 +12,7 @@ depends = ["fmt", "fast-switch"]
 
 [tasks.nix-upgrade]
 description = "Update flake inputs and switch"
-run = "nix flake update && mise gc && mise nix-switch && mise up"
+run = "nix flake update && mise gc && mise nix-switch"
 
 [tasks.fast-switch]
 alias = "fs"
