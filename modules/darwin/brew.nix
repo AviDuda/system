@@ -15,8 +15,9 @@
     enable = true;
 
     onActivation = {
-      autoUpdate = true;
-      upgrade = true;
+      # Update and upgrade are handled in darwin-switch.sh (skippable with SKIP_BREW=1)
+      autoUpdate = false;
+      upgrade = false;
       cleanup = "zap";
       extraFlags = [ "--verbose" ];
     };
@@ -43,6 +44,7 @@
       "ollama" # LLM runtime (nixpkgs build broken)
       "anomalyco/tap/opencode" # AI coding assistant
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
+      "jj" # Jujutsu VCS (updates frequently, avoid recompiling Rust)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
       "tectonic" # Modern LaTeX engine (not in nixpkgs for darwin)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)

@@ -55,6 +55,7 @@ in
     ./1password.nix
     ./direnv.nix
     ./git.nix
+    ./lazygit.nix
     ./llm.nix
     ./shell.nix
     ./zed.nix
@@ -181,7 +182,7 @@ in
         furnace # Multi-system chiptune tracker
         gh # GitHub CLI
         htop # Process viewer
-        lazygit # Git TUI
+        # lazygit - managed by programs.lazygit in lazygit.nix
         imagemagick # Image processing
         jq # JSON processor
         just # Command runner (Makefile alternative)

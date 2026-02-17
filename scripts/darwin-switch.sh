@@ -5,20 +5,35 @@ set -euo pipefail
 # Capture current system for diff after switch
 old_system=$(readlink /run/current-system)
 
+# Refresh Homebrew formulae so brew bundle can find packages (skip with SKIP_BREW=1)
+if [[ "${SKIP_BREW:-}" != "1" ]]; then
+    echo "Updating Homebrew formulae..."
+    brew update
+fi
+
 # Capture running GUI apps before switch (requires System Events access)
 echo "Checking running apps via System Events..."
 running_apps=$(osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>/dev/null | tr ',' '\n' | sed 's/^ //')
 
-# Run the switch, capture output while showing it
-output=$(sudo darwin-rebuild --flake ".#${FLAKE_HOST:-$(hostname)}" switch 2>&1 | tee /dev/stderr)
+# Run the switch (installs new packages, removes unlisted, no upgrade)
+sudo darwin-rebuild --flake ".#${FLAKE_HOST:-$(hostname)}" switch
 
-# Extract upgraded casks (lines with "Upgrading <cask> cask. It is installed")
-upgraded=$(echo "$output" | grep -E '^Upgrading .* cask\. It is installed' | sed 's/^Upgrading //' | sed 's/ cask\. It is installed.*//' || true)
+# Upgrade Homebrew packages after bundle has synced the package list
+upgraded=""
+if [[ "${SKIP_BREW:-}" != "1" ]]; then
+    echo ""
+    echo "Upgrading Homebrew packages..."
+    # Capture outdated list before upgrading (more reliable than parsing upgrade output)
+    upgraded=$(brew outdated --greedy --quiet 2>/dev/null || true)
+    if ! brew upgrade --greedy; then
+        echo "⚠️  brew upgrade failed (nix switch succeeded, continuing)"
+    fi
+fi
 
 if [[ -n "$upgraded" ]]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📦 Updated casks:"
+    echo "📦 Updated Homebrew packages:"
     # shellcheck disable=SC2086 # Word splitting intentional - one cask per line
     printf "   %s\n" $upgraded
 

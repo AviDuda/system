@@ -19,6 +19,22 @@
       gpg.format = "ssh";
       "gpg.ssh".program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign";
       commit.gpgsign = true;
+      merge.conflictStyle = "zdiff3";
+      diff.algorithm = "histogram";
+      rerere.enabled = true;
+      rebase.autoSquash = true;
+      rebase.updateRefs = true;
+      fetch.prune = true;
+      branch.sort = "-committerdate";
+      help.autocorrect = "prompt";
+      core.pager = "delta";
+      interactive.diffFilter = "delta --color-only";
+      delta = {
+        dark = true;
+        line-numbers = true;
+        navigate = true; # n/N to jump between diff sections
+        pager = "less --mouse";
+      };
     };
 
     ignores = [
