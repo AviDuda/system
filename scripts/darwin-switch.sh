@@ -11,10 +11,6 @@ if [[ "${SKIP_BREW:-}" != "1" ]]; then
     brew update
 fi
 
-# Capture running GUI apps before switch (requires System Events access)
-echo "Checking running apps via System Events..."
-running_apps=$(osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>/dev/null | tr ',' '\n' | sed 's/^ //')
-
 # Run the switch (installs new packages, removes unlisted, no upgrade)
 sudo darwin-rebuild --flake ".#${FLAKE_HOST:-$(hostname)}" switch
 
@@ -23,19 +19,32 @@ upgraded=""
 if [[ "${SKIP_BREW:-}" != "1" ]]; then
     echo ""
     echo "Upgrading Homebrew packages..."
-    # Capture outdated list before upgrading (more reliable than parsing upgrade output)
-    upgraded=$(brew outdated --greedy --quiet 2>/dev/null || true)
+    # Capture outdated list before and after to determine what actually upgraded
+    outdated_before=$(brew outdated --greedy --quiet 2>/dev/null || true)
     if ! brew upgrade --greedy; then
-        echo "⚠️  brew upgrade failed (nix switch succeeded, continuing)"
+        echo "⚠️  brew upgrade had errors (nix switch succeeded, continuing)"
+    fi
+    if [[ -n "$outdated_before" ]]; then
+        outdated_after=$(brew outdated --greedy --quiet 2>/dev/null || true)
+        # Actually upgraded = was outdated before but not after
+        upgraded=$(comm -23 <(echo "$outdated_before" | sort) <(echo "$outdated_after" | sort))
+        failed=$(comm -12 <(echo "$outdated_before" | sort) <(echo "$outdated_after" | sort))
     fi
 fi
 
-if [[ -n "$upgraded" ]]; then
+if [[ -n "$upgraded" || -n "${failed:-}" ]]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📦 Updated Homebrew packages:"
-    # shellcheck disable=SC2086 # Word splitting intentional - one cask per line
-    printf "   %s\n" $upgraded
+    if [[ -n "$upgraded" ]]; then
+        echo "📦 Upgraded Homebrew packages:"
+        # shellcheck disable=SC2086 # Word splitting intentional - one package per line
+        printf "   %s\n" $upgraded
+    fi
+    if [[ -n "${failed:-}" ]]; then
+        echo "⚠️  Failed to upgrade:"
+        # shellcheck disable=SC2086
+        printf "   %s\n" $failed
+    fi
 
     # Auto-restart apps after upgrade. These have no unsaved state.
     # Format: "cask-name:ProcessName:BundleName"
@@ -86,6 +95,10 @@ if [[ -n "$upgraded" ]]; then
     done
 
     # Check which running apps need manual restart (updated but not auto-restarted)
+    # Capture process list once. IMPORTANT: do not use `grep -q` on the live
+    # `ps -eo comm` pipe -- under pipefail, grep -q exits early on match,
+    # ps gets SIGPIPE (exit 141), and the pipeline returns non-zero.
+    ps_output=$(ps -eo comm)
     needs_manual=""
     while IFS= read -r cask; do
         [[ -z "$cask" ]] && continue
@@ -93,18 +106,19 @@ if [[ -n "$upgraded" ]]; then
         if echo "$restarted_casks" | grep -q "^${cask}$"; then
             continue
         fi
+        # Strip tap prefix (e.g., anomalyco/tap/opencode -> opencode)
+        cask_name="${cask##*/}"
         # Find the .app bundle and check if its executable is running
-        pattern="${cask//-/ }"
+        pattern="${cask_name//-/ }"
         app_path=$(find /Applications -maxdepth 1 -iname "*$pattern*.app" 2>/dev/null | head -1)
         # Fallback: try last word (e.g., jordanbaird-ice -> ice)
         if [[ -z "$app_path" ]]; then
-            last_word="${cask##*-}"
+            last_word="${cask_name##*-}"
             app_path=$(find /Applications -maxdepth 1 -iname "*$last_word*.app" 2>/dev/null | head -1)
         fi
         if [[ -n "$app_path" ]]; then
             executable=$(defaults read "$app_path/Contents/Info" CFBundleExecutable 2>/dev/null)
-            # Match full path since macOS shows full path in COMM for some apps
-            if [[ -n "$executable" ]] && ps -eo comm | grep -q "$app_path/Contents/MacOS/$executable"; then
+            if [[ -n "$executable" ]] && echo "$ps_output" | grep -q "$app_path/Contents/MacOS/$executable"; then
                 needs_manual+="   $cask"$'\n'
             fi
         fi
