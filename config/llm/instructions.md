@@ -20,14 +20,26 @@
 The system has modern CLI replacements and utilities installed via Nix. Check `~/system/modules/home-manager/default.nix` for the full list.
 
 Key tools to prefer:
-- **Search/find**: `fd` (find), `rg` (grep), `fzf` (fuzzy finder)
-- **File viewing**: `bat` (cat), `eza` (ls), `delta`/`difftastic` (diff)
+- **Search/find**: `fd`, `rg`, `fzf`, `ast-grep`
+- **File viewing**: `bat`, `eza`, `delta`/`difftastic`, `hexyl`, `gron`
 - **Data wrangling**: `jq`, `yq`, `dasel`, `miller`, `htmlq`, `csvlens`
+- **Code transformation**: `ast-grep`, `comby`, `sd`
+- **Code quality**: `shellcheck`, `biome`, `nixfmt`
+- **Benchmarking/stats**: `hyperfine`, `tokei`, `scc`
 - **Git**: `tig`, `git-absorb`, `delta`
-- **Image optimization**: `pngquant`, `optipng`, `jpegoptim`, `svgo`, `cwebp`, `cjxl`, `avifenc`
-- **Docs/diagrams**: `glow` (markdown), `graphviz`, `mermaid-cli`, `plantuml`
+- **File watching**: `entr`, `watchexec`
+- **Containers/CI**: `dive`, `act`
+- **Image optimization**: `pngquant`, `optipng`, `oxipng`, `jpegoptim`, `svgo`, `cwebp`, `cjxl`, `avifenc`
+- **Media/conversion**: `ffmpeg`, `imagemagick`, `pandoc`, `typst`
+- **Docs/diagrams**: `glow`, `graphviz`, `mermaid-cli`, `plantuml`
 
 Use these instead of writing custom scripts when they fit the task.
+
+Prefer structural tools over regex when the pattern is about code structure:
+- `ast-grep` over `rg` for matching function calls, imports, type usage, etc.
+- `comby` over `sed`/manual edits for mechanical multi-file transformations
+- `shellcheck` on any shell script before committing
+- `hyperfine` over `time` for benchmarking
 
 ## REQUIRED: Journal
 

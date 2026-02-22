@@ -112,6 +112,7 @@ in
         gifsicle # GIF optimizer
         glow # Markdown viewer
         graphviz # DOT diagrams to images
+        gron # Make JSON greppable
         grpcurl # curl for gRPC
         gum # TUI components for scripts
         hexyl # Hex viewer
@@ -157,6 +158,7 @@ in
         tig # Git TUI (history, blame)
         timidity # MIDI player
         tokei # Code statistics
+        tree-sitter # Parser generator / AST tool
         vhs # Record terminal to GIF
         watchexec # Run commands on file changes
         wget # Downloader
