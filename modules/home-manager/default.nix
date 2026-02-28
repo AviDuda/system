@@ -207,7 +207,7 @@ in
         typst # Modern typesetting system (Markdown/LaTeX alternative for PDF)
         watch # Execute a command periodically
         yazi # Terminal file manager
-        yt-dlp # YouTube downloader
+        # yt-dlp - in Homebrew (updates frequently, prebuilt bottles)
         yubikey-manager # YubiKey manager
       ])
     ++

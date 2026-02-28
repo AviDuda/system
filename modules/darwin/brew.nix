@@ -37,6 +37,7 @@
     # Most CLI tools are in nixpkgs - see modules/home-manager/personal/pkgs.nix
     # Only keeping packages that must stay in Homebrew
     brews = [
+      "agent-browser" # Headless browser (not in nixpkgs)
       "comby" # Structural find/replace (nixpkgs broken)
       "lilypond" # Music notation (nixpkgs build fails)
       "mas" # Mac App Store CLI (macOS-specific)
@@ -48,6 +49,7 @@
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
       "tectonic" # Modern LaTeX engine (not in nixpkgs for darwin)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
+      "yt-dlp" # YouTube downloader (updates frequently, prebuilt bottles)
       "weasyprint" # HTML/CSS to PDF (not in nixpkgs for darwin)
     ];
 
