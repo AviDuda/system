@@ -318,6 +318,7 @@
 
       # Third-party
       # "BARQ!" = 1526984545; # Furry social app # Disabled as iPad apps aren't supported
+      "Flighty – Live Flight Tracker" = 1358823008; # Flight tracker
       "Mona for Mastodon" = 1659154653; # Mastodon client
       "NextDNS" = 1464122853; # DNS client
       "Playlisty for Apple Music" = 1459275972; # Move music to Apple Music
