@@ -96,6 +96,19 @@ Read previous notes when starting a session for context. This isn't documentatio
 
 **Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
 
+## Knowledge Routing
+
+When you discover durable knowledge — patterns, conventions, gotchas, architectural decisions — consider where it belongs rather than only journaling it.
+
+- **Human+LLM documentation**: If the knowledge is useful to both humans and AI agents, suggest adding it to project documentation. If it warrants always-on context, suggest @-mentioning it from AGENTS.md.
+- **LLM-specific instructions (shared)**: If it's about agent workflow or behavioral rules for the project, suggest an AGENTS.md update.
+- **LLM-specific instructions (personal)**: If it's about your user's personal workflow or private context, suggest an AGENTS.local.md update.
+- **Temporal context**: If it's session history, work in progress, or something still being figured out, journal it.
+
+Do not edit AGENTS.md or AGENTS.local.md directly — describe the proposed change and let the user decide. If the user approves, suggest running `/avi-init-agents` to maintain the file properly.
+
+Before suggesting a promotion, check whether this pattern or gotcha has come up before — search earlier journal entries if they exist, or consider your own session history. A repeated issue is a strong signal that it belongs in a durable location. Novel discoveries should be noted first and promoted later if they recur.
+
 ## Wrapping Up Sessions
 
 When Avi says "wrap up", "let's wrap up", or similar:

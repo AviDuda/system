@@ -9,6 +9,9 @@ let
   hookScriptsPath = "~/.claude/hooks";
 
   settings = {
+    # Disable auto-memory, using journal context instead
+    autoMemoryEnabled = false;
+
     hooks = {
       # Runs at session start - injects recent journal context
       SessionStart = [
