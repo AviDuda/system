@@ -98,6 +98,9 @@ export default function journalExtension(pi: ExtensionAPI) {
     }
 
     cachedContext = context;
+
+    // Emit event so other extensions can react to loaded journal notes
+    pi.events.emit("journal:loaded", { projectName, notes: result.notes });
   });
 
   // Inject context on first prompt via system prompt modification
@@ -147,6 +150,8 @@ export default function journalExtension(pi: ExtensionAPI) {
     }
 
     cachedContext = context;
+
+    pi.events.emit("journal:loaded", { projectName, notes: result.notes });
   });
 
   // Pre-compact: remind to journal before context is lost

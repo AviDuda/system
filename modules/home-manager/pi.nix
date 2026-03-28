@@ -75,9 +75,16 @@ in
     - Only use write for genuinely new files or when the entire file content is changing.
   '';
 
-  # Model roles config for sidecar LLM calls (used by permission gate explain, etc.)
+  # Model roles config for sidecar LLM calls (used by permission gate explain, draft suggestion, etc.)
+  # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high),
+  # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
   home.file.".pi/agent/roles.json".text = builtins.toJSON {
     explain = {
+      models = [
+        { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
+      ];
+    };
+    draft = {
       models = [
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
       ];

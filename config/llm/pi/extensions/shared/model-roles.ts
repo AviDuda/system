@@ -45,6 +45,8 @@ export interface ModelEntry {
   ref: string;
   /** Thinking level for this specific model. Default: "off" */
   thinking?: ThinkingLevel;
+  /** Max attempts per call (for retry with filtering). Default: 1 */
+  maxAttempts?: number;
 }
 
 export interface RoleConfig {
