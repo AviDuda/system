@@ -14,12 +14,11 @@ for detail.
 
 | Verdict | Meaning | Default cursor | Color |
 |---------|---------|---------------|-------|
-| SAFE | Read-only, regenerable artifacts, routine ops | Allow once | Green |
-| RISKY | Modifies/deletes specific files, limited blast radius | Allow once | Yellow |
+| SAFE | Strictly read-only. No creation, modification, deletion, or state changes. | Allow once | Green |
+| RISKY | Any filesystem mutation, even if recoverable. | Allow once | Yellow |
 | DANGEROUS | Large-scale data loss, credential exposure, exfiltration, arbitrary code exec | Block | Red |
 
-Single file deletion is RISKY even outside the project. DANGEROUS is reserved for
-catastrophic or security-critical operations.
+If in doubt between SAFE and RISKY, the sidecar chooses RISKY.
 
 ### Auto-classify
 
@@ -40,6 +39,10 @@ Sidecar failures fall through to the dialog (graceful degradation).
 
 Status bar shows `+auto [N auto]` with count of auto-allowed calls.
 `/permissions` > View auto-allow log shows recent auto-allowed calls.
+Widget below editor shows the latest auto-allow verdict during a turn.
+
+Cache is shared with the explain feature -- classifications from dialogs
+warm the cache for auto-classify and vice versa.
 
 ## Modes
 
@@ -50,6 +53,16 @@ Status bar shows `+auto [N auto]` with count of auto-allowed calls.
 | Allow all | allow | allow | allow | allow |
 
 Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
+
+## Keyboard shortcuts
+
+| Key | Where | Action |
+|-----|-------|--------|
+| `Ctrl+Shift+A` | Global | Cycle permission mode |
+| `Ctrl+Shift+C` | Global | Toggle auto-classify |
+| `Ctrl+E` | Confirm dialog | Toggle explanation detail |
+| `Ctrl+A` | Confirm dialog | Toggle auto-classify |
+| `Tab` | Confirm dialog | Switch focus between list and note |
 
 ## Confirmation UI
 
