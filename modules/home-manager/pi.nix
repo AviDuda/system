@@ -55,10 +55,12 @@ let
   # Source directory for pi extensions
   piExtSrcDir = "${config.home.homeDirectory}/system/config/llm/pi/extensions";
 
-  # Auto-discover extension directories (contain index.ts) from source.
-  # These are symlinked live — edit + /reload works without nix-switch.
+  # Auto-discover extension directories from source.
+  # Dirs with index.ts are extensions; dirs without are shared modules.
+  # All are symlinked live — edit + /reload works without nix-switch.
   # Journal extension is excluded (needs Nix substitution, handled separately).
-  extensionDirs = builtins.filter (name: builtins.pathExists (../../config/llm/pi/extensions + "/${name}/index.ts"))
+  allExtDirs = builtins.filter
+    (name: (builtins.readDir ../../config/llm/pi/extensions).${name} == "directory")
     (builtins.attrNames (builtins.readDir ../../config/llm/pi/extensions));
 
 in
@@ -88,7 +90,8 @@ in
     $DRY_RUN_CMD cp -f "$ext_source" "$ext_target"
     $DRY_RUN_CMD chmod 644 "$ext_target"
 
-    # Extension directories (auto-discovered, symlinked to live source)
+    # Extension + shared directories (auto-discovered, symlinked to live source)
+    # Pi only loads dirs with index.ts as extensions; shared dirs are just for imports.
     ${lib.concatMapStringsSep "\n    " (name: ''
       ext_link="${piConfigDir}/extensions/${name}"
       ext_target="${piExtSrcDir}/${name}"
@@ -98,6 +101,6 @@ in
         $DRY_RUN_CMD ln -sfn "$ext_target" "$ext_link"
         echo "pi: linked ${name} -> $ext_target"
       fi
-    '') extensionDirs}
+    '') allExtDirs}
   '';
 }
