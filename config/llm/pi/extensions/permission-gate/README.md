@@ -2,6 +2,14 @@
 
 Pi extension that gates tool calls with user confirmation.
 
+## Model Roles Integration
+
+The permission gate integrates with the model roles system (`shared/model-roles.ts`)
+to provide LLM-generated explanations of tool calls in the confirmation dialog.
+When the "explain" role is configured in `~/.pi/agent/roles.json`, each confirmation
+dialog shows a colored SAFE/RISKY/DANGEROUS verdict with a short tl;dr. Press Ctrl+E
+for detail.
+
 ## Modes
 
 | Mode | Reads | Writes/Edits | Sensitive files | Bash |

@@ -1,0 +1,148 @@
+import { describe, expect, test } from "bun:test";
+import { blockReason, describeToolCall, parseExplanation } from "./explain";
+
+// ── describeToolCall ──
+
+describe("describeToolCall", () => {
+  test("bash command", () => {
+    expect(describeToolCall("bash", { command: "ls -la" })).toBe("bash command: ls -la");
+  });
+
+  test("write with short content", () => {
+    const result = describeToolCall("write", { path: "/tmp/test.txt", content: "hello" });
+    expect(result).toBe("write to /tmp/test.txt:\nhello");
+  });
+
+  test("write truncates long content", () => {
+    const long = "x".repeat(600);
+    const result = describeToolCall("write", { path: "/tmp/test.txt", content: long });
+    expect(result).toContain("...");
+    expect(result.length).toBeLessThan(600);
+  });
+
+  test("edit with oldText/newText", () => {
+    const result = describeToolCall("edit", { path: "file.ts", oldText: "old", newText: "new" });
+    expect(result).toBe('edit file.ts: "old" -> "new"');
+  });
+
+  test("edit with edits array", () => {
+    const result = describeToolCall("edit", {
+      path: "file.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d" },
+      ],
+    });
+    expect(result).toContain("edit file.ts (2 edits)");
+    expect(result).toContain('edit 1: "a" -> "b"');
+    expect(result).toContain('edit 2: "c" -> "d"');
+  });
+
+  test("edit with undefined newText (edits array form missing)", () => {
+    const result = describeToolCall("edit", { path: "file.ts" });
+    expect(result).toBe('edit file.ts: "" -> ""');
+  });
+
+  test("unknown tool uses JSON", () => {
+    const result = describeToolCall("custom", { foo: "bar" });
+    expect(result).toContain("custom:");
+    expect(result).toContain('"foo":"bar"');
+  });
+
+  test("unknown tool truncates long JSON", () => {
+    const result = describeToolCall("custom", { data: "x".repeat(1000) });
+    expect(result.length).toBeLessThanOrEqual(510); // "custom: " + 500
+  });
+});
+
+// ── parseExplanation ──
+
+describe("parseExplanation", () => {
+  test("pipe delimiter", () => {
+    const result = parseExplanation("SAFE|Reads a config file");
+    expect(result.verdict).toBe("safe");
+    expect(result.short).toBe("Reads a config file");
+    expect(result.detail).toBe("");
+  });
+
+  test("colon delimiter", () => {
+    const result = parseExplanation("DANGEROUS: Deletes everything");
+    expect(result.verdict).toBe("dangerous");
+    expect(result.short).toBe("Deletes everything");
+  });
+
+  test("dash delimiter", () => {
+    const result = parseExplanation("RISKY - Modifies system config");
+    expect(result.verdict).toBe("risky");
+    expect(result.short).toBe("Modifies system config");
+  });
+
+  test("with detail on subsequent lines", () => {
+    const result = parseExplanation("SAFE|Reads package.json\n\nThis is a standard read operation.");
+    expect(result.verdict).toBe("safe");
+    expect(result.short).toBe("Reads package.json");
+    expect(result.detail).toBe("This is a standard read operation.");
+  });
+
+  test("multiline detail", () => {
+    const result = parseExplanation("DANGEROUS|Deletes home dir\n\nFirst line of detail.\nSecond line.");
+    expect(result.verdict).toBe("dangerous");
+    expect(result.short).toBe("Deletes home dir");
+    expect(result.detail).toBe("First line of detail.\nSecond line.");
+  });
+
+  test("no verdict prefix defaults to safe", () => {
+    const result = parseExplanation("Just some text without a verdict");
+    expect(result.verdict).toBe("safe");
+    expect(result.short).toBe("Just some text without a verdict");
+  });
+
+  test("case insensitive verdict", () => {
+    const result = parseExplanation("dangerous|bad stuff");
+    expect(result.verdict).toBe("dangerous");
+    expect(result.short).toBe("bad stuff");
+  });
+
+  test("handles whitespace", () => {
+    const result = parseExplanation("  SAFE |  Reads a file  \n\n  Some detail  ");
+    expect(result.verdict).toBe("safe");
+    expect(result.short).toBe("Reads a file");
+    expect(result.detail).toBe("Some detail");
+  });
+
+  test("empty string", () => {
+    const result = parseExplanation("");
+    expect(result.verdict).toBe("safe");
+    expect(result.short).toBe("");
+    expect(result.detail).toBe("");
+  });
+
+  test("verdict only, no description after delimiter", () => {
+    const result = parseExplanation("SAFE|");
+    expect(result.verdict).toBe("safe");
+    // short falls back to the full first line since stripped is empty
+    expect(result.short).toBe("SAFE|");
+  });
+});
+
+// ── blockReason ──
+
+describe("blockReason", () => {
+  test("note only", () => {
+    expect(blockReason("don't do that", null, "fallback")).toBe("don't do that");
+  });
+
+  test("explanation only", () => {
+    const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
+    expect(blockReason("", expl, "fallback")).toBe("[DANGEROUS: Deletes everything]");
+  });
+
+  test("both note and explanation", () => {
+    const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
+    expect(blockReason("be careful", expl, "fallback")).toBe("be careful [RISKY: Modifies config]");
+  });
+
+  test("neither note nor explanation uses fallback", () => {
+    expect(blockReason("", null, "Blocked by permission gate")).toBe("Blocked by permission gate");
+  });
+});

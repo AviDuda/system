@@ -4,6 +4,11 @@
  * Shows a select list with an optional note input.
  * Tab switches focus between the list and the note field.
  * Enter confirms the selected action with the note attached.
+ *
+ * Optionally shows an LLM-generated explanation of the tool call:
+ * - Short summary shown by default
+ * - Ctrl+E toggles full explanation
+ * - Streams in while the user is reading/deciding (zero added latency)
  */
 
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
@@ -22,6 +27,23 @@ import {
 export interface ConfirmResult {
   choice: string | null;
   note: string;
+  /** The explanation result, if available by the time the user decided. */
+  explanation: ExplanationResult | null;
+}
+
+export type ExplanationVerdict = "safe" | "risky" | "dangerous";
+
+export interface ExplanationResult {
+  verdict: ExplanationVerdict;
+  short: string;
+  detail: string;
+}
+
+export interface ExplanationProvider {
+  /** Promise that resolves with the parsed explanation. */
+  promise: Promise<ExplanationResult | null>;
+  /** Abort the in-flight request. */
+  abort: () => void;
 }
 
 export function createConfirmUI(
@@ -31,13 +53,76 @@ export function createConfirmUI(
   done: (result: ConfirmResult) => void,
   title: string,
   options: string[],
+  explanation?: ExplanationProvider,
 ): Component {
+  const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
   let focusOnNote = false;
+  let explanationState: "loading" | "ready" | "expanded" | "none" = explanation ? "loading" : "none";
+  let explanationResult: ExplanationResult | null = null;
 
   // Title
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
   container.addChild(new Text(theme.fg("accent", title), 1, 0));
+
+  // Explanation text (shown between title and select list)
+  const explanationText = new Text("", 1, 0);
+  container.addChild(explanationText);
+
+  function updateExplanationDisplay() {
+    if (explanationState === "none") {
+      explanationText.setText("");
+      return;
+    }
+    if (explanationState === "loading") {
+      explanationText.setText(theme.fg("dim", "Explaining..."));
+      return;
+    }
+    if (!explanationResult) return;
+
+    const themeColor =
+      explanationResult.verdict === "dangerous"
+        ? ("error" as const)
+        : explanationResult.verdict === "risky"
+          ? ("warning" as const)
+          : ("success" as const);
+    const tag = explanationResult.verdict.toUpperCase();
+    const shortLine = theme.fg(themeColor, `${tag}: ${explanationResult.short}`);
+
+    if (explanationState === "expanded") {
+      explanationText.setText(`${shortLine}\n${theme.fg("dim", explanationResult.detail)}`);
+    } else {
+      const hint = explanationResult.detail ? theme.fg("dim", "  [Ctrl+E]") : "";
+      explanationText.setText(`${shortLine}${hint}`);
+    }
+  }
+
+  // Kick off explanation loading
+  if (explanation) {
+    updateExplanationDisplay();
+    explanation.promise
+      .then((result) => {
+        if (result) {
+          explanationResult = result;
+          explanationState = "ready";
+          // Default selection based on verdict
+          if (result.verdict === "dangerous") {
+            selectList.setSelectedIndex(blockIndex);
+          }
+          // SAFE and RISKY default to index 0 (Allow once), which is already the default
+        } else {
+          explanationState = "none";
+        }
+        updateExplanationDisplay();
+        updateLabels();
+        tui.requestRender();
+      })
+      .catch(() => {
+        explanationState = "none";
+        updateExplanationDisplay();
+        tui.requestRender();
+      });
+  }
 
   // Select list
   const items: SelectItem[] = options.map((opt) => ({ value: opt, label: opt }));
@@ -48,12 +133,14 @@ export function createConfirmUI(
     scrollInfo: (t) => theme.fg("dim", t),
     noMatch: (t) => theme.fg("warning", t),
   });
-  selectList.onSelect = (item) => {
-    done({ choice: item.value, note: noteInput.getValue().trim() });
-  };
-  selectList.onCancel = () => {
-    done({ choice: null, note: "" });
-  };
+
+  function finish(choice: string | null) {
+    explanation?.abort();
+    done({ choice, note: noteInput.getValue().trim(), explanation: explanationResult });
+  }
+
+  selectList.onSelect = (item) => finish(item.value);
+  selectList.onCancel = () => finish(null);
   container.addChild(selectList);
 
   // Note input
@@ -69,12 +156,13 @@ export function createConfirmUI(
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
   function updateLabels() {
+    const explainHint = explanationState === "ready" && explanationResult?.detail ? "Ctrl+E detail  |  " : "";
     if (focusOnNote) {
       noteLabel.setText(theme.fg("accent", "Note: "));
-      helpText.setText(theme.fg("dim", "Tab list  |  Enter confirm  |  Esc cancel"));
+      helpText.setText(theme.fg("dim", `${explainHint}Tab list  |  Enter confirm  |  Esc cancel`));
     } else {
       noteLabel.setText(theme.fg("dim", "Note: "));
-      helpText.setText(theme.fg("dim", "Tab note  |  Enter confirm  |  Esc cancel"));
+      helpText.setText(theme.fg("dim", `${explainHint}Tab note  |  Enter confirm  |  Esc cancel`));
     }
   }
   updateLabels();
@@ -83,6 +171,15 @@ export function createConfirmUI(
     render: (w: number) => container.render(w),
     invalidate: () => container.invalidate(),
     handleInput: (data: string) => {
+      // Ctrl+E to toggle detail
+      if (matchesKey(data, "ctrl+e") && (explanationState === "ready" || explanationState === "expanded")) {
+        explanationState = explanationState === "ready" ? "expanded" : "ready";
+        updateExplanationDisplay();
+        updateLabels();
+        tui.requestRender();
+        return;
+      }
+
       if (matchesKey(data, "tab")) {
         focusOnNote = !focusOnNote;
         updateLabels();
@@ -92,15 +189,14 @@ export function createConfirmUI(
 
       if (focusOnNote) {
         if (matchesKey(data, "return")) {
-          // Enter in note field = confirm with currently highlighted item
           const selected = selectList.getSelectedItem();
           if (selected) {
-            done({ choice: selected.value, note: noteInput.getValue().trim() });
+            finish(selected.value);
           }
           return;
         }
         if (matchesKey(data, "escape")) {
-          done({ choice: null, note: "" });
+          finish(null);
           return;
         }
         noteInput.handleInput(data);

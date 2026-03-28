@@ -7,7 +7,9 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Component, KeybindingsManager, Theme, TUI } from "@mariozechner/pi-tui";
-import { type ConfirmResult, createConfirmUI } from "./confirm-ui";
+import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
+import { type ConfirmResult, createConfirmUI, type ExplanationProvider, type ExplanationResult } from "./confirm-ui";
+import { blockReason, describeToolCall, parseExplanation } from "./explain";
 import {
   createInitialState,
   decide,
@@ -22,6 +24,46 @@ import {
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
   const pendingNotes: Map<string, string> = new Map();
+  let explainEnabled = false;
+
+  /** Build an ExplanationProvider that calls the "explain" sidecar role. */
+  function makeExplanation(
+    toolName: string,
+    input: Record<string, unknown>,
+    modelRegistry: Parameters<typeof sidecarComplete>[2],
+  ): ExplanationProvider | undefined {
+    if (!explainEnabled) return undefined;
+
+    const description = describeToolCall(toolName, input);
+    const abortController = new AbortController();
+
+    const promise = (async (): Promise<ExplanationResult | null> => {
+      const result = await sidecarComplete(
+        "explain",
+        {
+          systemPrompt: `You assess tool calls for a developer reviewing permissions.
+
+First line must start with SAFE, RISKY, or DANGEROUS followed by a pipe and a short tl;dr.
+Then optionally a blank line and 2-3 sentences of detail.
+
+Examples:
+SAFE|Reads package.json in the project directory
+RISKY|Modifies nginx config, could break web server
+DANGEROUS|Deletes entire home directory recursively
+
+Use SAFE for routine operations. Use RISKY for things that could cause issues. Use DANGEROUS for destructive or sensitive operations.
+Be direct, no filler.`,
+          messages: [{ role: "user", content: description, timestamp: Date.now() }],
+        },
+        modelRegistry,
+        { signal: abortController.signal },
+      );
+      if (!result) return null;
+      return parseExplanation(extractText(result.message));
+    })();
+
+    return { promise, abort: () => abortController.abort() };
+  }
 
   /** Show confirmation dialog with optional inline note. */
   async function confirm(
@@ -34,19 +76,24 @@ export default function permissionGate(pi: ExtensionAPI) {
     },
     title: string,
     options: string[],
+    explanation?: ExplanationProvider,
   ): Promise<ConfirmResult> {
     return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
-      createConfirmUI(tui, theme, kb, done, title, options),
+      createConfirmUI(tui, theme, kb, done, title, options, explanation),
     );
   }
 
   function updateStatus(ctx: { ui: { setStatus: (id: string, msg: string | undefined) => void } }) {
-    ctx.ui.setStatus("permission-gate", MODE_LABELS[state.mode]);
+    const stats = getSidecarStats();
+    const costStr = stats.calls > 0 ? ` ($${stats.cost.toFixed(4)})` : "";
+    const explainStr = explainEnabled ? " +explain" : "";
+    ctx.ui.setStatus("permission-gate", `${MODE_LABELS[state.mode]}${explainStr}${costStr}`);
   }
 
   // Discover git root on session start
   pi.on("session_start", async (_event, ctx) => {
     state.gitRoot = findGitRoot(ctx.cwd);
+    explainEnabled = hasRole("explain");
     updateStatus(ctx);
   });
 
@@ -93,6 +140,12 @@ export default function permissionGate(pi: ExtensionAPI) {
           msg += `  ${t}: ${setting}\n`;
         }
 
+        msg += `\nExplain: ${explainEnabled ? "on" : "off"}${hasRole("explain") ? "" : " (no 'explain' role in roles.json)"}\n`;
+        const stats = getSidecarStats();
+        if (stats.calls > 0) {
+          msg += `Sidecar: ${stats.calls} calls, $${stats.cost.toFixed(4)}\n`;
+        }
+
         // Session allows
         const hasAllows =
           state.allowedBashPrefixes.length > 0 || state.allowedPaths.length > 0 || state.allowedPathGlobs.length > 0;
@@ -114,6 +167,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           "Toggle edit tool (allow/confirm)",
           "Toggle write tool (allow/confirm)",
           "Toggle bash tool (allow/confirm)",
+          `Toggle explain (${explainEnabled ? "on" : "off"})`,
           "Add path glob rule",
           "Add bash prefix rule",
           ...(hasAllows ? ["Clear all session allows"] : []),
@@ -133,6 +187,13 @@ export default function permissionGate(pi: ExtensionAPI) {
         } else if (choice === "Toggle bash tool (allow/confirm)") {
           state.toolOverrides.bash = state.toolOverrides.bash === "allow" ? undefined : "allow";
           ctx.ui.notify(`bash: ${state.toolOverrides.bash ?? "confirm"}`, "info");
+        } else if (choice?.startsWith("Toggle explain")) {
+          if (hasRole("explain")) {
+            explainEnabled = !explainEnabled;
+            ctx.ui.notify(`Explain: ${explainEnabled ? "on" : "off"}`, "info");
+          } else {
+            ctx.ui.notify("No 'explain' role configured in ~/.pi/agent/roles.json", "warning");
+          }
         } else if (choice === "Add path glob rule") {
           const glob = await ctx.ui.input("Path glob (e.g. **/*.nix, config/llm/pi/**):");
           if (glob) {
@@ -179,18 +240,25 @@ export default function permissionGate(pi: ExtensionAPI) {
       return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
     }
 
+    // Build explanation provider for sidecar LLM call (fires concurrently with dialog)
+    const explanation = makeExplanation(event.toolName, event.input as Record<string, unknown>, ctx.modelRegistry);
+
     // Build confirmation UI based on confirmType
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
-      const { choice, note } = await confirm(ctx, `bash: ${decision.displayPath}`, [
-        "Allow once",
-        `Allow "${prefix}" for this session`,
-        "Allow all bash for this session",
-        "Block",
-      ]);
+      const {
+        choice,
+        note,
+        explanation: explResult,
+      } = await confirm(
+        ctx,
+        `bash: ${decision.displayPath}`,
+        ["Allow once", `Allow "${prefix}" for this session`, "Allow all bash for this session", "Block"],
+        explanation,
+      );
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: note || "Blocked by permission gate" };
+        return { block: true, reason: blockReason(note, explResult, "Blocked by permission gate") };
       }
       if (choice?.startsWith('Allow "') && choice.endsWith('" for this session')) {
         state.allowedBashPrefixes.push(prefix);
@@ -206,14 +274,19 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     if (decision.confirmType === "sensitive") {
       const path = decision.displayPath ?? "";
-      const { choice, note } = await confirm(ctx, `Sensitive file: ${path} (${event.toolName})`, [
-        "Allow once",
-        `Allow "${path}" for this session`,
-        "Block",
-      ]);
+      const {
+        choice,
+        note,
+        explanation: explResult,
+      } = await confirm(
+        ctx,
+        `Sensitive file: ${path} (${event.toolName})`,
+        ["Allow once", `Allow "${path}" for this session`, "Block"],
+        explanation,
+      );
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: note || "Blocked (sensitive file)" };
+        return { block: true, reason: blockReason(note, explResult, "Blocked (sensitive file)") };
       }
       if (choice?.startsWith('Allow "')) {
         state.allowedPaths.push(path);
@@ -229,10 +302,14 @@ export default function permissionGate(pi: ExtensionAPI) {
         ? `${event.toolName} outside project: ${path}`
         : `${event.toolName}: ${path}`;
 
-    const { choice, note } = await confirm(ctx, title, ["Allow once", `Allow "${path}" for this session`, "Block"]);
+    const {
+      choice,
+      note,
+      explanation: explResult,
+    } = await confirm(ctx, title, ["Allow once", `Allow "${path}" for this session`, "Block"], explanation);
 
     if (choice === "Block" || choice === null) {
-      return { block: true, reason: note || "Blocked by permission gate" };
+      return { block: true, reason: blockReason(note, explResult, "Blocked by permission gate") };
     }
     if (choice?.startsWith('Allow "')) {
       state.allowedPaths.push(path);
@@ -241,8 +318,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     return undefined;
   });
 
-  // Append user notes to tool results so the model sees them
-  pi.on("tool_result", async (event) => {
+  // Append user notes to tool results so the model sees them.
+  // Also refresh status bar (sidecar cost may have changed).
+  pi.on("tool_result", async (event, ctx) => {
+    if (explainEnabled) updateStatus(ctx);
     const note = pendingNotes.get(event.toolCallId);
     if (!note) return undefined;
     pendingNotes.delete(event.toolCallId);

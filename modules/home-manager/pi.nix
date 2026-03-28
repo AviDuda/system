@@ -65,8 +65,24 @@ let
 
 in
 {
-  # Empty AGENTS.md - instructions injected via extension for conditional loading
-  home.file.".pi/agent/AGENTS.md".text = "";
+  # Pi-specific agent instructions (global instructions injected separately via journal extension)
+  home.file.".pi/agent/AGENTS.md".text = ''
+    # Pi Agent Instructions
+
+    ## File Editing
+
+    - Use edit (targeted replacement) for existing files, not write (full rewrite). Rewrites lose subtle details and make reviews harder.
+    - Only use write for genuinely new files or when the entire file content is changing.
+  '';
+
+  # Model roles config for sidecar LLM calls (used by permission gate explain, etc.)
+  home.file.".pi/agent/roles.json".text = builtins.toJSON {
+    explain = {
+      models = [
+        { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
+      ];
+    };
+  };
 
   # Skills (shared with Claude Code)
   home.file.".pi/agent/skills/avi-init-agents/SKILL.md".source =
