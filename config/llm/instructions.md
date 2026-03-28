@@ -109,6 +109,14 @@ Do not edit AGENTS.md or AGENTS.local.md directly — describe the proposed chan
 
 Before suggesting a promotion, check whether this pattern or gotcha has come up before — search earlier journal entries if they exist, or consider your own session history. A repeated issue is a strong signal that it belongs in a durable location. Novel discoveries should be noted first and promoted later if they recur.
 
+## Git Commits
+
+Before committing, check `git log --oneline -10` to see the project's existing conventions. Match the style -- message format, scope conventions, capitalization, conventional commits or not. Every project is different. Don't impose a style; follow what's there.
+
+Consider how to split commits: related changes together, unrelated changes separate. If a project's AGENTS.md has commit guidelines, those override these generic instructions.
+
+When scoping, check what scopes the project actually uses (e.g., `feat(api):` vs `fix(auth):`) -- don't invent new conventions.
+
 ## Wrapping Up Sessions
 
 When Avi says "wrap up", "let's wrap up", or similar:
