@@ -126,7 +126,7 @@ function getConfig(): RolesFile {
 
 // ── Model resolution ──
 
-function parseRef(ref: string): { provider: string; modelId: string } | null {
+export function parseRef(ref: string): { provider: string; modelId: string } | null {
   const slash = ref.indexOf("/");
   if (slash === -1) return null;
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) };
