@@ -27,11 +27,4 @@ in
       builtins.readFile ../../config/llm/instructions.md
     )
   );
-
-  # Escaped for JS template literal embedding (backticks escaped)
-  globalInstructionsJS = builtins.replaceStrings [ "`" ] [ "\\`" ] (
-    builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] (
-      builtins.readFile ../../config/llm/instructions.md
-    )
-  );
 }

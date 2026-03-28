@@ -8,57 +8,12 @@
 let
   piConfigDir = "${config.home.homeDirectory}/.pi/agent";
 
-  # Shared LLM constants
-  shared = import ./llm-shared.nix { inherit config; };
-  inherit (shared)
-    notesDir
-    noNotesReminder
-    journalReminder
-    compactionReminder
-    journalSkipMessage
-    vanillaMessage
-    globalInstructionsJS
-    ;
-
-  # ── Journal extension ──
-
-  journalExtContent =
-    builtins.replaceStrings
-      [
-        "__NOTES_DIR__"
-        "__NO_NOTES_REMINDER__"
-        "__JOURNAL_REMINDER__"
-        "__COMPACTION_REMINDER__"
-        "__JOURNAL_SKIP_MESSAGE__"
-        "__VANILLA_MESSAGE__"
-        "__GLOBAL_INSTRUCTIONS__"
-      ]
-      [
-        notesDir
-        noNotesReminder
-        journalReminder
-        compactionReminder
-        journalSkipMessage
-        vanillaMessage
-        globalInstructionsJS
-      ]
-      (builtins.readFile ../../config/llm/pi/extensions/journal-extension.ts);
-
-  journalExtRaw = pkgs.writeText "pi-journal-raw.ts" journalExtContent;
-  journalExtFile = pkgs.runCommand "pi-journal.ts" {
-    nativeBuildInputs = [ pkgs.esbuild ];
-  } ''
-    esbuild --bundle --external:@mariozechner/pi-coding-agent --platform=node --outfile=/dev/null ${journalExtRaw}
-    cp ${journalExtRaw} $out
-  '';
-
   # Source directory for pi extensions
   piExtSrcDir = "${config.home.homeDirectory}/system/config/llm/pi/extensions";
 
   # Auto-discover extension directories from source.
   # Dirs with index.ts are extensions; dirs without are shared modules.
   # All are symlinked live — edit + /reload works without nix-switch.
-  # Journal extension is excluded (needs Nix substitution, handled separately).
   allExtDirs = builtins.filter
     (name: (builtins.readDir ../../config/llm/pi/extensions).${name} == "directory")
     (builtins.attrNames (builtins.readDir ../../config/llm/pi/extensions));
@@ -98,20 +53,9 @@ in
     ../../config/llm/skills/avi-init-agents/checklist.md;
 
   # Extensions deployed to ~/.pi/agent/extensions/ for auto-discovery.
-  #
-  # Journal: Nix-substituted placeholders → must copy from store (real file, not symlink).
-  # Permission gate: pure TS → symlink to live source. Edit + /reload works without nix-switch.
+  # All are symlinked to live source — edit + /reload works without nix-switch.
   home.activation.piExtensions = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     $DRY_RUN_CMD mkdir -p "${piConfigDir}/extensions"
-
-    # Journal extension (copy from store)
-    ext_target="${piConfigDir}/extensions/journal.ts"
-    ext_source="${journalExtFile}"
-    if [[ -f "$ext_target" ]] && ! ${pkgs.diffutils}/bin/diff -q "$ext_source" "$ext_target" > /dev/null 2>&1; then
-      echo "pi: overwriting journal.ts with Nix-managed version"
-    fi
-    $DRY_RUN_CMD cp -f "$ext_source" "$ext_target"
-    $DRY_RUN_CMD chmod 644 "$ext_target"
 
     # Extension + shared directories (auto-discovered, symlinked to live source)
     # Pi only loads dirs with index.ts as extensions; shared dirs are just for imports.

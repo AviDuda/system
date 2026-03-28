@@ -1,16 +1,24 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 
-const NOTES_DIR = "__NOTES_DIR__";
-const NO_NOTES_REMINDER = `__NO_NOTES_REMINDER__`;
-const JOURNAL_REMINDER = `__JOURNAL_REMINDER__`;
-const COMPACTION_REMINDER = `__COMPACTION_REMINDER__`;
-const JOURNAL_SKIP_MESSAGE = `__JOURNAL_SKIP_MESSAGE__`;
-const VANILLA_MESSAGE = `__VANILLA_MESSAGE__`;
-const GLOBAL_INSTRUCTIONS = `__GLOBAL_INSTRUCTIONS__`;
+interface JournalConfig {
+	notesDir: string;
+	noNotesReminder: string;
+	journalReminder: string;
+	compactionReminder: string;
+	journalSkipMessage: string;
+	vanillaMessage: string;
+	globalInstructions: string;
+}
+
+function loadConfig(): JournalConfig {
+	const configDir = process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config");
+	const path = join(configDir, "llm", "journal.json");
+	return JSON.parse(readFileSync(path, "utf-8")) as JournalConfig;
+}
 
 interface NotesResult {
 	exists: boolean;
@@ -18,8 +26,8 @@ interface NotesResult {
 	notes: Array<{ filename: string; content: string }>;
 }
 
-async function getRecentNotes(projectName: string): Promise<NotesResult> {
-	const projectNotes = join(NOTES_DIR, projectName);
+async function getRecentNotes(notesDir: string, projectName: string): Promise<NotesResult> {
+	const projectNotes = join(notesDir, projectName);
 
 	if (!existsSync(projectNotes)) {
 		await mkdir(projectNotes, { recursive: true });
@@ -48,6 +56,7 @@ async function getRecentNotes(projectName: string): Promise<NotesResult> {
 }
 
 export const JournalPlugin: Plugin = async ({ directory }) => {
+	const config = loadConfig();
 	const projectName = basename(directory);
 
 	return {
@@ -57,14 +66,14 @@ export const JournalPlugin: Plugin = async ({ directory }) => {
 					"Read recent journal notes for the current project. Call this at session start to get context from previous sessions.",
 				args: {},
 				async execute(_args, _ctx) {
-					const result = await getRecentNotes(projectName);
+					const result = await getRecentNotes(config.notesDir, projectName);
 
 					if (result.notes.length === 0) {
 						return `No previous session notes for ${projectName}.
 Notes directory: ${result.path}/
 ${result.exists ? "" : "(Directory was just created)"}
 
-${NO_NOTES_REMINDER}`;
+${config.noNotesReminder}`;
 					}
 
 					let output = `Previous session notes for ${projectName}:\n\n`;
@@ -77,22 +86,19 @@ ${NO_NOTES_REMINDER}`;
 		},
 
 		"experimental.chat.system.transform": async (_input, output) => {
-			// Vanilla mode: skip all custom context
 			if (process.env.LLM_VANILLA === "1") {
-				output.system.push(`## Mode\n\n${VANILLA_MESSAGE}`);
+				output.system.push(`## Mode\n\n${config.vanillaMessage}`);
 				return;
 			}
 
-			// Normal mode: inject instructions
-			output.system.push(`## Instructions\n\n${GLOBAL_INSTRUCTIONS}`);
+			output.system.push(`## Instructions\n\n${config.globalInstructions}`);
 
-			// Journal notes (skip if NO_JOURNAL=1)
 			if (process.env.NO_JOURNAL === "1") {
-				output.system.push(`## Session Notes\n\n${JOURNAL_SKIP_MESSAGE}`);
+				output.system.push(`## Session Notes\n\n${config.journalSkipMessage}`);
 				return;
 			}
 
-			const result = await getRecentNotes(projectName);
+			const result = await getRecentNotes(config.notesDir, projectName);
 
 			if (result.notes.length === 0) {
 				output.system.push(`
@@ -102,29 +108,27 @@ No previous session notes for ${projectName}.
 Notes directory: ${result.path}/
 ${result.exists ? "" : "(Directory was just created)"}
 
-${NO_NOTES_REMINDER}
-${JOURNAL_REMINDER}
+${config.noNotesReminder}
+${config.journalReminder}
 `);
 			} else {
 				let notesContext = `## Previous Session Notes for ${projectName}\n\n`;
 				for (const note of result.notes) {
 					notesContext += `### ${note.filename}\n${note.content}\n\n`;
 				}
-				notesContext += JOURNAL_REMINDER;
+				notesContext += config.journalReminder;
 				output.system.push(notesContext);
 			}
 		},
 
 		"experimental.session.compacting": async (_input, output) => {
-			// Vanilla mode: no custom context during compaction either
 			if (process.env.LLM_VANILLA === "1") {
 				return;
 			}
 
-			// Re-inject instructions during compaction
-			output.context.push(`## Instructions\n\n${GLOBAL_INSTRUCTIONS}`);
+			output.context.push(`## Instructions\n\n${config.globalInstructions}`);
 
-			const result = await getRecentNotes(projectName);
+			const result = await getRecentNotes(config.notesDir, projectName);
 
 			output.context.push(`
 ## Journal System
@@ -132,9 +136,9 @@ ${JOURNAL_REMINDER}
 IMPORTANT: Before this context is compacted, ensure any important learnings, decisions, or progress have been captured in journal notes.
 
 Write session notes to: ${result.path}/
-${NO_NOTES_REMINDER}
+${config.noNotesReminder}
 
-${COMPACTION_REMINDER}
+${config.compactionReminder}
 `);
 
 			if (result.notes.length > 0) {

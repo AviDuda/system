@@ -19,8 +19,14 @@ let
     vanillaMessage
     globalInstructions
     globalInstructionsShell
-    globalInstructionsJS
     ;
+
+  # Shared journal config consumed by pi extension and OpenCode plugin at runtime.
+  # Avoids __PLACEHOLDER__ substitution -- extensions read JSON directly.
+  journalConfig = builtins.toJSON {
+    inherit notesDir noNotesReminder journalReminder compactionReminder
+      journalSkipMessage vanillaMessage globalInstructions;
+  };
 
   opencodeConfigDir = "${config.xdg.configHome}/opencode";
 
@@ -205,37 +211,9 @@ $NO_NOTES_REMINDER"
     };
   };
 
-  # Journal plugin for OpenCode - external file with placeholder substitution
-  # Must be a real file (not symlink) so bun can resolve node_modules
-  journalPluginContent =
-    builtins.replaceStrings
-      [
-        "__NOTES_DIR__"
-        "__NO_NOTES_REMINDER__"
-        "__JOURNAL_REMINDER__"
-        "__COMPACTION_REMINDER__"
-        "__JOURNAL_SKIP_MESSAGE__"
-        "__VANILLA_MESSAGE__"
-        "__GLOBAL_INSTRUCTIONS__"
-      ]
-      [
-        notesDir
-        noNotesReminder
-        journalReminder
-        compactionReminder
-        journalSkipMessage
-        vanillaMessage
-        globalInstructionsJS
-      ]
-      (builtins.readFile ../../config/llm/opencode-journal-plugin.ts);
-
-  # Validate generated TS with esbuild before deploying - catches syntax errors
-  # from template literal escaping issues (e.g. unescaped backticks in instructions)
-  journalPluginRaw = pkgs.writeText "journal-raw.ts" journalPluginContent;
-  journalPluginFile = pkgs.runCommand "journal.ts" { nativeBuildInputs = [ pkgs.esbuild ]; } ''
-    esbuild --bundle --external:@opencode-ai/plugin --platform=node --outfile=/dev/null ${journalPluginRaw}
-    cp ${journalPluginRaw} $out
-  '';
+  # OpenCode plugin source -- must be copied (not symlinked) so bun resolves
+  # node_modules from ~/.config/opencode/ rather than the source tree.
+  opencodePluginSrc = ../../config/llm/opencode-journal-plugin/index.ts;
 
 in
 {
@@ -245,6 +223,9 @@ in
 
   # Ensure notes directory exists
   home.file."notes/llm/.keep".text = "";
+
+  # Shared journal config -- read at runtime by pi extension and OpenCode plugin
+  xdg.configFile."llm/journal.json".text = journalConfig;
 
   # ============================================================================
   # Claude Code
@@ -307,25 +288,20 @@ in
   # Empty - instructions injected via plugin for conditional loading
   xdg.configFile."opencode/AGENTS.md".text = "";
 
-  # Plugin must be a real file (not symlink) so bun can resolve node_modules
-  # package.json is NOT managed by Nix - opencode needs it writable
+  # OpenCode journal plugin -- copied (not symlinked) so bun resolves node_modules
+  # from ~/.config/opencode/ rather than the source tree.
+  # package.json is NOT managed by Nix - opencode needs it writable.
   home.activation.opencodePlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    plugin_target="${opencodeConfigDir}/plugins/journal.ts"
-    plugin_source="${journalPluginFile}"
-
     $DRY_RUN_CMD mkdir -p "${opencodeConfigDir}/plugins"
 
-    if [[ -f "$plugin_target" ]] && ! ${pkgs.diffutils}/bin/diff -q "$plugin_source" "$plugin_target" > /dev/null 2>&1; then
-      echo "WARNING: opencode plugin differs from Nix-managed version"
-      echo "  Target: $plugin_target"
-      echo "  Source: $plugin_source"
-      echo "Diff (existing vs new):"
-      ${pkgs.diffutils}/bin/diff "$plugin_target" "$plugin_source" || true
-      echo ""
-      echo "Overwriting with Nix-managed version..."
+    plugin_target="${opencodeConfigDir}/plugins/journal.ts"
+    plugin_source="${opencodePluginSrc}"
+    if [[ -f "$plugin_target" ]] && ${pkgs.diffutils}/bin/diff -q "$plugin_source" "$plugin_target" > /dev/null 2>&1; then
+      : # already up to date
+    else
+      $DRY_RUN_CMD cp -f "$plugin_source" "$plugin_target"
+      $DRY_RUN_CMD chmod 644 "$plugin_target"
+      echo "opencode: updated journal.ts plugin"
     fi
-
-    $DRY_RUN_CMD cp -f "$plugin_source" "$plugin_target"
-    $DRY_RUN_CMD chmod 644 "$plugin_target"
   '';
 }

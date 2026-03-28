@@ -26,8 +26,8 @@ mise nix-diff    # verify Nix build after changes
 
 - Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README.
 - Extract testable logic into a pure module (no pi imports). Test with bun.
-- Template files (with `__PLACEHOLDER__` substitution) are validated with esbuild at Nix build time. Only journal extension uses this.
-- Pure TS extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
+- All extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
+- Runtime config (journal constants, model roles) is read from `~/.config/llm/journal.json` and `~/.pi/agent/roles.json` respectively.
 - Auto-discovery: any directory under `config/llm/pi/extensions/` with an `index.ts` is symlinked automatically by `pi.nix`. No Nix changes needed to add a new extension.
 - Cross-extension imports work via `../shared/` (Node resolves symlinks to real paths before resolving relative imports).
 - Shared code goes in `extensions/shared/` (no `index.ts` = not discovered as an extension).
