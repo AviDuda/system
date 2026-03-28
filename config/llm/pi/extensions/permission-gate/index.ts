@@ -48,10 +48,15 @@ Then optionally a blank line and 2-3 sentences of detail.
 
 Examples:
 SAFE|Reads package.json in the project directory
-RISKY|Modifies nginx config, could break web server
+RISKY|Deletes a specific config file, recoverable from git
 DANGEROUS|Deletes entire home directory recursively
 
-Use SAFE for routine operations. Use RISKY for things that could cause issues. Use DANGEROUS for destructive or sensitive operations.
+Criteria:
+- SAFE: Read-only, regenerable artifacts (node_modules, build output), routine operations
+- RISKY: Modifies or deletes specific files, config changes, operations with limited blast radius
+- DANGEROUS: Irreversible large-scale data loss (recursive delete of home/root), credential exposure, security compromise, data exfiltration, arbitrary code execution (curl|bash)
+
+Deleting a single specific file is RISKY, not DANGEROUS -- even outside the project. Reserve DANGEROUS for catastrophic or security-critical operations.
 Be direct, no filler.`,
           messages: [{ role: "user", content: description, timestamp: Date.now() }],
         },

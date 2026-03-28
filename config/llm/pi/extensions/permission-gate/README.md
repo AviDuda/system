@@ -10,6 +10,17 @@ When the "explain" role is configured in `~/.pi/agent/roles.json`, each confirma
 dialog shows a colored SAFE/RISKY/DANGEROUS verdict with a short tl;dr. Press Ctrl+E
 for detail.
 
+### Verdict criteria
+
+| Verdict | Meaning | Default cursor | Color |
+|---------|---------|---------------|-------|
+| SAFE | Read-only, regenerable artifacts, routine ops | Allow once | Green |
+| RISKY | Modifies/deletes specific files, limited blast radius | Allow once | Yellow |
+| DANGEROUS | Large-scale data loss, credential exposure, exfiltration, arbitrary code exec | Block | Red |
+
+Single file deletion is RISKY even outside the project. DANGEROUS is reserved for
+catastrophic or security-critical operations.
+
 ## Modes
 
 | Mode | Reads | Writes/Edits | Sensitive files | Bash |
