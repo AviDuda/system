@@ -11,6 +11,13 @@
     sopsFile = ../../secrets/github.yaml;
     key = "access_token";
   };
+
+  # Kagi API key for web search (used by pi extension, needs user read access)
+  sops.secrets.kagi_api_key = {
+    sopsFile = ../../secrets/kagi.yaml;
+    key = "api_key";
+    owner = config.user.name;
+  };
   sops.templates."nix-github.conf" = {
     content = ''
       access-tokens = github.com=${config.sops.placeholder.github_access_token}
