@@ -117,6 +117,8 @@ Consider how to split commits: related changes together, unrelated changes separ
 
 When scoping, check what scopes the project actually uses (e.g., `feat(api):` vs `fix(auth):`) -- don't invent new conventions.
 
+Before committing, check if any relevant documentation needs updating to reflect the changes -- READMEs, API docs, AGENTS.md, changelogs, whatever the project uses. Stale docs are worse than no docs.
+
 ## Wrapping Up Sessions
 
 When Avi says "wrap up", "let's wrap up", or similar:

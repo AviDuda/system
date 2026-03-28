@@ -9,9 +9,10 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **agents-loader** | Loads AGENTS.md from subdirectories and parent dirs (filling gaps in pi's native loading) |
 | **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
 | **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
-| **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts |
-| **shared/** | Shared modules (not an extension -- no `index.ts`) |
 | **journal** | Journal/notes injection at session start, env var overrides |
+| **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
+| **web-search** | Web search (Kagi/Claude providers) and page fetching (agent-browser) |
+| **shared/** | Shared modules (not an extension -- no `index.ts`) |
 
 ## Development
 
