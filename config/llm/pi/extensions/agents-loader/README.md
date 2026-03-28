@@ -1,16 +1,14 @@
 # agents-loader
 
-Loads `AGENTS.md`, `AGENTS.local.md`, `CLAUDE.md`, and `CLAUDE.local.md` from subdirectories when tools access files there. Mirrors Claude Code's auto-loading behavior.
+Loads `AGENTS.md`, `AGENTS.local.md`, `CLAUDE.md`, and `CLAUDE.local.md` files and injects them as context.
 
 ## What it does
 
-Pi natively loads `AGENTS.md` from cwd and parent directories at startup. This extension fills three gaps:
+1. **Startup** -- loads `.local.md` files from cwd and parent directories, injected on first prompt.
 
-1. **`AGENTS.local.md` support** -- pi doesn't load these at all. Loaded from cwd and parent dirs at session start, injected on first prompt.
+2. **Tool access** -- when read/write/edit/ls/find/grep touch files in a subdirectory, discovers and loads agents files from that directory chain.
 
-2. **Subdirectory loading on access** -- pi doesn't load `AGENTS.md` from subdirectories. Discovered when read/write/edit/ls/find/grep tools touch files in those directories.
-
-3. **`@` mention loading** -- when user types `@path/to/dir` or `@path/to/file.ts` in their prompt, agents files for those directories are discovered and injected before the LLM sees the prompt.
+3. **`@` mentions** -- when user types `@path/to/dir` or `@path/to/file.ts`, discovers agents files for those directories and injects them before the LLM sees the prompt.
 
 ## How it works
 

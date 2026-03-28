@@ -1,0 +1,35 @@
+# Pi Extensions
+
+Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), deployed via Nix (`modules/home-manager/pi.nix`).
+
+## Extensions
+
+| Extension | What it does |
+|-----------|-------------|
+| **agents-loader** | Loads AGENTS.md from subdirectories and parent dirs (filling gaps in pi's native loading) |
+| **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
+| **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
+| **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts |
+| **shared/** | Shared modules (not an extension -- no `index.ts`) |
+| **journal-extension.ts** | Journal/notes injection at session start (Nix-templated, deployed separately) |
+
+## Development
+
+Extensions are symlinked live to `~/.pi/agent/extensions/`. Edit source, run `/reload` in pi -- no nix-switch needed.
+
+The exception is `journal-extension.ts`, which uses `__PLACEHOLDER__` substitution at Nix build time and is copied (not symlinked) from the Nix store.
+
+```bash
+mise pi-check    # biome lint + bun test
+mise pi-fmt      # biome auto-fix
+```
+
+## Adding an extension
+
+Create a directory under `extensions/` with an `index.ts` entry point. It's auto-discovered by `pi.nix` -- no Nix changes needed.
+
+Convention: extract testable logic into a pure module (no pi imports), test with `bun test`.
+
+## Sidecar LLM calls
+
+Extensions can make cheap LLM calls (via Haiku or similar) for auxiliary tasks using `shared/model-roles.ts`. Roles are configured in `~/.pi/agent/roles.json` (Nix-managed in `pi.nix`). See `permission-gate` (explain feature) and `draft-suggestion` for usage.

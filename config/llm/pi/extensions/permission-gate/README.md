@@ -62,7 +62,7 @@ Always confirmed (except in Allow All mode), even with tool overrides:
   model generates a long file, you can't scroll the pending content before deciding.
   Would need integration with pi's tool output expansion system.
 - Trust project mode still confirms all bash (scoping commands to dirs is unreliable).
-- Cross-extension imports don't work (symlink isolation). Keep shared code local.
+- Cross-extension imports work via `../shared/` but keep extension-specific logic local.
 
 ## Testing
 

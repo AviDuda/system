@@ -1,7 +1,7 @@
 /**
  * @ mention enhancement extension
  *
- * Makes pi's interactive @ mentions work like Claude Code's:
+ * Inlines file and directory contents when @-mentioned in a prompt:
  * - @file.ts → inlines file contents as context
  * - @dir/ → inlines directory listing as context
  *
