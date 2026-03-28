@@ -1,0 +1,317 @@
+/**
+ * Pure decision logic for the permission gate.
+ * No pi imports — testable independently.
+ */
+
+import { execSync } from "node:child_process";
+import { isAbsolute, relative, resolve } from "node:path";
+
+// ── Types ──
+
+export type Mode = "careful" | "trust-project" | "allow-all";
+
+export type ToolAction = "allow" | "confirm" | "block";
+
+export interface GateState {
+  mode: Mode;
+  gitRoot: string | null;
+  allowedBashPrefixes: string[];
+  allowedPaths: string[];
+  allowedPathGlobs: string[];
+  toolOverrides: Partial<Record<string, "allow" | "confirm">>;
+}
+
+export interface GateDecision {
+  action: ToolAction;
+  reason?: string;
+  /** For confirm: what kind of confirmation UI to show */
+  confirmType?: "write" | "sensitive" | "bash" | "outside-project";
+  /** Display path for UI */
+  displayPath?: string;
+  /** Suggested bash prefix for the session-allow option */
+  suggestedPrefix?: string;
+}
+
+// ── Constants ──
+
+export const MODE_LABELS: Record<Mode, string> = {
+  careful: "\u{1f512} Careful",
+  "trust-project": "\u{1f4c1} Trust project",
+  "allow-all": "\u{26a1} Allow all",
+};
+
+export const MODE_DESCRIPTIONS: Record<Mode, string> = {
+  careful: "Reads allowed everywhere. All writes, edits, and bash confirmed.",
+  "trust-project":
+    "Writes/edits in project allowed. Bash in project allowed. Sensitive files and outside-project always confirmed.",
+  "allow-all": "Everything allowed without confirmation.",
+};
+
+export const MODE_SHORT: Record<Mode, string> = {
+  careful: "confirms all writes, edits, and bash",
+  "trust-project": "allows writes + bash in project, confirms outside + sensitive",
+  "allow-all": "no confirmations",
+};
+
+export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
+
+export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find"];
+
+export const SENSITIVE_PATTERNS: RegExp[] = [
+  /^\.env$/,
+  /^\.env\..+$/,
+  /\.pem$/,
+  /\.key$/,
+  /\.p12$/,
+  /\.pfx$/,
+  /\.cert$/,
+  /\.keystore$/,
+  /(^|\/)secrets\//,
+  /secret/i,
+  /(^|\/)\.ssh\//,
+  /(^|\/)\.gnupg\//,
+  /(^|\/)id_rsa/,
+  /(^|\/)id_ed25519/,
+];
+
+// ── Pure functions ──
+
+export function isInsideDir(filePath: string, dir: string): boolean {
+  const rel = relative(dir, filePath);
+  return !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+export function isSensitivePath(filePath: string): boolean {
+  const parts = filePath.split("/");
+  const basename = parts[parts.length - 1];
+  return SENSITIVE_PATTERNS.some((p) => p.test(basename) || p.test(filePath));
+}
+
+/** Strip leading cd/pushd and shell operators to find the real command. */
+export function stripShellPreamble(command: string): string {
+  let cmd = command.trim();
+  const preambleRe = /^\s*(cd|pushd)\s+\S+\s*(&&|\|\||;)\s*/;
+  while (preambleRe.test(cmd)) {
+    cmd = cmd.replace(preambleRe, "");
+  }
+  return cmd;
+}
+
+/** Extract a prefix from a command: first two tokens of the real command. */
+export function suggestPrefix(command: string): string {
+  const real = stripShellPreamble(command);
+  const tokens = real.split(/\s+/);
+  if (tokens.length <= 2) return tokens.join(" ");
+  return tokens.slice(0, 2).join(" ");
+}
+
+/** Resolve a file path, stripping leading @ that some models add. */
+export function resolveFilePath(path: string, cwd: string): string {
+  const cleaned = path.startsWith("@") ? path.slice(1) : path;
+  return isAbsolute(cleaned) ? cleaned : resolve(cwd, cleaned);
+}
+
+/** Match a path against a glob pattern. Supports * and **. */
+export function matchGlob(path: string, pattern: string): boolean {
+  // Split on ** first to handle it separately
+  const parts = pattern.split("**");
+
+  let re = "";
+  for (let i = 0; i < parts.length; i++) {
+    // Escape and convert single * and ? in each part
+    const part = parts[i]
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "[^/]");
+    re += part;
+
+    // Insert ** replacement between parts
+    if (i < parts.length - 1) {
+      const next = parts[i + 1];
+      if (next.startsWith("/")) {
+        // **/ matches zero or more directory segments
+        // Make the slash and any dirs optional so ** alone matches at root
+        parts[i + 1] = next.slice(1);
+        re += "(.*/)?";
+      } else {
+        re += ".*";
+      }
+    }
+  }
+
+  return new RegExp(`^${re}$`).test(path);
+}
+
+/** Check if a path matches any allowed path (exact or prefix) or glob. */
+export function isPathAllowed(filePath: string, cwd: string, state: GateState): boolean {
+  // Exact / prefix match
+  if (
+    state.allowedPaths.some((p) => {
+      const resolved = resolve(cwd, p);
+      return filePath === resolved || filePath.startsWith(resolved);
+    })
+  ) {
+    return true;
+  }
+
+  // Glob match (against relative path from project root)
+  const projectRoot = state.gitRoot ?? cwd;
+  const rel = relative(projectRoot, filePath);
+  if (state.allowedPathGlobs.some((glob) => matchGlob(rel, glob))) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Check if a bash command matches any allowed prefix. */
+export function isBashAllowed(command: string, state: GateState): boolean {
+  const real = stripShellPreamble(command);
+  return state.allowedBashPrefixes.some((prefix) => real.startsWith(prefix));
+}
+
+/** Resolve git root, following worktrees back to the main repo. */
+export function findGitRoot(cwd: string): string | null {
+  try {
+    const root = execSync("git rev-parse --show-toplevel", {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    try {
+      const commonDir = execSync("git rev-parse --git-common-dir", {
+        cwd: root,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      if (commonDir.endsWith("/.git")) {
+        return resolve(commonDir, "..");
+      }
+    } catch {
+      // not a worktree, root is fine
+    }
+
+    return root;
+  } catch {
+    return null;
+  }
+}
+
+// ── Decision engine ──
+
+export function createInitialState(): GateState {
+  return {
+    mode: "careful",
+    gitRoot: null,
+    allowedBashPrefixes: [],
+    allowedPaths: [],
+    allowedPathGlobs: [],
+    toolOverrides: {},
+  };
+}
+
+/**
+ * Decide what to do with a tool call. Returns a decision
+ * that the extension UI layer acts on.
+ */
+export function decide(toolName: string, input: Record<string, unknown>, cwd: string, state: GateState): GateDecision {
+  // Allow-all mode: pass everything
+  if (state.mode === "allow-all") {
+    return { action: "allow" };
+  }
+
+  // Read-only tools: always allow
+  if (READ_ONLY_TOOLS.includes(toolName)) {
+    return { action: "allow" };
+  }
+
+  // Tool-level override (e.g. "allow all edits")
+  const override = state.toolOverrides[toolName];
+  if (override === "allow") {
+    // Still check sensitive files even with tool override
+    if ((toolName === "write" || toolName === "edit") && input.path) {
+      const filePath = resolveFilePath(input.path as string, cwd);
+      const projectRoot = state.gitRoot ?? cwd;
+      const rel = relative(projectRoot, filePath);
+      if (isSensitivePath(rel)) {
+        return {
+          action: "confirm",
+          confirmType: "sensitive",
+          displayPath: relative(cwd, filePath) || filePath,
+        };
+      }
+    }
+    return { action: "allow" };
+  }
+
+  // Write/edit tools
+  if (toolName === "write" || toolName === "edit") {
+    const filePath = resolveFilePath(input.path as string, cwd);
+    const projectRoot = state.gitRoot ?? cwd;
+    const rel = relative(projectRoot, filePath);
+    const relDisplay = relative(cwd, filePath) || filePath;
+
+    // Sensitive files: always confirm (in careful and trust-project)
+    if (isSensitivePath(rel)) {
+      if (isPathAllowed(filePath, cwd, state)) {
+        return { action: "allow" };
+      }
+      return {
+        action: "confirm",
+        confirmType: "sensitive",
+        displayPath: relDisplay,
+      };
+    }
+
+    // Path already allowed?
+    if (isPathAllowed(filePath, cwd, state)) {
+      return { action: "allow" };
+    }
+
+    // Careful: confirm everything
+    if (state.mode === "careful") {
+      return {
+        action: "confirm",
+        confirmType: "write",
+        displayPath: relDisplay,
+      };
+    }
+
+    // Trust project: allow in-project, confirm outside
+    if (state.mode === "trust-project") {
+      if (isInsideDir(filePath, projectRoot)) {
+        return { action: "allow" };
+      }
+      return {
+        action: "confirm",
+        confirmType: "outside-project",
+        displayPath: relDisplay,
+      };
+    }
+  }
+
+  // Bash
+  if (toolName === "bash") {
+    const command = (input.command as string).trim();
+
+    if (isBashAllowed(command, state)) {
+      return { action: "allow" };
+    }
+
+    // Trust project: we still confirm bash (can't scope commands to dirs reliably)
+    return {
+      action: "confirm",
+      confirmType: "bash",
+      displayPath: command.length > 120 ? `${command.slice(0, 117)}...` : command,
+      suggestedPrefix: suggestPrefix(command),
+    };
+  }
+
+  // Unknown tool: confirm in careful, allow in trust-project
+  if (state.mode === "careful") {
+    return { action: "confirm", reason: `Unknown tool: ${toolName}` };
+  }
+
+  return { action: "allow" };
+}

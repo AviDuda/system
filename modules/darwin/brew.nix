@@ -47,6 +47,7 @@
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
       "jj" # Jujutsu VCS (updates frequently, avoid recompiling Rust)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
+      "pi-coding-agent" # AI coding assistant (not in nixpkgs)
       "tectonic" # Modern LaTeX engine (not in nixpkgs for darwin)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
       "yt-dlp" # YouTube downloader (updates frequently, prebuilt bottles)

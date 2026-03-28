@@ -57,6 +57,7 @@ in
     ./git.nix
     ./lazygit.nix
     ./llm.nix
+    ./pi.nix
     ./shell.nix
     ./zed.nix
   ];

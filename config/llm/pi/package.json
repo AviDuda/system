@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*",
+    "bun-types": "*"
+  }
+}

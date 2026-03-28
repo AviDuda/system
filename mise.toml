@@ -36,7 +36,23 @@ run = "nixfmt --check *.nix **/*.nix"
 
 [tasks.check]
 description = "Run checks"
-depends = ["fmt-check"]
+depends = ["fmt-check", "pi-check"]
+
+[tasks.pi-check]
+description = "Lint and test pi extensions"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cd config/llm/pi
+echo "==> biome check"
+biome check .
+echo "==> bun test"
+bun test
+"""
+
+[tasks.pi-fmt]
+description = "Format pi extensions"
+run = "cd config/llm/pi && biome check --write ."
 
 [tasks.nix-diff]
 description = "Diff this host's closure against current system"
