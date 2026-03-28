@@ -29,6 +29,8 @@ export interface ConfirmResult {
   note: string;
   /** The explanation result, if available by the time the user decided. */
   explanation: ExplanationResult | null;
+  /** Whether the user toggled auto-classify from within the dialog. */
+  toggledAutoClassify?: boolean;
 }
 
 export type ExplanationVerdict = "safe" | "risky" | "dangerous";
@@ -46,6 +48,13 @@ export interface ExplanationProvider {
   abort: () => void;
 }
 
+export interface ConfirmUIOptions {
+  /** Whether auto-classify is currently enabled. Shown in help text. */
+  autoClassify?: boolean;
+  /** Whether the explain role is available (controls whether Ctrl+A hint shows). */
+  hasExplainRole?: boolean;
+}
+
 export function createConfirmUI(
   tui: TUI,
   theme: Theme,
@@ -54,12 +63,14 @@ export function createConfirmUI(
   title: string,
   options: string[],
   explanation?: ExplanationProvider,
+  uiOptions?: ConfirmUIOptions,
 ): Component {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
   let focusOnNote = false;
   let explanationState: "loading" | "ready" | "expanded" | "none" = explanation ? "loading" : "none";
   let explanationResult: ExplanationResult | null = null;
+  let didToggleAutoClassify = false;
 
   // Title
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -136,7 +147,12 @@ export function createConfirmUI(
 
   function finish(choice: string | null) {
     explanation?.abort();
-    done({ choice, note: noteInput.getValue().trim(), explanation: explanationResult });
+    done({
+      choice,
+      note: noteInput.getValue().trim(),
+      explanation: explanationResult,
+      toggledAutoClassify: didToggleAutoClassify || undefined,
+    });
   }
 
   selectList.onSelect = (item) => finish(item.value);
@@ -157,12 +173,14 @@ export function createConfirmUI(
 
   function updateLabels() {
     const explainHint = explanationState === "ready" && explanationResult?.detail ? "Ctrl+E detail  |  " : "";
+    const currentAuto = (uiOptions?.autoClassify ?? false) !== didToggleAutoClassify;
+    const autoHint = uiOptions?.hasExplainRole ? `Ctrl+A auto:${currentAuto ? "on" : "off"}  |  ` : "";
     if (focusOnNote) {
       noteLabel.setText(theme.fg("accent", "Note: "));
-      helpText.setText(theme.fg("dim", `${explainHint}Tab list  |  Enter confirm  |  Esc cancel`));
+      helpText.setText(theme.fg("dim", `${explainHint}${autoHint}Tab list  |  Enter confirm  |  Esc cancel`));
     } else {
       noteLabel.setText(theme.fg("dim", "Note: "));
-      helpText.setText(theme.fg("dim", `${explainHint}Tab note  |  Enter confirm  |  Esc cancel`));
+      helpText.setText(theme.fg("dim", `${explainHint}${autoHint}Tab note  |  Enter confirm  |  Esc cancel`));
     }
   }
   updateLabels();
@@ -175,6 +193,14 @@ export function createConfirmUI(
       if (matchesKey(data, "ctrl+e") && (explanationState === "ready" || explanationState === "expanded")) {
         explanationState = explanationState === "ready" ? "expanded" : "ready";
         updateExplanationDisplay();
+        updateLabels();
+        tui.requestRender();
+        return;
+      }
+
+      // Ctrl+A to toggle auto-classify
+      if (matchesKey(data, "ctrl+a") && uiOptions?.hasExplainRole) {
+        didToggleAutoClassify = !didToggleAutoClassify;
         updateLabels();
         tui.requestRender();
         return;

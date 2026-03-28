@@ -21,6 +21,26 @@ for detail.
 Single file deletion is RISKY even outside the project. DANGEROUS is reserved for
 catastrophic or security-critical operations.
 
+### Auto-classify
+
+When enabled (`/permissions` > Toggle auto-classify), the sidecar classifies each
+tool call *before* showing the dialog. If the verdict is auto-allowable for the
+current mode, the call proceeds without confirmation.
+
+| Mode | Auto-allows | Confirms |
+|------|-------------|----------|
+| Careful + auto | SAFE | RISKY, DANGEROUS |
+| Trust project + auto | SAFE, RISKY | DANGEROUS |
+
+Exact-match caching: identical tool calls (same command, same file, same content)
+reuse the previous verdict. Useful for repeated test/lint/build commands.
+
+Parse failures fall through to the dialog (never auto-allow garbage).
+Sidecar failures fall through to the dialog (graceful degradation).
+
+Status bar shows `+auto [N auto]` with count of auto-allowed calls.
+`/permissions` > View auto-allow log shows recent auto-allowed calls.
+
 ## Modes
 
 | Mode | Reads | Writes/Edits | Sensitive files | Bash |
@@ -63,9 +83,11 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 ## Files
 
 - `logic.ts` — Pure decision engine, no pi dependencies
-- `logic.test.ts` — Tests (`bun test logic.test.ts`)
-- `index.ts` — Pi extension wrapper (UI, events, tool_result note injection)
-- `confirm-ui.ts` — Custom TUI component (SelectList + Input note field)
+- `logic.test.ts` — Tests for decision logic and auto-classify helpers
+- `explain.ts` — Verdict parsing, tool call description, block reasons
+- `explain.test.ts` — Tests for explain/verdict logic
+- `confirm-ui.ts` — Custom TUI component (SelectList + Input note field + explanation display)
+- `index.ts` — Pi extension wrapper (UI, events, auto-classify, tool_result note injection)
 
 ## Known limitations
 
@@ -78,5 +100,5 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 ## Testing
 
 ```bash
-bun test logic.test.ts
+bun test extensions/permission-gate/
 ```

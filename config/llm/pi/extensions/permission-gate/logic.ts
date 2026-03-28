@@ -10,15 +10,30 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 export type Mode = "careful" | "trust-project" | "allow-all";
 
+export type AutoClassifyMode = "off" | "on";
+
 export type ToolAction = "allow" | "confirm" | "block";
+
+export interface AutoClassifyLog {
+  toolName: string;
+  description: string;
+  verdict: string;
+  short: string;
+  timestamp: number;
+}
 
 export interface GateState {
   mode: Mode;
+  autoClassify: AutoClassifyMode;
   gitRoot: string | null;
   allowedBashPrefixes: string[];
   allowedPaths: string[];
   allowedPathGlobs: string[];
   toolOverrides: Partial<Record<string, "allow" | "confirm">>;
+  /** Exact-match cache: hash of (toolName + full input) -> full explanation result */
+  classifyCache: Map<string, { verdict: "safe" | "risky" | "dangerous"; short: string; detail: string }>;
+  /** Audit log of auto-allowed calls */
+  autoAllowLog: AutoClassifyLog[];
 }
 
 export interface GateDecision {
@@ -203,12 +218,32 @@ export function findGitRoot(cwd: string): string | null {
 export function createInitialState(): GateState {
   return {
     mode: "careful",
+    autoClassify: "off",
     gitRoot: null,
     allowedBashPrefixes: [],
     allowedPaths: [],
     allowedPathGlobs: [],
     toolOverrides: {},
+    classifyCache: new Map(),
+    autoAllowLog: [],
   };
+}
+
+/**
+ * Given a verdict from the sidecar, should we auto-allow?
+ * - Careful + auto: only SAFE auto-allows
+ * - Trust-project + auto: SAFE and RISKY auto-allow
+ */
+export function shouldAutoAllow(verdict: "safe" | "risky" | "dangerous", mode: Mode): boolean {
+  if (verdict === "dangerous") return false;
+  if (verdict === "safe") return true;
+  // RISKY: auto-allow in trust-project, confirm in careful
+  return mode === "trust-project";
+}
+
+/** Simple hash for cache keys. */
+export function cacheKey(toolName: string, input: Record<string, unknown>): string {
+  return `${toolName}:${JSON.stringify(input)}`;
 }
 
 /**

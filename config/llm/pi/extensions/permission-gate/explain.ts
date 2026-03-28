@@ -52,17 +52,24 @@ export function stripVerdictPrefix(text: string): string {
   return text.replace(/^(SAFE|RISKY|DANGEROUS)\s*[|:\-–]\s*/i, "").trim();
 }
 
-/** Parse a sidecar response into verdict + short + detail. */
-export function parseExplanation(text: string): ExplanationResult {
+/**
+ * Parse a sidecar response into verdict + short + detail.
+ * Returns null if no verdict could be parsed and strict mode is on.
+ * Strict mode is used for auto-classify where parse failure should
+ * fall through to the confirmation dialog, not auto-allow.
+ */
+export function parseExplanation(text: string, strict?: boolean): ExplanationResult | null {
   const trimmed = text.trim();
   const firstNewline = trimmed.indexOf("\n");
   const firstLine = firstNewline === -1 ? trimmed : trimmed.slice(0, firstNewline);
   const detail = firstNewline === -1 ? "" : trimmed.slice(firstNewline + 1).trim();
 
-  const verdict = parseVerdict(firstLine) ?? "safe";
+  const verdict = parseVerdict(firstLine);
+  if (!verdict && strict) return null;
+
   const short = stripVerdictPrefix(firstLine) || firstLine;
 
-  return { verdict, short, detail };
+  return { verdict: verdict ?? "safe", short, detail };
 }
 
 // ── Block reason ──
@@ -70,10 +77,10 @@ export function parseExplanation(text: string): ExplanationResult {
 /** Build a block reason from user note + sidecar explanation. */
 export function blockReason(note: string, explanation: ExplanationResult | null, fallback: string): string {
   const parts: string[] = [];
-  if (note) parts.push(note);
+  if (note) parts.push(`[User note: ${note}]`);
   if (explanation) {
     const verdict = explanation.verdict.toUpperCase();
-    parts.push(`[${verdict}: ${explanation.short}]`);
+    parts.push(`[Auto-classification: ${verdict} — ${explanation.short}]`);
   }
-  return parts.length > 0 ? parts.join(" ") : fallback;
+  return parts.length > 0 ? parts.join("\n") : fallback;
 }

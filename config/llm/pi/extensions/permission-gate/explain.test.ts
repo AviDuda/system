@@ -119,9 +119,39 @@ describe("parseExplanation", () => {
 
   test("verdict only, no description after delimiter", () => {
     const result = parseExplanation("SAFE|");
-    expect(result.verdict).toBe("safe");
+    expect(result?.verdict).toBe("safe");
     // short falls back to the full first line since stripped is empty
-    expect(result.short).toBe("SAFE|");
+    expect(result?.short).toBe("SAFE|");
+  });
+
+  // Strict mode (for auto-classify)
+  test("strict: returns null when no verdict found", () => {
+    const result = parseExplanation("Just some rambling text", true);
+    expect(result).toBeNull();
+  });
+
+  test("strict: returns result when verdict is present", () => {
+    const result = parseExplanation("SAFE|Reads a file", true);
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("safe");
+    expect(result?.short).toBe("Reads a file");
+  });
+
+  test("strict: returns null on empty string", () => {
+    const result = parseExplanation("", true);
+    expect(result).toBeNull();
+  });
+
+  test("strict: returns result for DANGEROUS", () => {
+    const result = parseExplanation("DANGEROUS|Deletes everything", true);
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("dangerous");
+  });
+
+  test("non-strict: still defaults to safe when no verdict (backward compat)", () => {
+    const result = parseExplanation("Random text without verdict");
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("safe");
   });
 });
 
@@ -129,17 +159,19 @@ describe("parseExplanation", () => {
 
 describe("blockReason", () => {
   test("note only", () => {
-    expect(blockReason("don't do that", null, "fallback")).toBe("don't do that");
+    expect(blockReason("don't do that", null, "fallback")).toBe("[User note: don't do that]");
   });
 
   test("explanation only", () => {
     const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
-    expect(blockReason("", expl, "fallback")).toBe("[DANGEROUS: Deletes everything]");
+    expect(blockReason("", expl, "fallback")).toBe("[Auto-classification: DANGEROUS \u2014 Deletes everything]");
   });
 
   test("both note and explanation", () => {
     const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
-    expect(blockReason("be careful", expl, "fallback")).toBe("be careful [RISKY: Modifies config]");
+    expect(blockReason("be careful", expl, "fallback")).toBe(
+      "[User note: be careful]\n[Auto-classification: RISKY \u2014 Modifies config]",
+    );
   });
 
   test("neither note nor explanation uses fallback", () => {
