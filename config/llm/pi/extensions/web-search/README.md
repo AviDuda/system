@@ -10,12 +10,16 @@ Search the web. Returns titles, URLs, and snippets.
 
 Edit `ENABLED_PROVIDERS` in `index.ts` to configure. Tried in order; first available wins.
 
+Parameters: `query` (required), `limit` (optional, default 10, max 40), `provider` (optional: `'kagi'` or `'claude'`).
+
+Results include timing info (elapsed seconds).
+
 | Provider | Speed | Auth | Notes |
 |----------|-------|------|-------|
-| `kagi` | ~1s | `/run/secrets/kagi_api_key` (sops-nix) | API access is beta, email support@kagi.com |
-| `claude` | ~13s | Existing Anthropic auth | Shells out to `claude -p` with WebSearch tool |
+| `kagi` | ~1-2s | `/run/secrets/kagi_api_key` (sops-nix) | $0.025/search, prepaid balance |
+| `claude` | ~13-20s | Existing Anthropic auth | Shells out to `claude -p` with WebSearch tool |
 
-Currently enabled: **claude** only (Kagi API access pending).
+Currently enabled: **kagi** (primary), **claude** (fallback). Kagi auto-falls back to Claude on 401/403.
 
 ### web_fetch
 
@@ -38,8 +42,8 @@ Session name is `pi-fetch-<project-basename>`, isolated per project.
 
 | Command | Description |
 |---------|-------------|
-| `/search <query>` | Quick search without going through the LLM |
-| `/fetch <url>` | Fetch a page and show content |
+| `/search [kagi\|claude] <query>` | Search the web (results injected into conversation via sendUserMessage) |
+| `/fetch <url>` | Fetch a page (content injected into conversation via sendUserMessage) |
 | `/fetch-headed` | Toggle visible browser mode (for debugging bot detection) |
 
 ## Architecture
