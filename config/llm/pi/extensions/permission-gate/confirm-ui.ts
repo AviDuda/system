@@ -11,18 +11,10 @@
  * - Streams in while the user is reading/deciding (zero added latency)
  */
 
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, type Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@mariozechner/pi-tui";
-import {
-  Container,
-  Input,
-  matchesKey,
-  type SelectItem,
-  SelectList,
-  Text,
-  type Theme,
-  type TUI,
-} from "@mariozechner/pi-tui";
+import { Container, Input, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@mariozechner/pi-tui";
+import { ScrollableText } from "../shared/scrollable-text";
 
 export interface ConfirmResult {
   choice: string | null;
@@ -55,6 +47,14 @@ export interface ConfirmUIOptions {
   hasExplainRole?: boolean;
 }
 
+/** Pre-computed diff lines for display in the confirm dialog. */
+export interface DiffBody {
+  /** Styled lines (ANSI-colored). */
+  lines: string[];
+  /** Index of the first changed line (for initial scroll position in compact view). */
+  firstChangedLine?: number;
+}
+
 export function createConfirmUI(
   tui: TUI,
   theme: Theme,
@@ -64,19 +64,60 @@ export function createConfirmUI(
   options: string[],
   explanation?: ExplanationProvider,
   uiOptions?: ConfirmUIOptions,
+  diffBody?: DiffBody,
 ): Component {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
-  let focusOnNote = false;
+  type Focus = "list" | "note" | "diff";
+  let focus: Focus = "list";
   let explanationState: "loading" | "ready" | "expanded" | "none" = explanation ? "loading" : "none";
   let explanationResult: ExplanationResult | null = null;
   let didToggleAutoClassify = false;
+
+  // Diff display state
+  const COMPACT_LINES = 6;
+  const FULL_MAX_LINES = 30;
+  let diffExpanded = false;
+
+  function nextFocus(): Focus {
+    const targets: Focus[] = ["list", "note"];
+    if (diffExpanded && scrollable?.scrollable) targets.push("diff");
+    const idx = targets.indexOf(focus);
+    return targets[(idx + 1) % targets.length];
+  }
 
   // Title
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
   container.addChild(new Text(theme.fg("accent", title), 1, 0));
 
-  // Explanation text (shown between title and select list)
+  // Diff body (scrollable, shown between title and explanation)
+  const scrollable = diffBody
+    ? new ScrollableText(diffBody.lines, COMPACT_LINES, {
+        scrollHint: (t) => theme.fg("dim", t),
+        border: (t) => theme.fg("borderMuted", t),
+      })
+    : null;
+  if (scrollable) {
+    // Start compact view at the first change with 1 line of context above
+    if (diffBody?.firstChangedLine !== undefined && diffBody.firstChangedLine > 1) {
+      scrollable.setScrollOffset(diffBody.firstChangedLine - 1);
+    }
+    container.addChild({
+      render: (w: number) => scrollable.render(w),
+      invalidate: () => scrollable.invalidate(),
+    });
+  }
+
+  function updateDiffView() {
+    if (!scrollable || !diffBody) return;
+    if (diffExpanded) {
+      scrollable.setMaxHeight(Math.min(FULL_MAX_LINES, diffBody.lines.length));
+    } else {
+      scrollable.setMaxHeight(COMPACT_LINES);
+    }
+  }
+
+  // Explanation text (shown between diff and select list)
   const explanationText = new Text("", 1, 0);
   container.addChild(explanationText);
 
@@ -175,13 +216,12 @@ export function createConfirmUI(
     const explainHint = explanationState === "ready" && explanationResult?.detail ? "Ctrl+E detail  |  " : "";
     const currentAuto = (uiOptions?.autoClassify ?? false) !== didToggleAutoClassify;
     const autoHint = uiOptions?.hasExplainRole ? `Ctrl+A auto:${currentAuto ? "on" : "off"}  |  ` : "";
-    if (focusOnNote) {
-      noteLabel.setText(theme.fg("accent", "Note: "));
-      helpText.setText(theme.fg("dim", `${explainHint}${autoHint}Tab list  |  Enter confirm  |  Esc cancel`));
-    } else {
-      noteLabel.setText(theme.fg("dim", "Note: "));
-      helpText.setText(theme.fg("dim", `${explainHint}${autoHint}Tab note  |  Enter confirm  |  Esc cancel`));
-    }
+    const diffHint = scrollable ? `Ctrl+O ${diffExpanded ? "compact" : "full"} diff  |  ` : "";
+    noteLabel.setText(focus === "note" ? theme.fg("accent", "Note: ") : theme.fg("dim", "Note: "));
+    const tabTarget = nextFocus();
+    helpText.setText(
+      theme.fg("dim", `${diffHint}${explainHint}${autoHint}Tab ${tabTarget}  |  Enter confirm  |  Esc cancel`),
+    );
   }
   updateLabels();
 
@@ -189,6 +229,17 @@ export function createConfirmUI(
     render: (w: number) => container.render(w),
     invalidate: () => container.invalidate(),
     handleInput: (data: string) => {
+      // Ctrl+O to toggle diff view
+      if (matchesKey(data, "ctrl+o") && scrollable && diffBody) {
+        diffExpanded = !diffExpanded;
+        // Expanding: focus the diff. Collapsing: return to list.
+        focus = diffExpanded ? "diff" : "list";
+        updateDiffView();
+        updateLabels();
+        tui.requestRender();
+        return;
+      }
+
       // Ctrl+E to toggle detail
       if (matchesKey(data, "ctrl+e") && (explanationState === "ready" || explanationState === "expanded")) {
         explanationState = explanationState === "ready" ? "expanded" : "ready";
@@ -207,18 +258,31 @@ export function createConfirmUI(
       }
 
       if (matchesKey(data, "tab")) {
-        focusOnNote = !focusOnNote;
+        focus = nextFocus();
         updateLabels();
         tui.requestRender();
         return;
       }
 
-      if (focusOnNote) {
+      if (focus === "diff" && scrollable) {
+        if (scrollable.handleInput(data)) {
+          tui.requestRender();
+          return;
+        }
+        // Enter/Esc still work from diff focus
         if (matchesKey(data, "return")) {
           const selected = selectList.getSelectedItem();
-          if (selected) {
-            finish(selected.value);
-          }
+          if (selected) finish(selected.value);
+          return;
+        }
+        if (matchesKey(data, "escape")) {
+          finish(null);
+          return;
+        }
+      } else if (focus === "note") {
+        if (matchesKey(data, "return")) {
+          const selected = selectList.getSelectedItem();
+          if (selected) finish(selected.value);
           return;
         }
         if (matchesKey(data, "escape")) {

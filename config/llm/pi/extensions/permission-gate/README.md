@@ -62,15 +62,29 @@ Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
 | `Ctrl+Shift+C` | Global | Toggle auto-classify |
 | `Ctrl+E` | Confirm dialog | Toggle explanation detail |
 | `Ctrl+A` | Confirm dialog | Toggle auto-classify |
-| `Tab` | Confirm dialog | Switch focus between list and note |
+| `Ctrl+O` | Confirm dialog | Toggle diff view (compact/full) |
+| `Tab` | Confirm dialog | Cycle focus: list → note → diff (when expanded) |
 
 ## Confirmation UI
 
 Every confirmation shows a custom TUI with:
+- Colored unified diff preview (edit/write tools) — compact 6-line view by default
 - Select list of actions (Allow once, Allow for session, Block)
 - Note input field (Tab to focus) — attached to the tool result so the model sees it
 - Notes on allow: appended as `[User note: ...]` to tool output
 - Notes on block: used as the block reason
+
+### Diff preview
+
+For `edit` and `write` tool calls, the dialog shows a unified diff computed from
+the pending changes. Uses pi's `computeEditsDiff` and `renderDiff` for colored
+output with intra-line change highlighting.
+
+- Compact view (6 lines) starts scrolled to the first change
+- `Ctrl+O` expands to full view (up to 30 lines, scrollable)
+- When expanded: `↑↓` scroll one line, `Shift+↑↓` page jump, `Shift+←→` top/bottom
+- Tab cycles focus between list, note, and diff (diff only when expanded)
+- Lines wrap preserving ANSI colors via `wrapTextWithAnsi`
 
 ## Session rules
 
@@ -104,11 +118,9 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 
 ## Known limitations
 
-- Confirm dialog doesn't support Ctrl+O to expand/collapse tool output. When the
-  model generates a long file, you can't scroll the pending content before deciding.
-  Would need integration with pi's tool output expansion system.
 - Trust project mode still confirms all bash (scoping commands to dirs is unreliable).
 - Cross-extension imports work via `../shared/` but keep extension-specific logic local.
+- No mouse/scroll wheel support (pi TUI is keyboard-only).
 
 ## Testing
 

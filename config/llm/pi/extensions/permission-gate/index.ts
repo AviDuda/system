@@ -5,13 +5,31 @@
  * See the README for details.
  */
 
-import type { ExtensionAPI, ExtensionUIContext } from "@mariozechner/pi-coding-agent";
-import type { Component, KeybindingsManager, Theme, TUI } from "@mariozechner/pi-tui";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { type ExtensionAPI, type ExtensionUIContext, renderDiff, type Theme } from "@mariozechner/pi-coding-agent";
+
+// Deep import: pi doesn't export edit-diff from its package exports map.
+// Use import.meta.resolve to find the package entry, then derive the internal path.
+const piEntry = fileURLToPath(import.meta.resolve("@mariozechner/pi-coding-agent"));
+const piRoot = dirname(dirname(piEntry)); // dist/index.js -> dist -> package root
+const editDiffPath = join(piRoot, "dist", "core", "tools", "edit-diff.js");
+
+type ComputeEditsDiffFn = (
+  path: string,
+  edits: Array<{ oldText?: string; newText?: string }>,
+  cwd: string,
+) => Promise<{ diff: string; firstChangedLine?: number } | { error: string }>;
+
+let _computeEditsDiff: ComputeEditsDiffFn | undefined;
+
+import type { Component, KeybindingsManager, TUI } from "@mariozechner/pi-tui";
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
   type ConfirmResult,
   type ConfirmUIOptions,
   createConfirmUI,
+  type DiffBody,
   type ExplanationProvider,
   type ExplanationResult,
 } from "./confirm-ui";
@@ -142,13 +160,14 @@ Be direct, no filler.`;
     title: string,
     options: string[],
     explanation?: ExplanationProvider,
+    diffBody?: DiffBody,
   ): Promise<ConfirmResult> {
     const uiOptions: ConfirmUIOptions = {
       autoClassify: state.autoClassify === "on",
       hasExplainRole: hasRole("explain"),
     };
     return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
-      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions),
+      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody),
     );
   }
 
@@ -156,7 +175,10 @@ Be direct, no filler.`;
   function handleDialogAutoToggle(
     result: ConfirmResult,
     ctx: {
-      ui: { setStatus: (id: string, msg: string | undefined) => void; notify: (msg: string, level: string) => void };
+      ui: {
+        setStatus: (id: string, msg: string | undefined) => void;
+        notify: (msg: string, level?: "info" | "warning" | "error") => void;
+      };
     },
   ) {
     if (result.toggledAutoClassify) {
@@ -357,6 +379,54 @@ Be direct, no filler.`;
     },
   });
 
+  /** Compute a styled diff for the confirm dialog. */
+  async function computeDiffBody(
+    toolName: string,
+    input: Record<string, unknown>,
+    cwd: string,
+  ): Promise<DiffBody | undefined> {
+    try {
+      if (toolName === "edit" && input.edits && Array.isArray(input.edits)) {
+        const path = typeof input.path === "string" ? input.path : "";
+        const edits = input.edits as Array<{ oldText?: string; newText?: string }>;
+        if (!_computeEditsDiff) {
+          const mod = await import(editDiffPath);
+          _computeEditsDiff = mod.computeEditsDiff as ComputeEditsDiffFn;
+        }
+        const result = await _computeEditsDiff(path, edits, cwd);
+        if ("error" in result) return undefined;
+        const styled = renderDiff(result.diff);
+        const lines = styled.split("\n");
+        // Find first actual change line in the raw diff (skip --- +++ headers)
+        const rawLines = result.diff.split("\n");
+        let firstChangedLine: number | undefined;
+        for (let i = 0; i < rawLines.length; i++) {
+          const rl = rawLines[i];
+          if ((rl.startsWith("-") || rl.startsWith("+")) && !rl.startsWith("---") && !rl.startsWith("+++")) {
+            firstChangedLine = i;
+            break;
+          }
+        }
+        return { lines, firstChangedLine };
+      }
+      if (toolName === "write") {
+        const content = typeof input.content === "string" ? input.content : "";
+        if (!content) return undefined;
+        const preview =
+          content.length > 2000 ? `${content.slice(0, 2000)}\n... (truncated, ${content.length} chars)` : content;
+        const fakeDiff = preview
+          .split("\n")
+          .map((line) => `+${line}`)
+          .join("\n");
+        const styled = renderDiff(`@@ -0,0 +1,${preview.split("\n").length} @@\n${fakeDiff}`);
+        return { lines: styled.split("\n") };
+      }
+    } catch {
+      // Fall through -- diff is nice-to-have, not critical
+    }
+    return undefined;
+  }
+
   /** Show the confirmation dialog and process the user's choice. Returns tool_call event result. */
   async function showConfirmDialog(
     ctx: Parameters<Parameters<typeof pi.on>[1]>[1],
@@ -364,6 +434,7 @@ Be direct, no filler.`;
     decision: import("./logic").GateDecision,
     explanation?: ExplanationProvider,
   ): Promise<{ block: true; reason: string } | undefined> {
+    const diffBody = await computeDiffBody(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
       const result = await confirm(
@@ -371,6 +442,7 @@ Be direct, no filler.`;
         `bash: ${decision.displayPath}`,
         ["Allow once", `Allow "${prefix}" for this session`, "Allow all bash for this session", "Block"],
         explanation,
+        diffBody,
       );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
@@ -397,6 +469,7 @@ Be direct, no filler.`;
         `Sensitive file: ${path} (${event.toolName})`,
         ["Allow once", `Allow "${path}" for this session`, "Block"],
         explanation,
+        diffBody,
       );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
@@ -418,7 +491,13 @@ Be direct, no filler.`;
         ? `${event.toolName} outside project: ${path}`
         : `${event.toolName}: ${path}`;
 
-    const result = await confirm(ctx, title, ["Allow once", `Allow "${path}" for this session`, "Block"], explanation);
+    const result = await confirm(
+      ctx,
+      title,
+      ["Allow once", `Allow "${path}" for this session`, "Block"],
+      explanation,
+      diffBody,
+    );
     handleDialogAutoToggle(result, ctx);
     const { choice, note, explanation: explResult } = result;
 
