@@ -326,6 +326,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use `lsp` with action `diagnostics` after making changes to check for type errors.",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
+      "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
       "The `hover` action shows type information for a symbol at a given position.",
       "Always provide `file` for all actions except `status`.",
       "Use `line` and optionally `symbol` to target a specific position in the file.",
@@ -480,13 +481,34 @@ export default function (pi: ExtensionAPI) {
 
           case "rename": {
             if (!new_name) return text("Error: new_name parameter required for rename");
+
             const raw = (await client.request("textDocument/rename", {
               textDocument: { uri },
               position,
               newName: new_name,
             })) as { changes?: Record<string, TextEdit[]> } | null;
 
-            if (!raw?.changes) return text("Rename returned no edits");
+            if (!raw?.changes) {
+              // Show context around the target line so the model can see where
+              // the symbol actually is and retry with the correct line/symbol.
+              const content = fs.readFileSync(abs, "utf-8");
+              const fileLines = content.split("\n");
+              const contextRadius = 3;
+              const start = Math.max(0, resolvedLine - 1 - contextRadius);
+              const end = Math.min(fileLines.length, resolvedLine - 1 + contextRadius + 1);
+              const context = fileLines
+                .slice(start, end)
+                .map((l, i) => {
+                  const num = start + i + 1;
+                  const marker = num === resolvedLine ? ">>>" : "   ";
+                  return `${marker} ${num}: ${l}`;
+                })
+                .join("\n");
+
+              return text(
+                `Rename failed — no renameable symbol found at line ${resolvedLine}${symbol ? `, symbol "${symbol}"` : ""}.\n\nContext around line ${resolvedLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
+              );
+            }
 
             // Apply the edits
             const results: string[] = [];

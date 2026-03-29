@@ -78,8 +78,12 @@ The server binary must be on PATH. Install via nix in `modules/home-manager/defa
 
 Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBiome` / `runGolangciLint` for examples. Linters use `child_process.execFile` (not `Bun.spawn` -- pi runs in Node, not Bun).
 
+## Rename error recovery
+
+When `lsp rename` fails (no renameable symbol at the given position), the error includes a few lines of context around the target line. This helps the model see where the symbol actually is and retry with the correct line number and `symbol` parameter.
+
 ## Known limitations
 
 - **tsserver in large monorepos**: first access to each TS project reference is slow (5-30s warmup). Cold server gating handles this gracefully.
-- **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Known upstream issue (TanStack/router#1091).
+- **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
 - **yamlls on large files**: `symbols` times out on YAML files >400 lines. Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.

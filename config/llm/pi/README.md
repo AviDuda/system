@@ -10,6 +10,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
 | **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
 | **journal** | Journal/notes injection at session start, env var overrides |
+| **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename. CLI linters (biome, golangci-lint) |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
 | **web-search** | Web search (Kagi/Claude providers) and page fetching (agent-browser) |
 | **shared/** | Shared modules (not an extension -- no `index.ts`) |
