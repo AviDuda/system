@@ -51,6 +51,8 @@ export interface ConfirmUIOptions {
 export interface DiffBody {
   /** Styled lines (ANSI-colored). */
   lines: string[];
+  /** Raw diff text (no ANSI, for sidecar classification). */
+  rawDiff: string;
   /** Index of the first changed line (for initial scroll position in compact view). */
   firstChangedLine?: number;
 }

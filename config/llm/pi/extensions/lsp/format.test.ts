@@ -50,7 +50,7 @@ describe("formatDiagnosticsSummary", () => {
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, message: "b" },
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 2, message: "c" },
     ];
-    expect(formatDiagnosticsSummary(diags)).toBe("2 error(s), 1 warning(s)");
+    expect(formatDiagnosticsSummary(diags)).toBe("2 errors, 1 warning");
   });
 
   test("returns no issues for empty array", () => {

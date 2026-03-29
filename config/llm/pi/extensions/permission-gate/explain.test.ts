@@ -13,11 +13,10 @@ describe("describeToolCall", () => {
     expect(result).toBe("write to /tmp/test.txt:\nhello");
   });
 
-  test("write truncates long content", () => {
+  test("write passes full content", () => {
     const long = "x".repeat(600);
     const result = describeToolCall("write", { path: "/tmp/test.txt", content: long });
-    expect(result).toContain("...");
-    expect(result.length).toBeLessThan(600);
+    expect(result).toContain(long);
   });
 
   test("edit with oldText/newText", () => {

@@ -3,6 +3,10 @@
  *
  * Converts LSP types (diagnostics, locations, symbols, hover) into
  * human/LLM-readable text.
+ *
+ * Each formatter takes raw LSP protocol types and produces plain text
+ * suitable for display in a terminal or inclusion in LLM context.
+ * Line/column numbers are converted from 0-based (LSP) to 1-based (human).
  */
 
 import * as fs from "node:fs";
@@ -12,12 +16,16 @@ import { uriToFile } from "./client";
 
 // ── Diagnostics ──
 
+/** Maps LSP DiagnosticSeverity enum values to human-readable labels. */
 const SEVERITY_LABELS: Record<number, string> = {
   1: "error",
   2: "warning",
   3: "info",
   4: "hint",
 };
+
+/** Severity values ordered by priority (most severe first). */
+const SEVERITY_ORDER = [1, 2, 3, 4] as const;
 
 export function formatDiagnostic(d: Diagnostic, relPath: string): string {
   const sev = SEVERITY_LABELS[d.severity ?? 3] ?? "info";
@@ -29,26 +37,31 @@ export function formatDiagnostic(d: Diagnostic, relPath: string): string {
 }
 
 export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
-  const counts = { error: 0, warning: 0, info: 0, hint: 0 };
+  const counts: Record<string, number> = {};
   for (const d of diagnostics) {
     const key = SEVERITY_LABELS[d.severity ?? 3] ?? "info";
-    counts[key as keyof typeof counts]++;
+    counts[key] = (counts[key] ?? 0) + 1;
   }
   const parts: string[] = [];
-  if (counts.error > 0) parts.push(`${counts.error} error(s)`);
-  if (counts.warning > 0) parts.push(`${counts.warning} warning(s)`);
-  if (counts.info > 0) parts.push(`${counts.info} info(s)`);
-  if (counts.hint > 0) parts.push(`${counts.hint} hint(s)`);
+  for (const sev of SEVERITY_ORDER) {
+    const label = SEVERITY_LABELS[sev];
+    const count = counts[label] ?? 0;
+    if (count > 0) parts.push(`${count} ${label}${count === 1 ? "" : "s"}`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no issues";
 }
 
+/**
+ * Sort diagnostics in-place: by severity (errors first), then by line,
+ * then by column for diagnostics on the same line.
+ */
 export function sortDiagnostics(diagnostics: Diagnostic[]): void {
   diagnostics.sort((a, b) => {
-    // Errors first
     const sevDiff = (a.severity ?? 3) - (b.severity ?? 3);
     if (sevDiff !== 0) return sevDiff;
-    // Then by line
-    return a.range.start.line - b.range.start.line;
+    const lineDiff = a.range.start.line - b.range.start.line;
+    if (lineDiff !== 0) return lineDiff;
+    return a.range.start.character - b.range.start.character;
   });
 }
 
@@ -62,12 +75,20 @@ export function formatLocation(loc: Location, cwd: string): string {
   return `${rel}:${line}:${col}`;
 }
 
+/**
+ * Normalize LSP location responses into a flat Location array.
+ *
+ * LSP definition/references can return Location | Location[] | LocationLink[].
+ * LocationLink has targetUri/targetRange instead of uri/range. This normalizes
+ * both forms into Location[], preferring targetSelectionRange (the precise
+ * symbol range) over targetRange (the full declaration range) when available.
+ */
 export function normalizeLocations(result: unknown): Location[] {
   if (!result) return [];
   const raw = Array.isArray(result) ? result : [result];
   return raw.flatMap((loc) => {
-    if (loc && "uri" in loc) return [loc as Location];
-    if (loc && "targetUri" in loc) {
+    if (loc && typeof loc === "object" && "uri" in loc) return [loc as Location];
+    if (loc && typeof loc === "object" && "targetUri" in loc) {
       const link = loc as LocationLink;
       return [{ uri: link.targetUri, range: link.targetSelectionRange ?? link.targetRange }];
     }
@@ -77,6 +98,14 @@ export function normalizeLocations(result: unknown): Location[] {
 
 /**
  * Read a few lines of context around a location from disk.
+ *
+ * Returns formatted lines with line numbers and a `>` marker on the target line.
+ * Used to show surrounding code when displaying definition/reference results.
+ *
+ * @param filePath - Absolute path to the source file
+ * @param line - 1-based line number to center on
+ * @param contextLines - Number of lines to show above and below the target
+ * @returns Formatted lines, or empty array if the file can't be read
  */
 export function readLocationContext(filePath: string, line: number, contextLines = 1): string[] {
   try {
@@ -84,11 +113,12 @@ export function readLocationContext(filePath: string, line: number, contextLines
     const lines = content.split("\n");
     const start = Math.max(0, line - 1 - contextLines);
     const end = Math.min(lines.length, line + contextLines);
+    const gutterWidth = String(end).length;
     const result: string[] = [];
     for (let i = start; i < end; i++) {
       const lineNum = i + 1;
       const marker = lineNum === line ? ">" : " ";
-      result.push(`${marker} ${String(lineNum).padStart(4)} | ${lines[i]}`);
+      result.push(`${marker} ${String(lineNum).padStart(gutterWidth)} | ${lines[i]}`);
     }
     return result;
   } catch {
@@ -107,10 +137,16 @@ export function formatLocationWithContext(loc: Location, cwd: string, contextLin
 
 // ── Hover ──
 
+/**
+ * Extract plain text from LSP hover contents.
+ *
+ * Hover contents can be a string, a MarkedString ({language, value} or plain string),
+ * a MarkupContent ({kind, value}), or an array of any of these. This extracts the
+ * text value from all forms, joining array elements with double newlines.
+ */
 export function extractHoverText(contents: Hover["contents"]): string {
   if (typeof contents === "string") return contents;
   if (!Array.isArray(contents)) {
-    // MarkedString or MarkupContent
     if ("value" in contents) return contents.value;
     return String(contents);
   }
@@ -125,6 +161,7 @@ export function extractHoverText(contents: Hover["contents"]): string {
 
 // ── Symbols ──
 
+/** Maps LSP SymbolKind enum values to human-readable labels. */
 const SYMBOL_KINDS: Record<number, string> = {
   1: "File",
   2: "Module",
@@ -154,18 +191,21 @@ const SYMBOL_KINDS: Record<number, string> = {
   26: "TypeParameter",
 };
 
+/** Single-character icons for compact symbol display. Only the most common kinds. */
 const SYMBOL_ICONS: Record<number, string> = {
-  5: "C",
-  6: "m",
-  7: "p",
-  8: "f",
-  10: "E",
-  11: "I",
-  12: "F",
-  13: "v",
-  14: "c",
-  23: "S",
-  26: "T",
+  5: "C", // Class
+  6: "m", // Method
+  7: "p", // Property
+  8: "f", // Field
+  9: "K", // Constructor
+  10: "E", // Enum
+  11: "I", // Interface
+  12: "F", // Function
+  13: "v", // Variable
+  14: "c", // Constant
+  22: "e", // EnumMember
+  23: "S", // Struct
+  26: "T", // TypeParameter
 };
 
 export function formatDocumentSymbol(sym: DocumentSymbol, indent = 0): string[] {
@@ -195,6 +235,18 @@ export function formatSymbolInformation(sym: SymbolInformation, cwd: string): st
  * Resolve the column position of a symbol on a given line.
  * If symbol is provided, finds its position on the line.
  * Otherwise returns 0.
+ */
+/**
+ * Resolve the 0-based column position of a symbol on a given line.
+ *
+ * Used by the LSP action dispatcher to convert (file, line, symbol) triples
+ * into the (file, line, character) positions that LSP requests require.
+ *
+ * @param filePath - Absolute path to the source file
+ * @param line - 1-based line number
+ * @param symbol - Text to find on the line (if undefined, returns column 0)
+ * @param occurrence - Which occurrence to match (1-based, defaults to 1)
+ * @returns 0-based column index, or 0 if not found
  */
 export function resolveSymbolColumn(filePath: string, line: number, symbol?: string, occurrence?: number): number {
   if (!symbol) return 0;

@@ -67,8 +67,9 @@ export default function permissionGate(pi: ExtensionAPI) {
     toolName: string,
     input: Record<string, unknown>,
     modelRegistry: Parameters<typeof sidecarComplete>[2],
+    rawDiff?: string,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
-    const description = describeToolCall(toolName, input);
+    const description = describeToolCall(toolName, input, rawDiff);
     const result = await sidecarComplete(
       "explain",
       {
@@ -108,6 +109,7 @@ Be direct, no filler.`;
     toolName: string,
     input: Record<string, unknown>,
     modelRegistry: Parameters<typeof sidecarComplete>[2],
+    rawDiff?: string,
   ): ExplanationProvider | undefined {
     if (!explainEnabled) return undefined;
 
@@ -118,7 +120,7 @@ Be direct, no filler.`;
       return { promise: Promise.resolve(cachedResult), abort: () => {} };
     }
 
-    const description = describeToolCall(toolName, input);
+    const description = describeToolCall(toolName, input, rawDiff);
     const abortController = new AbortController();
 
     const promise = (async (): Promise<ExplanationResult | null> => {
@@ -407,7 +409,7 @@ Be direct, no filler.`;
             break;
           }
         }
-        return { lines, firstChangedLine };
+        return { lines, rawDiff: result.diff, firstChangedLine };
       }
       if (toolName === "write") {
         const content = typeof input.content === "string" ? input.content : "";
@@ -418,8 +420,9 @@ Be direct, no filler.`;
           .split("\n")
           .map((line) => `+${line}`)
           .join("\n");
-        const styled = renderDiff(`@@ -0,0 +1,${preview.split("\n").length} @@\n${fakeDiff}`);
-        return { lines: styled.split("\n") };
+        const rawDiff = `@@ -0,0 +1,${preview.split("\n").length} @@\n${fakeDiff}`;
+        const styled = renderDiff(rawDiff);
+        return { lines: styled.split("\n"), rawDiff };
       }
     } catch {
       // Fall through -- diff is nice-to-have, not critical
@@ -433,8 +436,8 @@ Be direct, no filler.`;
     event: { toolName: string; toolCallId: string; input: unknown },
     decision: import("./logic").GateDecision,
     explanation?: ExplanationProvider,
+    diffBody?: DiffBody,
   ): Promise<{ block: true; reason: string } | undefined> {
-    const diffBody = await computeDiffBody(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
       const result = await confirm(
@@ -528,6 +531,10 @@ Be direct, no filler.`;
 
     const input = event.input as Record<string, unknown>;
 
+    // Compute diff early -- used by both classify (sidecar description) and the dialog (visual preview)
+    const diffBody = await computeDiffBody(event.toolName, input, ctx.cwd);
+    const rawDiff = diffBody?.rawDiff;
+
     // Auto-classify: call sidecar before showing dialog
     if (state.autoClassify === "on" && hasRole("explain")) {
       const key = cacheKey(event.toolName, input);
@@ -536,7 +543,7 @@ Be direct, no filler.`;
       if (cached && shouldAutoAllow(cached.verdict, state.mode)) {
         state.autoAllowLog.push({
           toolName: event.toolName,
-          description: describeToolCall(event.toolName, input),
+          description: describeToolCall(event.toolName, input, rawDiff),
           verdict: cached.verdict,
           short: cached.short,
           timestamp: Date.now(),
@@ -549,7 +556,7 @@ Be direct, no filler.`;
 
       if (!cached) {
         ctx.ui.setWorkingMessage("Classifying...");
-        const explResult = await classify(event.toolName, input, ctx.modelRegistry);
+        const explResult = await classify(event.toolName, input, ctx.modelRegistry, rawDiff);
         ctx.ui.setWorkingMessage();
 
         if (explResult) {
@@ -562,7 +569,7 @@ Be direct, no filler.`;
           if (shouldAutoAllow(explResult.verdict, state.mode)) {
             state.autoAllowLog.push({
               toolName: event.toolName,
-              description: describeToolCall(event.toolName, input),
+              description: describeToolCall(event.toolName, input, rawDiff),
               verdict: explResult.verdict,
               short: explResult.short,
               timestamp: Date.now(),
@@ -574,20 +581,20 @@ Be direct, no filler.`;
           }
 
           // Not auto-allowed -- fall through to dialog with pre-loaded explanation
-          return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(explResult));
+          return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(explResult), diffBody);
         }
         // Sidecar failed or parse failure -- fall through to normal dialog
       }
       // Cached but not auto-allowable (e.g. DANGEROUS cached) -- fall through with pre-loaded if available
       if (cached) {
         // Cached but not auto-allowable -- show dialog with cached explanation
-        return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(cached));
+        return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(cached), diffBody);
       }
     }
 
     // Normal path: build explanation provider (fires concurrently with dialog)
-    const explanation = makeExplanation(event.toolName, input, ctx.modelRegistry);
-    return await showConfirmDialog(ctx, event, decision, explanation);
+    const explanation = makeExplanation(event.toolName, input, ctx.modelRegistry, rawDiff);
+    return await showConfirmDialog(ctx, event, decision, explanation, diffBody);
   });
 
   // Clear widget when agent turn ends
