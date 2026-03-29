@@ -33,6 +33,14 @@ mise nix-diff    # verify Nix build after changes
 - Shared code goes in `extensions/shared/` (no `index.ts` = not discovered as an extension).
 - Run `mise pi-check` before committing. `mise check` includes it.
 
+### Runtime: Node, not Bun
+
+Pi extensions run in **Node.js**, not Bun. Tests run under `bun test`. This mismatch is a trap:
+
+- **No Bun APIs in extension code.** `Bun.spawn`, `Bun.file`, `Bun.write`, etc. will throw `ReferenceError` at runtime but pass in tests. Use `node:child_process`, `node:fs`, etc. instead.
+- **Bun-only test APIs are fine.** `bun:test`, `Bun.spawn` in test files only — these never run in pi.
+- If spawning processes from extensions, use `child_process.execFile` or `child_process.spawn` from `node:child_process`.
+
 ## TUI API notes
 
 Read the `.d.ts` files for actual APIs — don't guess method names. Key components:

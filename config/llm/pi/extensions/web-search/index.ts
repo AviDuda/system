@@ -352,7 +352,9 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const provLabel = forceProvider ? PROVIDER_NAMES[forceProvider] : PROVIDER_NAMES[activeProvider!] ?? activeProvider;
+      const provLabel = forceProvider
+        ? PROVIDER_NAMES[forceProvider]
+        : (PROVIDER_NAMES[activeProvider!] ?? activeProvider);
       ctx.ui.notify(`Searching (${provLabel}): ${query}`, "info");
       try {
         const { text, details } = await doSearch(query, 10, undefined, forceProvider);

@@ -149,8 +149,11 @@ in
         gnupg # GPG encryption
         google-cloud-sdk # GCloud CLI
         mosh # Mobile shell
+        gopls # Go language server
         nil # Nix language server
         nixd # Nix language server (full-featured)
+        nodePackages.bash-language-server # Bash/shell language server
+        yaml-language-server # YAML language server
         rsync # File transfer
         sd # Modern sed replacement
         speedtest-cli # Internet speed test
