@@ -13,11 +13,23 @@
  * }
  */
 
-import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { KeybindingsManager } from "@mariozechner/pi-coding-agent/dist/core/keybindings.js";
+import {
+  CustomEditor,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type KeybindingsManager,
+} from "@mariozechner/pi-coding-agent";
 import { type EditorTheme, Key, matchesKey, type TUI } from "@mariozechner/pi-tui";
-import { extractText, getSidecarStats, hasRole, resolveRole, sidecarComplete } from "../shared/model-roles.ts";
-import { filterSuggestion, injectGhostText, parseSuggestionTag } from "./ghost-text.ts";
+import {
+  assistantMsg,
+  extractText,
+  getSidecarStats,
+  hasRole,
+  resolveRole,
+  sidecarComplete,
+  userMsg,
+} from "../shared/model-roles";
+import { filterSuggestion, injectGhostText, parseSuggestionTag } from "./ghost-text";
 
 // ── Ghost text editor ──
 
@@ -145,9 +157,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   // On journal load, generate a "what to work on" suggestion for fresh sessions
-  pi.events.on("journal:loaded", (data: { notes: Array<{ filename: string; content: string }> }) => {
+  pi.events.on("journal:loaded", (raw: unknown) => {
+    const { notes } = raw as { notes: Array<{ filename: string; content: string }> };
     if (!enabled || !hasRole("draft") || !ghostEditor || !latestCtx) return;
-    if (data.notes.length === 0) return;
+    if (notes.length === 0) return;
 
     // Only for fresh sessions -- resumed sessions already have a suggestion from above
     const entries = latestCtx.sessionManager.getBranch();
@@ -158,9 +171,9 @@ export default function (pi: ExtensionAPI) {
     abortController?.abort();
     abortController = new AbortController();
 
-    const journalContext = data.notes
+    const journalContext = notes
       .slice(0, 2)
-      .map((n) => `--- ${n.filename} ---\n${n.content.slice(0, 400)}`)
+      .map((n: { filename: string; content: string }) => `--- ${n.filename} ---\n${n.content.slice(0, 400)}`)
       .join("\n\n");
 
     const { signal } = abortController;
@@ -238,10 +251,13 @@ async function generateSuggestion(ctx: ExtensionContext, signal: AbortSignal): P
 
     const msg = entry.message;
     if (msg.role === "user") {
-      const text = msg.content
-        .filter((c: { type: string }): c is { type: "text"; text: string } => c.type === "text")
-        .map((c: { text: string }) => c.text)
-        .join("");
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : msg.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .map((c) => c.text)
+              .join("");
       if (text.trim()) {
         recentMessages.unshift({ role: "user", text: text.slice(0, 200) });
         count++;
@@ -270,7 +286,7 @@ async function generateSuggestion(ctx: ExtensionContext, signal: AbortSignal): P
   const maxAttempts = resolved?.entry.maxAttempts ?? 1;
 
   const sidecarContext = {
-    system: `You predict what the HUMAN types next. The human is a developer talking to a coding AI. Humans type commands and questions like:
+    systemPrompt: `You predict what the HUMAN types next. The human is a developer talking to a coding AI. Humans type commands and questions like:
 - "Show me the test files"
 - "How does the auth module work?"
 - "Add error handling to the API"
@@ -278,58 +294,17 @@ async function generateSuggestion(ctx: ExtensionContext, signal: AbortSignal): P
 
 NEVER generate assistant-style responses like "Would you like to...", "I can help with...", "Let me...", "Here's what I found...". Those are what the ASSISTANT says, not the human.`,
     messages: [
-      {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: `human: Fix the failing test in auth.ts
-assistant: I've fixed the test by updating the mock.`,
-          },
-        ],
-      },
-      {
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "<suggestion>Run the full test suite now</suggestion>" }],
-      },
-      {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: `human: Show me the project structure
-assistant: Here's the directory layout: src/, tests/, config/...`,
-          },
-        ],
-      },
-      {
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "<suggestion>How many lines of code in each module?</suggestion>" }],
-      },
-      {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: `human: Hello!
-assistant: Hey! Last session we built the auth module. What are you working on today?`,
-          },
-        ],
-      },
-      {
-        role: "assistant" as const,
-        content: [
-          { type: "text" as const, text: "<suggestion>Let's add rate limiting to the auth endpoints</suggestion>" },
-        ],
-      },
-      {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: conversationSummary }],
-      },
-      {
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "<suggestion>" }],
-      },
+      userMsg(`human: Fix the failing test in auth.ts
+assistant: I've fixed the test by updating the mock.`),
+      assistantMsg("<suggestion>Run the full test suite now</suggestion>"),
+      userMsg(`human: Show me the project structure
+assistant: Here's the directory layout: src/, tests/, config/...`),
+      assistantMsg("<suggestion>How many lines of code in each module?</suggestion>"),
+      userMsg(`human: Hello!
+assistant: Hey! Last session we built the auth module. What are you working on today?`),
+      assistantMsg("<suggestion>Let's add rate limiting to the auth endpoints</suggestion>"),
+      userMsg(conversationSummary),
+      assistantMsg("<suggestion>"),
     ],
   };
 
@@ -400,47 +375,16 @@ async function generateFromContext(
       const result = await sidecarComplete(
         "draft",
         {
-          system: `You predict what a developer will type as their FIRST message when starting a session. Based on the project context and recent work, suggest what they'd work on next. One short sentence, a direct instruction or question. NEVER use assistant-style language like "Would you like", "I can help", "Let me".`,
+          systemPrompt: `You predict what a developer will type as their FIRST message when starting a session. Based on the project context and recent work, suggest what they'd work on next. One short sentence, a direct instruction or question. NEVER use assistant-style language like "Would you like", "I can help", "Let me".`,
           messages: [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Context: Auth module project. Recent notes: Fixed auth bug, tests passing. Deploy pending.`,
-                },
-              ],
-            },
-            {
-              role: "assistant" as const,
-              content: [{ type: "text" as const, text: "<suggestion>Deploy the auth fix to staging</suggestion>" }],
-            },
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Context: Nix system config. Recent notes: Built draft-suggestion extension, needs live testing. Also need to run nix-switch.`,
-                },
-              ],
-            },
-            {
-              role: "assistant" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: "<suggestion>Run mise nix-switch to deploy the pending changes</suggestion>",
-                },
-              ],
-            },
-            {
-              role: "user" as const,
-              content: [{ type: "text" as const, text: `Context:\n${startupContext}` }],
-            },
-            {
-              role: "assistant" as const,
-              content: [{ type: "text" as const, text: "<suggestion>" }],
-            },
+            userMsg(`Context: Auth module project. Recent notes: Fixed auth bug, tests passing. Deploy pending.`),
+            assistantMsg("<suggestion>Deploy the auth fix to staging</suggestion>"),
+            userMsg(
+              `Context: Nix system config. Recent notes: Built draft-suggestion extension, needs live testing. Also need to run nix-switch.`,
+            ),
+            assistantMsg("<suggestion>Run mise nix-switch to deploy the pending changes</suggestion>"),
+            userMsg(`Context:\n${startupContext}`),
+            assistantMsg("<suggestion>"),
           ],
         },
         ctx.modelRegistry,

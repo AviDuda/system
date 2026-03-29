@@ -30,11 +30,11 @@ import {
   type AssistantMessage,
   type Context,
   completeSimple,
+  type Message,
   type Model,
   type ThinkingLevel as PiThinkingLevel,
 } from "@mariozechner/pi-ai";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent/dist/core/model-registry.js";
+import { getAgentDir, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 // ── Types ──
 
@@ -257,4 +257,39 @@ export function extractText(message: AssistantMessage): string {
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text)
     .join("");
+}
+
+// ── Message builders ──
+// Pi 0.63.2 requires timestamp on UserMessage and api/provider/model/usage
+// on AssistantMessage. For sidecar context messages these are just metadata
+// the provider ignores -- only role and content matter.
+
+/** Build a typed UserMessage for sidecar context. */
+export function userMsg(text: string): Message {
+  return {
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp: Date.now(),
+  };
+}
+
+/** Build a typed AssistantMessage for sidecar context. */
+export function assistantMsg(text: string): Message {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "messages" as Api,
+    provider: "sidecar",
+    model: "sidecar",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
 }

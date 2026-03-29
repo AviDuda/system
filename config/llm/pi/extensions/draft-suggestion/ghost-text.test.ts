@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterSuggestion, injectGhostText, parseSuggestionTag } from "./ghost-text.ts";
+import { filterSuggestion, injectGhostText, parseSuggestionTag } from "./ghost-text";
 
 describe("injectGhostText", () => {
   // Simulate what Editor.render() produces for an empty editor (simplified)

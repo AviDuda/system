@@ -46,6 +46,8 @@ set -euo pipefail
 cd config/llm/pi
 echo "==> biome check"
 biome check .
+echo "==> tsc --noEmit"
+tsc --noEmit
 echo "==> bun test"
 bun test
 """

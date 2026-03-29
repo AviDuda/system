@@ -58,6 +58,8 @@ export function stripVerdictPrefix(text: string): string {
  * Strict mode is used for auto-classify where parse failure should
  * fall through to the confirmation dialog, not auto-allow.
  */
+export function parseExplanation(text: string, strict: true): ExplanationResult | null;
+export function parseExplanation(text: string, strict?: false): ExplanationResult;
 export function parseExplanation(text: string, strict?: boolean): ExplanationResult | null {
   const trimmed = text.trim();
   const firstNewline = trimmed.indexOf("\n");
