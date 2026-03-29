@@ -444,13 +444,13 @@ Be direct, no filler.`;
       // Always show the command in the scrollable body -- even short commands
       // can get truncated by terminal width when combined with the "bash: " prefix
       const bashDiffBody: DiffBody = diffBody ?? { lines: [command], rawDiff: "", firstChangedLine: 0 };
-      const result = await confirm(
-        ctx,
-        "bash",
-        ["Allow once", `Allow "${prefix}" for this session`, "Allow all bash for this session", "Block"],
-        explanation,
-        bashDiffBody,
-      );
+      const options = ["Allow once"];
+      if (!decision.escalation) {
+        options.push(`Allow "${prefix}" for this session`);
+      }
+      options.push("Allow all bash for this session", "Block");
+      const title = decision.escalation ? "bash (compound command)" : "bash";
+      const result = await confirm(ctx, title, options, explanation, bashDiffBody);
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
 

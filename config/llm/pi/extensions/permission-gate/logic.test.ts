@@ -4,6 +4,7 @@ import {
   createInitialState,
   decide,
   type GateState,
+  hasShellEscalation,
   isBashAllowed,
   isInsideDir,
   isPathAllowed,
@@ -72,22 +73,120 @@ describe("suggestPrefix", () => {
     expect(suggestPrefix("ls")).toBe("ls");
   });
 
-  test("two token command", () => {
-    expect(suggestPrefix("bun test")).toBe("bun test");
+  test("two token command returns first token", () => {
+    expect(suggestPrefix("bun test")).toBe("bun");
   });
 
-  test("takes first two tokens of longer command", () => {
-    expect(suggestPrefix("bun test --filter=pro --watch")).toBe("bun test");
+  test("takes first token of longer command", () => {
+    expect(suggestPrefix("bun test --filter=pro --watch")).toBe("bun");
   });
 
   test("strips cd preamble first", () => {
-    expect(suggestPrefix("cd /foo && grep -rn pattern src/")).toBe("grep -rn");
+    expect(suggestPrefix("cd /foo && grep -rn pattern src/")).toBe("grep");
   });
 
   test("strips cd with quoted path containing spaces", () => {
-    expect(suggestPrefix('cd "/tmp/some path/with spaces/project" && bun scripts/run.ts --flag')).toBe(
-      "bun scripts/run.ts",
-    );
+    expect(suggestPrefix('cd "/tmp/some path/with spaces/project" && bun scripts/run.ts --flag')).toBe("bun");
+  });
+});
+
+// ── hasShellEscalation ──
+
+describe("hasShellEscalation", () => {
+  test("simple command is not escalated", () => {
+    expect(hasShellEscalation("rg -n pattern src/")).toBe(false);
+  });
+
+  test("pipe to unsafe command is escalation", () => {
+    expect(hasShellEscalation("rg foo | xargs rm")).toBe(true);
+  });
+
+  test("pipe to safe filter is not escalation", () => {
+    expect(hasShellEscalation("rg foo | head -5")).toBe(false);
+    expect(hasShellEscalation("rg foo | tail -3")).toBe(false);
+    expect(hasShellEscalation("rg foo | wc -l")).toBe(false);
+    expect(hasShellEscalation("rg foo | sort | uniq")).toBe(false);
+    expect(hasShellEscalation("cat file.json | jq .key")).toBe(false);
+  });
+
+  test("pipe chain with one unsafe target is escalation", () => {
+    expect(hasShellEscalation("rg foo | sort | xargs rm")).toBe(true);
+  });
+
+  test("semicolon is escalation", () => {
+    expect(hasShellEscalation("echo hello; rm -rf /")).toBe(true);
+  });
+
+  test("&& chain is escalation", () => {
+    expect(hasShellEscalation("rg foo && rm bar")).toBe(true);
+  });
+
+  test("subshell $() is escalation", () => {
+    expect(hasShellEscalation("echo $(rm -rf /)")).toBe(true);
+  });
+
+  test("backtick is escalation", () => {
+    expect(hasShellEscalation("echo `rm -rf /`")).toBe(true);
+  });
+
+  test("output redirect is escalation", () => {
+    expect(hasShellEscalation("echo hello > /etc/passwd")).toBe(true);
+  });
+
+  test("append redirect is escalation", () => {
+    expect(hasShellEscalation("echo hello >> /tmp/log")).toBe(true);
+  });
+
+  test("fd duplication 2>&1 is NOT escalation", () => {
+    expect(hasShellEscalation("some_cmd 2>&1")).toBe(false);
+  });
+
+  test("find -exec is escalation", () => {
+    expect(hasShellEscalation('find . -name "*.ts" -exec rm {} \\;')).toBe(true);
+  });
+
+  test("find -delete is escalation", () => {
+    expect(hasShellEscalation("find /tmp -name '*.log' -delete")).toBe(true);
+  });
+
+  test("find without -exec is not escalated", () => {
+    expect(hasShellEscalation('find . -name "*.ts" -type f')).toBe(false);
+  });
+
+  test("pipe inside double quotes is not escalation", () => {
+    expect(hasShellEscalation('grep -E "foo|bar" file.txt')).toBe(false);
+  });
+
+  test("pipe inside single quotes is not escalation", () => {
+    expect(hasShellEscalation("grep -E 'foo|bar' file.txt")).toBe(false);
+  });
+
+  test("&& inside quotes is not escalation", () => {
+    expect(hasShellEscalation('echo "a && b"')).toBe(false);
+  });
+
+  test("$() inside double quotes is hidden by quote stripping", () => {
+    expect(hasShellEscalation('echo "today is $(date +%Y-%m-%d)"')).toBe(false);
+  });
+
+  test("backticks inside double quotes are hidden by quote stripping", () => {
+    expect(hasShellEscalation('echo "user is `whoami`"')).toBe(false);
+  });
+
+  test("$() outside quotes IS escalation", () => {
+    expect(hasShellEscalation("echo $(date)")).toBe(true);
+  });
+
+  test("backticks outside quotes IS escalation", () => {
+    expect(hasShellEscalation("echo `whoami`")).toBe(true);
+  });
+
+  test("semicolons with harmless commands still escalate", () => {
+    expect(hasShellEscalation('echo "harmless" ; echo "also harmless"')).toBe(true);
+  });
+
+  test("&& with harmless commands still escalates", () => {
+    expect(hasShellEscalation('echo "first" && echo "second"')).toBe(true);
   });
 });
 
@@ -259,18 +358,52 @@ describe("isBashAllowed", () => {
   const baseState = createInitialState();
 
   test("prefix match", () => {
-    const state: GateState = { ...baseState, allowedBashPrefixes: ["bun test"] };
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["bun"] };
     expect(isBashAllowed("bun test --filter=pro", state)).toBe(true);
   });
 
   test("strips preamble before matching", () => {
-    const state: GateState = { ...baseState, allowedBashPrefixes: ["grep -n"] };
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["grep"] };
     expect(isBashAllowed("cd /foo && grep -n pattern file.ts", state)).toBe(true);
   });
 
   test("no match", () => {
-    const state: GateState = { ...baseState, allowedBashPrefixes: ["bun test"] };
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["bun"] };
     expect(isBashAllowed("rm -rf /", state)).toBe(false);
+  });
+
+  test("piped command to unsafe target not allowed", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
+    expect(isBashAllowed("rg foo | xargs rm", state)).toBe(false);
+  });
+
+  test("piped command to safe filter is allowed", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
+    expect(isBashAllowed("rg foo | head -5", state)).toBe(true);
+    expect(isBashAllowed("rg foo | tail -3", state)).toBe(true);
+  });
+
+  test("chained command not allowed even with matching prefix", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
+    expect(isBashAllowed("rg foo && rm bar", state)).toBe(false);
+  });
+
+  test("redirected command not allowed even with matching prefix", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["echo"] };
+    expect(isBashAllowed("echo secret > /tmp/leak", state)).toBe(false);
+  });
+
+  test("simple command with same prefix is allowed", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
+    expect(isBashAllowed("rg -l pattern src/", state)).toBe(true);
+    expect(isBashAllowed("rg --count foo", state)).toBe(true);
+  });
+
+  test("unsafe pipe not allowed even after session-allowing the base command", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["ls"] };
+    expect(isBashAllowed("ls /tmp", state)).toBe(true);
+    expect(isBashAllowed("ls /tmp | head -5", state)).toBe(true);
+    expect(isBashAllowed("ls /tmp | xargs echo", state)).toBe(false);
   });
 });
 
@@ -390,7 +523,20 @@ describe("decide", () => {
   test("bash decision includes suggested prefix", () => {
     const state = stateWith({ mode: "careful" });
     const d = decide("bash", { command: "cd /foo && bun test --filter=pro" }, cwd, state);
-    expect(d.suggestedPrefix).toBe("bun test");
+    expect(d.suggestedPrefix).toBe("bun");
+  });
+
+  test("bash decision flags escalation when prefix is already allowed", () => {
+    const state = stateWith({ mode: "careful", allowedBashPrefixes: ["echo"] });
+    const d = decide("bash", { command: 'echo "first" && echo "second"' }, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.escalation).toBe(true);
+  });
+
+  test("bash decision does not flag escalation for unmatched prefix", () => {
+    const state = stateWith({ mode: "careful" });
+    const d = decide("bash", { command: "rm -rf /" }, cwd, state);
+    expect(d.escalation).toBeFalsy();
   });
 
   // Sensitive path allowed via session allow

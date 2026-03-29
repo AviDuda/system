@@ -45,6 +45,8 @@ export interface GateDecision {
   displayPath?: string;
   /** Suggested bash prefix for the session-allow option */
   suggestedPrefix?: string;
+  /** True when a bash command matched a session prefix but was blocked by escalation detection. */
+  escalation?: boolean;
 }
 
 // ── Constants ──
@@ -138,12 +140,89 @@ export function stripShellPreamble(command: string): string {
   return cmd.trim();
 }
 
-/** Extract a prefix from a command: first two tokens of the real command. */
+/** Extract a session-allow prefix: the command name (first token) after stripping preamble. */
 export function suggestPrefix(command: string): string {
   const real = stripShellPreamble(command);
   const tokens = real.split(/\s+/);
-  if (tokens.length <= 2) return tokens.join(" ");
-  return tokens.slice(0, 2).join(" ");
+  return tokens[0];
+}
+
+/** Read-only commands safe to pipe to. These can't escalate a simple command. */
+const SAFE_PIPE_TARGETS = new Set([
+  "head",
+  "tail",
+  "wc",
+  "sort",
+  "uniq",
+  "grep",
+  "rg",
+  "awk",
+  "sed", // sed without -i is read-only in a pipe
+  "cut",
+  "tr",
+  "less",
+  "more",
+  "cat",
+  "column",
+  "fmt",
+  "nl",
+  "rev",
+  "tac",
+  "fold",
+  "paste",
+  "expand",
+  "unexpand",
+  "jq",
+  "yq",
+  "bat",
+  "fzf",
+]);
+
+/**
+ * Check if all pipe targets in a command are safe read-only filters.
+ * Returns true if every command after a `|` starts with a known safe command.
+ * Operates on the quote-stripped version of the command.
+ */
+function allPipesSafe(unquoted: string): boolean {
+  const segments = unquoted.split(/\|/);
+  if (segments.length <= 1) return true;
+  for (const seg of segments.slice(1)) {
+    const cmd = seg.trim().split(/\s+/)[0];
+    if (!cmd || !SAFE_PIPE_TARGETS.has(cmd)) return false;
+  }
+  return true;
+}
+
+/**
+ * Detect shell patterns that could escalate a simple command into something dangerous.
+ * Pipes to safe filters (head, tail, grep, jq, etc.) are allowed.
+ * Chains, subshells, redirects, and find -exec/-delete are flagged.
+ *
+ * Checked at match time: a prefix like "rg" auto-allows `rg -n foo`
+ * and `rg foo | head -5`, but still confirms `rg foo | xargs rm`.
+ *
+ * False positives (e.g. `grep -E "a|b"`) just mean one extra confirmation.
+ */
+export function hasShellEscalation(command: string): boolean {
+  // Strip quoted strings to avoid false positives from patterns inside quotes.
+  const unquoted = command.replace(/"(?:[^"\\]|\\.)*"/g, "").replace(/'[^']*'/g, "");
+
+  // Semicolons, chains, subshells, backticks (always escalation)
+  if (/;|&&|\$\(|`/.test(unquoted)) return true;
+
+  // Pipes: only escalation if piping to an unsafe command
+  if (/\|/.test(unquoted) && !allPipesSafe(unquoted)) return true;
+
+  // Output redirects (but not fd duplication like 2>&1)
+  if (/(?<![0-9&])>[^&]/.test(unquoted) || />>/.test(unquoted)) return true;
+
+  // find -exec, -execdir, -delete
+  const tokens = unquoted.split(/\s+/);
+  if (tokens[0] === "find" && tokens.some((t) => t === "-exec" || t === "-execdir" || t === "-delete")) {
+    return true;
+  }
+
+  return false;
 }
 
 /** Resolve a file path, stripping leading @ that some models add. */
@@ -205,9 +284,11 @@ export function isPathAllowed(filePath: string, cwd: string, state: GateState): 
   return false;
 }
 
-/** Check if a bash command matches any allowed prefix. */
+/** Check if a bash command matches any allowed prefix.
+ *  Compound/piped commands are never auto-allowed, even if the prefix matches. */
 export function isBashAllowed(command: string, state: GateState): boolean {
   const real = stripShellPreamble(command);
+  if (hasShellEscalation(real)) return false;
   return state.allowedBashPrefixes.some((prefix) => real.startsWith(prefix));
 }
 
@@ -360,12 +441,17 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
       return { action: "allow" };
     }
 
-    // Trust project: we still confirm bash (can't scope commands to dirs reliably)
+    const prefix = suggestPrefix(command);
+    const real = stripShellPreamble(command);
+    // Did the prefix match but escalation blocked it?
+    const escalation = hasShellEscalation(real) && state.allowedBashPrefixes.some((p) => real.startsWith(p));
+
     return {
       action: "confirm",
       confirmType: "bash",
       displayPath: command,
-      suggestedPrefix: suggestPrefix(command),
+      suggestedPrefix: prefix,
+      escalation,
     };
   }
 
