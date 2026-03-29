@@ -49,6 +49,20 @@ describe("stripShellPreamble", () => {
   test("handles whitespace", () => {
     expect(stripShellPreamble("  cd /foo  &&  grep bar  ")).toBe("grep bar");
   });
+
+  test("strips cd with double-quoted path containing spaces", () => {
+    expect(stripShellPreamble('cd "/tmp/some path/with spaces/project" && bun scripts/run.ts --flag')).toBe(
+      "bun scripts/run.ts --flag",
+    );
+  });
+
+  test("strips cd with single-quoted path containing spaces", () => {
+    expect(stripShellPreamble("cd '/tmp/path with spaces/dir' && ls -la")).toBe("ls -la");
+  });
+
+  test("strips multiple cd with quoted paths", () => {
+    expect(stripShellPreamble('cd "/tmp/path one" && cd "/tmp/path two" && echo done')).toBe("echo done");
+  });
 });
 
 // ── suggestPrefix ──
@@ -68,6 +82,12 @@ describe("suggestPrefix", () => {
 
   test("strips cd preamble first", () => {
     expect(suggestPrefix("cd /foo && grep -rn pattern src/")).toBe("grep -rn");
+  });
+
+  test("strips cd with quoted path containing spaces", () => {
+    expect(suggestPrefix('cd "/tmp/some path/with spaces/project" && bun scripts/run.ts --flag')).toBe(
+      "bun scripts/run.ts",
+    );
   });
 });
 

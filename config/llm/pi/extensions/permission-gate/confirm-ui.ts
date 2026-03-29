@@ -13,7 +13,7 @@
 
 import { DynamicBorder, type Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@mariozechner/pi-tui";
-import { Container, Input, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@mariozechner/pi-tui";
+import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@mariozechner/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
 
 export interface ConfirmResult {
@@ -192,7 +192,7 @@ export function createConfirmUI(
     explanation?.abort();
     done({
       choice,
-      note: noteInput.getValue().trim(),
+      note: (lastSubmittedNote || noteInput.getText()).trim(),
       explanation: explanationResult,
       toggledAutoClassify: didToggleAutoClassify || undefined,
     });
@@ -202,11 +202,28 @@ export function createConfirmUI(
   selectList.onCancel = () => finish(null);
   container.addChild(selectList);
 
-  // Note input
+  // Note input (multi-line: Shift+Enter for newlines, Enter confirms)
   const noteLabel = new Text("", 1, 0);
   container.addChild(noteLabel);
 
-  const noteInput = new Input();
+  const noteInput = new Editor(tui, {
+    borderColor: (s: string) => theme.fg("borderMuted", s),
+    selectList: {
+      selectedPrefix: (t) => t,
+      selectedText: (t) => t,
+      description: (t) => t,
+      scrollInfo: (t) => t,
+      noMatch: (t) => t,
+    },
+  });
+  // Editor.submitValue() clears internal state before calling onSubmit,
+  // so we capture the submitted text from the callback argument.
+  let lastSubmittedNote = "";
+  noteInput.onSubmit = (text: string) => {
+    lastSubmittedNote = text;
+    const selected = selectList.getSelectedItem();
+    if (selected) finish(selected.value);
+  };
   container.addChild(noteInput);
 
   // Help
@@ -282,15 +299,11 @@ export function createConfirmUI(
           return;
         }
       } else if (focus === "note") {
-        if (matchesKey(data, "return")) {
-          const selected = selectList.getSelectedItem();
-          if (selected) finish(selected.value);
-          return;
-        }
         if (matchesKey(data, "escape")) {
           finish(null);
           return;
         }
+        // Editor handles Enter (submit via onSubmit) and Shift+Enter (newline)
         noteInput.handleInput(data);
       } else {
         selectList.handleInput(data);

@@ -157,23 +157,35 @@ describe("parseExplanation", () => {
 // ── blockReason ──
 
 describe("blockReason", () => {
-  test("note only", () => {
-    expect(blockReason("don't do that", null, "fallback")).toBe("[User note: don't do that]");
-  });
-
-  test("explanation only", () => {
-    const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
-    expect(blockReason("", expl, "fallback")).toBe("[Auto-classification: DANGEROUS \u2014 Deletes everything]");
-  });
-
-  test("both note and explanation", () => {
-    const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
-    expect(blockReason("be careful", expl, "fallback")).toBe(
-      "[User note: be careful]\n[Auto-classification: RISKY \u2014 Modifies config]",
+  test("note only for bash", () => {
+    expect(blockReason("don't do that", null, "bash")).toBe(
+      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[User note: don't do that]",
     );
   });
 
-  test("neither note nor explanation uses fallback", () => {
-    expect(blockReason("", null, "Blocked by permission gate")).toBe("Blocked by permission gate");
+  test("explanation only for edit", () => {
+    const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
+    expect(blockReason("", expl, "edit")).toBe(
+      "BLOCKED by user. The file was NOT modified. Do not retry unless the user asks.\n[Classification: DANGEROUS \u2014 Deletes everything]",
+    );
+  });
+
+  test("classification before note for write", () => {
+    const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
+    expect(blockReason("be careful", expl, "write")).toBe(
+      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Classification: RISKY \u2014 Modifies config]\n[User note: be careful]",
+    );
+  });
+
+  test("unknown tool uses generic verb", () => {
+    expect(blockReason("", null, "unknown_tool")).toBe(
+      "BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.",
+    );
+  });
+
+  test("no tool name uses generic verb", () => {
+    expect(blockReason("", null)).toBe(
+      "BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.",
+    );
   });
 });

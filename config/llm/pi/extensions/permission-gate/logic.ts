@@ -102,14 +102,40 @@ export function isSensitivePath(filePath: string): boolean {
   return SENSITIVE_PATTERNS.some((p) => p.test(basename) || p.test(filePath));
 }
 
-/** Strip leading cd/pushd and shell operators to find the real command. */
+/** Strip leading cd/pushd and shell operators to find the real command.
+ *  Handles quoted arguments (paths with spaces). */
 export function stripShellPreamble(command: string): string {
   let cmd = command.trim();
-  const preambleRe = /^\s*(cd|pushd)\s+\S+\s*(&&|\|\||;)\s*/;
-  while (preambleRe.test(cmd)) {
-    cmd = cmd.replace(preambleRe, "");
+
+  while (true) {
+    const match = cmd.match(/^\s*(cd|pushd)\s+/);
+    if (!match) break;
+
+    let pos = match[0].length;
+
+    // Skip the argument, respecting quotes
+    const ch = cmd[pos];
+    if (ch === '"' || ch === "'") {
+      const close = cmd.indexOf(ch, pos + 1);
+      if (close === -1) break; // unclosed quote, bail
+      pos = close + 1;
+    } else {
+      // Unquoted: advance to next whitespace or shell metachar
+      while (pos < cmd.length && !/[\s;&|]/.test(cmd[pos])) pos++;
+    }
+
+    // Skip whitespace between arg and separator
+    while (pos < cmd.length && /\s/.test(cmd[pos])) pos++;
+
+    // Expect && or || or ;
+    const rest = cmd.slice(pos);
+    const sepMatch = rest.match(/^(&&|\|\||;)\s*/);
+    if (!sepMatch) break;
+
+    cmd = rest.slice(sepMatch[0].length);
   }
-  return cmd;
+
+  return cmd.trim();
 }
 
 /** Extract a prefix from a command: first two tokens of the real command. */
@@ -338,7 +364,7 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
     return {
       action: "confirm",
       confirmType: "bash",
-      displayPath: command.length > 120 ? `${command.slice(0, 117)}...` : command,
+      displayPath: command,
       suggestedPrefix: suggestPrefix(command),
     };
   }

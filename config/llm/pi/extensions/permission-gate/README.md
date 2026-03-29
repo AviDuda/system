@@ -70,9 +70,9 @@ Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
 Every confirmation shows a custom TUI with:
 - Colored unified diff preview (edit/write tools) — compact 6-line view by default
 - Select list of actions (Allow once, Allow for session, Block)
-- Note input field (Tab to focus) — attached to the tool result so the model sees it
+- Multi-line note editor (Tab to focus, Shift+Enter for newlines) — attached to the tool result so the model sees it
 - Notes on allow: appended as `[User note: ...]` to tool output
-- Notes on block: used as the block reason
+- Notes on block: included in the block reason with classification
 
 ### Diff preview
 
@@ -113,7 +113,7 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 - `logic.test.ts` — Tests for decision logic and auto-classify helpers
 - `explain.ts` — Verdict parsing, tool call description, block reasons
 - `explain.test.ts` — Tests for explain/verdict logic
-- `confirm-ui.ts` — Custom TUI component (SelectList + Input note field + explanation display)
+- `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
 - `index.ts` — Pi extension wrapper (UI, events, auto-classify, tool_result note injection)
 
 ## Known limitations

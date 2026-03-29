@@ -440,18 +440,22 @@ Be direct, no filler.`;
   ): Promise<{ block: true; reason: string } | undefined> {
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
+      const command = decision.displayPath ?? "";
+      // Always show the command in the scrollable body -- even short commands
+      // can get truncated by terminal width when combined with the "bash: " prefix
+      const bashDiffBody: DiffBody = diffBody ?? { lines: [command], rawDiff: "", firstChangedLine: 0 };
       const result = await confirm(
         ctx,
-        `bash: ${decision.displayPath}`,
+        "bash",
         ["Allow once", `Allow "${prefix}" for this session`, "Allow all bash for this session", "Block"],
         explanation,
-        diffBody,
+        bashDiffBody,
       );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: blockReason(note, explResult, "Blocked by permission gate") };
+        return { block: true, reason: blockReason(note, explResult, event.toolName) };
       }
       if (choice?.startsWith('Allow "') && choice.endsWith('" for this session')) {
         state.allowedBashPrefixes.push(prefix);
@@ -478,7 +482,7 @@ Be direct, no filler.`;
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: blockReason(note, explResult, "Blocked (sensitive file)") };
+        return { block: true, reason: blockReason(note, explResult, event.toolName) };
       }
       if (choice?.startsWith('Allow "')) {
         state.allowedPaths.push(path);
@@ -505,7 +509,7 @@ Be direct, no filler.`;
     const { choice, note, explanation: explResult } = result;
 
     if (choice === "Block" || choice === null) {
-      return { block: true, reason: blockReason(note, explResult, "Blocked by permission gate") };
+      return { block: true, reason: blockReason(note, explResult, event.toolName) };
     }
     if (choice?.startsWith('Allow "')) {
       state.allowedPaths.push(path);

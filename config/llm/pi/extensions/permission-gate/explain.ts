@@ -78,12 +78,19 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 // ── Block reason ──
 
 /** Build a block reason from user note + sidecar explanation. */
-export function blockReason(note: string, explanation: ExplanationResult | null, fallback: string): string {
-  const parts: string[] = [];
-  if (note) parts.push(`[User note: ${note}]`);
+export function blockReason(note: string, explanation: ExplanationResult | null, toolName?: string): string {
+  const verb =
+    toolName === "bash"
+      ? "The command was NOT executed."
+      : toolName === "edit"
+        ? "The file was NOT modified."
+        : toolName === "write"
+          ? "The file was NOT written."
+          : "The action was NOT performed.";
+  const lines = [`BLOCKED by user. ${verb} Do not retry unless the user asks.`];
   if (explanation) {
-    const verdict = explanation.verdict.toUpperCase();
-    parts.push(`[Auto-classification: ${verdict} — ${explanation.short}]`);
+    lines.push(`[Classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
-  return parts.length > 0 ? parts.join("\n") : fallback;
+  if (note) lines.push(`[User note: ${note}]`);
+  return lines.join("\n");
 }
