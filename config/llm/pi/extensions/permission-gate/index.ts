@@ -414,15 +414,13 @@ Be direct, no filler.`;
       if (toolName === "write") {
         const content = typeof input.content === "string" ? input.content : "";
         if (!content) return undefined;
-        const preview =
-          content.length > 2000 ? `${content.slice(0, 2000)}\n... (truncated, ${content.length} chars)` : content;
-        const fakeDiff = preview
-          .split("\n")
-          .map((line) => `+${line}`)
+        const contentLines = content.split("\n");
+        const lineNumWidth = String(contentLines.length).length;
+        const fakeDiff = contentLines
+          .map((line, i) => `+${String(i + 1).padStart(lineNumWidth, " ")} ${line}`)
           .join("\n");
-        const rawDiff = `@@ -0,0 +1,${preview.split("\n").length} @@\n${fakeDiff}`;
-        const styled = renderDiff(rawDiff);
-        return { lines: styled.split("\n"), rawDiff };
+        const styled = renderDiff(fakeDiff);
+        return { lines: styled.split("\n"), rawDiff: fakeDiff };
       }
     } catch {
       // Fall through -- diff is nice-to-have, not critical
