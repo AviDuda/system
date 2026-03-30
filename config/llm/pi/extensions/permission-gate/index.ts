@@ -441,7 +441,7 @@ Be direct, no filler.`;
       const command = decision.displayPath ?? "";
       // Always show the command in the scrollable body -- even short commands
       // can get truncated by terminal width when combined with the "bash: " prefix
-      const bashDiffBody: DiffBody = diffBody ?? { lines: [command], rawDiff: "", firstChangedLine: 0 };
+      const bashDiffBody: DiffBody = diffBody ?? { lines: command.split("\n"), rawDiff: "", firstChangedLine: 0 };
       const options = ["Allow once"];
       if (!decision.escalation) {
         options.push(`Allow "${prefix}" for this session`);
