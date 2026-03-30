@@ -296,6 +296,11 @@ export default function (pi: ExtensionAPI) {
       // Append diagnostics to the tool result so the LLM sees them
       const diagText = `\n\n[LSP diagnostics (${result.server}): ${result.summary}]\n${result.messages.join("\n")}`;
       const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
+
+      // Notify the user in the UI
+      const level = result.errored ? "error" : "warning";
+      ctx.ui.notify(`LSP: ${result.summary}\n${result.messages.join("\n")}`, level);
+
       return {
         content: [{ type: "text" as const, text: existingText + diagText }],
       };
