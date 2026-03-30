@@ -20,11 +20,4 @@ in
   globalInstructions = builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] (
     builtins.readFile ../../config/llm/instructions.md
   );
-
-  # Escaped for shell embedding (single quotes escaped)
-  globalInstructionsShell = builtins.replaceStrings [ "'" ] [ "'\"'\"'" ] (
-    builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] (
-      builtins.readFile ../../config/llm/instructions.md
-    )
-  );
 }

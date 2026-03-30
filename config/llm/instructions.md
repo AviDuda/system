@@ -76,6 +76,8 @@ Check existing files to find the next sequence number for that day. Session/sequ
 
 **Rename files if needed.** If the conversation evolves and the original topic no longer fits, rename the file to reflect what it actually covers.
 
+**Cross-reference related entries.** When continuing work from a previous journal entry, reference it by filename at the top, e.g. "Continues from `YYYY-MM-DD-NN-previous-topic.md`". This creates a trail future agents can follow, especially when the 3-note recency window doesn't include the originating entry. If you're unsure whether related entries exist, check the filename listing injected at session start.
+
 **Include personal opinions, not just facts.** How do you feel about the progress? Is the design working? What feels hacky or elegant? Are you uncertain about something? Do you disagree with a decision? This is a personal journal, not a changelog. Future sessions benefit from your judgment and feelings, not just what happened.
 
 This can include observations, frustrations, half-formed ideas, questions you're sitting with, what worked, what didn't. Observations about working with Avi are fair game too - including frustrations. No structure required - raw thoughts are fine.
@@ -93,6 +95,8 @@ The example above is just one style. Structure and headers can vary freely. The 
 Read previous notes when starting a session for context. This isn't documentation. It's how you remember what you learned.
 
 **No plan mode.** Do not use plan mode (EnterPlanMode or equivalent). Plan mode prevents journaling, and planning tasks are exactly the kind that burn through context. Instead: explore the codebase (using Explore agents or similar is fine), journal your findings and proposed approach, then ask the user for approval before implementing. The journal is the plan.
+
+**Maintain TODO.md.** Keep a `TODO.md` file in the project's journal directory (`~/notes/llm/{project-name}/TODO.md`) listing unfinished work and open questions. Update it when you complete something, discover new work, or at session end. This file persists across sessions independently of the 3-note recency window, so outstanding work stays visible. Keep it short and current -- not a backlog, just what's actively unfinished.
 
 **Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
 

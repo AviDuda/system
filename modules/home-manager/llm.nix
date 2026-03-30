@@ -18,7 +18,6 @@ let
     journalSkipMessage
     vanillaMessage
     globalInstructions
-    globalInstructionsShell
     ;
 
   # Shared journal config consumed by pi extension and OpenCode plugin at runtime.
@@ -36,87 +35,22 @@ let
 
   jq = "${pkgs.jq}/bin/jq";
 
-  # Session start hook: injects instructions and journal notes as context
+  bun = "${pkgs.bun}/bin/bun";
+  journalContextScript = "${config.home.homeDirectory}/system/config/llm/pi/extensions/shared/journal-context.ts";
+
+  # Session start hook: calls shared journal-context builder
   # Env vars:
   #   LLM_VANILLA=1 - skip all custom context (truly vanilla experience)
   #   NO_JOURNAL=1  - skip journal reading only (fresh session, no prior context)
   sessionStartScript = pkgs.writeShellScript "claude-session-start" ''
     set -euo pipefail
-
-    # Vanilla mode: skip everything custom, exit immediately
-    if [[ "''${LLM_VANILLA:-}" == "1" ]]; then
-      ${jq} -n --arg ctx "${vanillaMessage}" '{
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext: $ctx
-        }
-      }'
-      exit 0
-    fi
-
-    # Normal mode: start with instructions
-    CONTEXT='${globalInstructionsShell}'$'\n\n'
-
-    # Journal notes (skip if NO_JOURNAL=1)
-    if [[ "''${NO_JOURNAL:-}" == "1" ]]; then
-      CONTEXT+="${journalSkipMessage}"
-      ${jq} -n --arg ctx "$CONTEXT" '{
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext: $ctx
-        }
-      }'
-      exit 0
-    fi
-
-    NOTES_DIR="${notesDir}"
-    PROJECT_NAME=$(basename "$PWD")
-    PROJECT_NOTES="$NOTES_DIR/$PROJECT_NAME"
-
-    NO_NOTES_REMINDER="${noNotesReminder}"
-
-    output_context() {
-      ${jq} -n --arg ctx "$1" '{
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext: $ctx
-        }
-      }'
-    }
-
-    # Create directory if missing
-    if [[ ! -d "$PROJECT_NOTES" ]]; then
-      mkdir -p "$PROJECT_NOTES"
-      output_context "$CONTEXT
-No previous session notes for $PROJECT_NAME.
-Notes directory created: $PROJECT_NOTES/
-
-$NO_NOTES_REMINDER"
-      exit 0
-    fi
-
-    # Find recent note files (last 3, sorted by name which includes date)
-    RECENT_NOTES=$(find "$PROJECT_NOTES" -name "*.md" -type f | sort -r | head -3)
-
-    # No notes yet
-    if [[ -z "$RECENT_NOTES" ]]; then
-      output_context "$CONTEXT
-No previous session notes for $PROJECT_NAME.
-Notes directory: $PROJECT_NOTES/
-
-$NO_NOTES_REMINDER"
-      exit 0
-    fi
-
-    # Build context from recent notes
-    CONTEXT+="Previous session notes for $PROJECT_NAME:"$'\n\n'
-    for note in $RECENT_NOTES; do
-      FILENAME=$(basename "$note")
-      CONTENT=$(cat "$note")
-      CONTEXT+="--- $FILENAME ---"$'\n'"$CONTENT"$'\n\n'
-    done
-
-    output_context "$CONTEXT"
+    CONTEXT=$(${bun} "${journalContextScript}" "$PWD")
+    ${jq} -n --arg ctx "$CONTEXT" '{
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: $ctx
+      }
+    }'
   '';
 
   # Subagent start hook: tells subagents not to write journal entries
@@ -295,11 +229,12 @@ in
     $DRY_RUN_CMD mkdir -p "${opencodeConfigDir}/plugins"
 
     plugin_target="${opencodeConfigDir}/plugins/journal.ts"
-    plugin_source="${opencodePluginSrc}"
-    if [[ -f "$plugin_target" ]] && ${pkgs.diffutils}/bin/diff -q "$plugin_source" "$plugin_target" > /dev/null 2>&1; then
+    # Substitute __HOME__ placeholder with actual home directory
+    plugin_content=$(${pkgs.gnused}/bin/sed "s|__HOME__|${config.home.homeDirectory}|g" "${opencodePluginSrc}")
+    if [[ -f "$plugin_target" ]] && [[ "$(cat "$plugin_target")" == "$plugin_content" ]]; then
       : # already up to date
     else
-      $DRY_RUN_CMD cp -f "$plugin_source" "$plugin_target"
+      $DRY_RUN_CMD printf '%s' "$plugin_content" > "$plugin_target"
       $DRY_RUN_CMD chmod 644 "$plugin_target"
       echo "opencode: updated journal.ts plugin"
     fi

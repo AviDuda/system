@@ -354,7 +354,9 @@ export default function (pi: ExtensionAPI) {
 
       const provLabel = forceProvider
         ? PROVIDER_NAMES[forceProvider]
-        : (PROVIDER_NAMES[activeProvider!] ?? activeProvider);
+        : activeProvider
+          ? (PROVIDER_NAMES[activeProvider] ?? activeProvider)
+          : "unknown";
       ctx.ui.notify(`Searching (${provLabel}): ${query}`, "info");
       try {
         const { text, details } = await doSearch(query, 10, undefined, forceProvider);
