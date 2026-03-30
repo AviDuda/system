@@ -37,9 +37,11 @@ Journals live in `~/notes/llm/{project-name}/`, one file per topic per day. Agen
 
 ### What agents see at startup
 
-1. Full content of the 3 most recent entries (recency window)
-2. Global instructions from `instructions.md`
-3. Project-specific AGENTS.md files (loaded by pi natively + agents-loader extension)
+1. Global instructions from `instructions.md`
+2. `TODO.md` from the project's journal directory (if it exists) -- persistent, not subject to the recency window
+3. Full content of the 3 most recent journal entries (recency window)
+4. Filename listing of older entries (up to 30) and recent filenames from other projects (up to 5 each)
+5. Project-specific AGENTS.md files (loaded by pi natively + agents-loader extension)
 
 ## Extensions
 

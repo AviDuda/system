@@ -145,11 +145,11 @@ export async function buildJournalContext(config: JournalConfig, cwd: string): P
     context += `Previous session notes for ${projectName}:\n\n`;
 
     if (result.todo) {
-      context += `<file name="${projectName}/TODO.md">\n${result.todo}\n</file>\n\n`;
+      context += `<file name="${result.path}/TODO.md">\n${result.todo}\n</file>\n\n`;
     }
 
     for (const note of result.notes) {
-      context += `<file name="${projectName}/${note.filename}">\n${note.content}\n</file>\n\n`;
+      context += `<file name="${result.path}/${note.filename}">\n${note.content}\n</file>\n\n`;
     }
 
     if (result.allFilenames.length > 3) {
