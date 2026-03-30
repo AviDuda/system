@@ -39,6 +39,8 @@
 
     ignores = [
       ".DS_Store"
+      "AGENTS.local.md"
+      "CLAUDE.local.md"
     ];
   };
 }
