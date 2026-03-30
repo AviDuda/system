@@ -2,6 +2,8 @@
 
 Shared config and per-tool customization for Claude Code, OpenCode, and pi.
 
+@docs/llm-agents.md - Design philosophy, knowledge tiers, extension patterns
+
 ## Key Paths
 
 | What | Where |
