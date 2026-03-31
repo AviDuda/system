@@ -2,7 +2,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 let
@@ -51,6 +50,10 @@ in
     ../../config/llm/skills/avi-init-agents/SKILL.md;
   home.file.".pi/agent/skills/avi-init-agents/checklist.md".source =
     ../../config/llm/skills/avi-init-agents/checklist.md;
+  # Symlink to local forepaw checkout. Dangling if repo not cloned -- pi skips missing skills.
+  home.file.".pi/agent/skills/forepaw/SKILL.md".source =
+    config.lib.file.mkOutOfStoreSymlink
+      "${config.home.homeDirectory}/dev/personal/forepaw/.agents/skills/forepaw/SKILL.md";
 
   # Extensions deployed to ~/.pi/agent/extensions/ for auto-discovery.
   # All are symlinked to live source — edit + /reload works without nix-switch.

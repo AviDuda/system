@@ -23,6 +23,7 @@ let
   librequake = pkgs.callPackage ../../packages/librequake.nix { };
   ericw-tools = if isDarwin then pkgs.callPackage ../../packages/ericw-tools.nix { } else null;
   vkquake = if isDarwin then pkgs.callPackage ../../packages/vkquake.nix { } else null;
+  forepaw = if isDarwin then pkgs.callPackage ../../packages/forepaw.nix { } else null;
 
   # All custom macOS .app packages — symlinks are generated automatically
   customApps = lib.optionals isDarwin [
@@ -218,6 +219,7 @@ in
       # Custom packages not in nixpkgs
       lib.optionals isDarwin [
         ericw-tools # Quake map compiling (qbsp, vis, light)
+        forepaw # Desktop automation CLI for AI agents
       ];
 
   # Dotfiles managed by Home Manager (symlinked from Nix store)
@@ -225,6 +227,11 @@ in
     # Example: ".screenrc".source = ./dotfiles/screenrc;
     # QuakeSpasm game data
     ".quakespasm/id1".source = "${librequake}/share/quake/id1";
+    # forepaw dev build -- symlink so agents and shells both find it.
+    # forepaw-stable (Nix package) is the release binary fallback.
+    ".local/bin/forepaw".source =
+      config.lib.file.mkOutOfStoreSymlink
+        "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
   }
   // customAppLinks;
 
@@ -232,6 +239,8 @@ in
   home.activation.createQuakeSpasmDirs = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     mkdir -p "$HOME/.quakespasm/custom/maps"
   '';
+
+  home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
 
   # Environment variables for user session
   home.sessionVariables = {

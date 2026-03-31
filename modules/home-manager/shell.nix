@@ -65,6 +65,8 @@ in
 
       # Vanilla Claude Code: skip all custom context (instructions + journal)
       claude-fresh = "LLM_VANILLA=1 claude";
+
+
     };
 
     history = {
