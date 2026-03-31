@@ -13,7 +13,7 @@
  */
 
 import { basename } from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { buildJournalContext, getRecentNotes, loadJournalConfig } from "../shared/journal-context";
 
 /** Context usage fraction (0-1) above which the agent gets a journal nudge. */
@@ -25,26 +25,49 @@ export default function journalExtension(pi: ExtensionAPI) {
   let firstPrompt = true;
   let nudged = false;
 
-  async function loadContext(cwd: string) {
+  async function loadContext(cwd: string, ctx: ExtensionContext) {
     cachedContext = await buildJournalContext(config, cwd);
 
     if (process.env.LLM_VANILLA !== "1" && process.env.NO_JOURNAL !== "1") {
       const projectName = basename(cwd);
       const result = await getRecentNotes(config.notesDir, projectName);
       pi.events.emit("journal:loaded", { projectName, notes: result.notes });
+
+      if (result.exists) {
+        const t = ctx.ui.theme;
+        const notesPath = result.path;
+        const parts: string[] = [
+          `${t.fg("mdHeading", "[Journal]")} ${t.fg("dim", `${result.notes.length} notes`)} ${t.fg("dim", `file://${notesPath}`)}`,
+        ];
+        if (result.notes.length > 0) {
+          parts.push(result.notes.map((n) => t.fg("dim", `  ${n.filename}`)).join("\n"));
+        }
+
+        if (result.todo) {
+          const lines = result.todo.split("\n");
+          const preview = lines.slice(0, 30).join("\n");
+          const todoPath = `${notesPath}/TODO.md`;
+          const suffix = lines.length > 30 ? `\n${t.fg("dim", `[and ${lines.length - 30} more lines]`)}` : "";
+          parts.push(
+            `${t.fg("mdHeading", "[TODO]")} ${t.fg("dim", `file://${todoPath}`)}\n${t.fg("dim", preview)}${suffix}`,
+          );
+        }
+
+        ctx.ui.notify(parts.join("\n\n"), "info");
+      }
     }
   }
 
   pi.on("session_start", async (_event, ctx) => {
     firstPrompt = true;
     nudged = false;
-    await loadContext(ctx.cwd);
+    await loadContext(ctx.cwd, ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     firstPrompt = true;
     nudged = false;
-    await loadContext(ctx.cwd);
+    await loadContext(ctx.cwd, ctx);
   });
 
   pi.on("before_agent_start", async () => {
