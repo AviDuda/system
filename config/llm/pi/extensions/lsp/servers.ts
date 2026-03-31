@@ -148,6 +148,13 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     fileTypes: [".zig"],
     rootMarkers: ["build.zig", "build.zig.zon"],
   },
+
+  "sourcekit-lsp": {
+    command: "sourcekit-lsp",
+    args: [],
+    fileTypes: [".swift"],
+    rootMarkers: ["Package.swift", "*.xcodeproj", "*.xcworkspace"],
+  },
 };
 
 export interface DetectedServer {
