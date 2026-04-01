@@ -18,6 +18,10 @@ export interface FetchResult {
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Serialize fetches to prevent concurrent navigations from clobbering each other.
+// All fetches share one tab; the mutex ensures only one runs at a time.
+let fetchQueue: Promise<void> = Promise.resolve();
+
 export class FetchError extends Error {
   constructor(message: string) {
     super(message);
@@ -71,20 +75,41 @@ export async function fetchPage(
   url: string,
   options: { cwd: string; headed?: boolean; signal?: AbortSignal },
 ): Promise<FetchResult> {
+  // Serialize: chain onto the queue so only one fetch navigates at a time.
+  let resolve!: () => void;
+  const gate = new Promise<void>((r) => (resolve = r));
+  const previous = fetchQueue;
+  fetchQueue = gate;
+  await previous;
+
+  try {
+    return await fetchPageInner(url, options);
+  } finally {
+    resolve();
+  }
+}
+
+async function fetchPageInner(
+  url: string,
+  options: { cwd: string; headed?: boolean; signal?: AbortSignal },
+): Promise<FetchResult> {
   const session = sessionName(options.cwd);
   const sessionArgs = ["--session", session];
   const headedArgs = options.headed ? ["--headed"] : [];
   const baseArgs = [...sessionArgs, ...headedArgs];
 
-  // Navigate
-  const openResult = await run([...baseArgs, "open", url], {
+  // Navigate (safe: mutex ensures no concurrent navigation)
+  await run([...baseArgs, "open", url], {
     timeout: 30_000,
     signal: options.signal,
   });
 
-  // Extract title from open output: "✓ Page Title\n  url"
-  const titleMatch = stripAnsi(openResult.stdout).match(/✓\s+(.+)/);
-  const title = titleMatch?.[1]?.trim() ?? "";
+  // Get title
+  const titleResult = await run([...sessionArgs, "get", "title"], {
+    timeout: 5_000,
+    signal: options.signal,
+  });
+  const title = stripAnsi(titleResult.stdout).trim();
 
   // Get text content
   const textResult = await run([...sessionArgs, "get", "text", "body"], {
