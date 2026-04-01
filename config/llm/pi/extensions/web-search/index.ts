@@ -240,12 +240,20 @@ export default function (pi: ExtensionAPI) {
 
         const { text, truncated } = truncateContent(result.content, 100_000);
         const titleLine = result.title ? `# ${result.title}\n\n` : "";
+        const redirectNote = result.url !== params.url ? `[Redirected to: ${result.url}]\n\n` : "";
         const session = sessionName(ctx.cwd);
         const sessionNote = `\n\n[Browser session: ${session} -- use \`agent-browser --session ${session}\` for further interaction]`;
 
         return {
-          content: [{ type: "text", text: `${titleLine}${text}${sessionNote}` }],
-          details: { url: params.url, title: result.title, truncated, charCount: result.content.length, session },
+          content: [{ type: "text", text: `${titleLine}${redirectNote}${text}${sessionNote}` }],
+          details: {
+            url: result.url,
+            requestedUrl: params.url,
+            title: result.title,
+            truncated,
+            charCount: result.content.length,
+            session,
+          },
         };
       } catch (err) {
         if (err instanceof FetchError) {

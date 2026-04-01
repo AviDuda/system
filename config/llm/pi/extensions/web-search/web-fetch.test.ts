@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sessionName, stripAnsi, truncateContent } from "./web-fetch";
+import { cleanMarkdown, sessionName, stripAnsi, truncateContent } from "./web-fetch";
 
 describe("sessionName", () => {
   test("derives from basename", () => {
@@ -42,5 +42,37 @@ describe("truncateContent", () => {
   test("exact limit is not truncated", () => {
     const result = truncateContent("a".repeat(100), 100);
     expect(result.truncated).toBe(false);
+  });
+});
+
+describe("cleanMarkdown", () => {
+  test("strips data: URI images", () => {
+    const input = "# Title\n\n![icon](data:image/svg+xml;base64,abc123)\n\nContent";
+    expect(cleanMarkdown(input)).toBe("# Title\n\nContent");
+  });
+
+  test("strips data: URI image links (non-image reference)", () => {
+    const input = "# Heading\n\n[](data:image/svg+xml;base64,abc123)\n\nText";
+    expect(cleanMarkdown(input)).toBe("# Heading\n\nText");
+  });
+
+  test("strips nested image links (GitHub pattern)", () => {
+    const input = "[![alt](https://example.com/img.png)](https://example.com/link)";
+    expect(cleanMarkdown(input)).toBe("");
+  });
+
+  test("collapses excessive blank lines", () => {
+    const input = "Line 1\n\n\n\n\nLine 2";
+    expect(cleanMarkdown(input)).toBe("Line 1\n\nLine 2");
+  });
+
+  test("preserves normal markdown", () => {
+    const input = "# Title\n\n- item 1\n- item 2\n\n[link](https://example.com)";
+    expect(cleanMarkdown(input)).toBe(input);
+  });
+
+  test("preserves code blocks", () => {
+    const input = "```c\nint main() {}\n```";
+    expect(cleanMarkdown(input)).toBe(input);
   });
 });

@@ -6,7 +6,7 @@
  * Session is named per-project to avoid collisions.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { basename } from "node:path";
 
 export interface FetchResult {
@@ -40,12 +40,13 @@ export function sessionName(cwd: string): string {
 
 function run(
   args: string[],
-  options: { timeout?: number; signal?: AbortSignal } = {},
+  options: { timeout?: number; signal?: AbortSignal; maxBuffer?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const timeout = options.timeout ?? 30_000;
+  const maxBuffer = options.maxBuffer ?? 5 * 1024 * 1024; // 5MB default
 
   return new Promise((resolve, reject) => {
-    const child = execFile("agent-browser", args, { timeout, env: process.env }, (error, stdout, stderr) => {
+    const child = execFile("agent-browser", args, { timeout, maxBuffer, env: process.env }, (error, stdout, stderr) => {
       if (error) {
         if (options.signal?.aborted) {
           reject(new FetchError("Fetch aborted"));
@@ -104,25 +105,81 @@ async function fetchPageInner(
     signal: options.signal,
   });
 
-  // Get title
-  const titleResult = await run([...sessionArgs, "get", "title"], {
-    timeout: 5_000,
-    signal: options.signal,
-  });
+  // Get title and final URL (after redirects) in parallel
+  const [titleResult, urlResult] = await Promise.all([
+    run([...sessionArgs, "get", "title"], { timeout: 5_000, signal: options.signal }),
+    run([...sessionArgs, "get", "url"], { timeout: 5_000, signal: options.signal }),
+  ]);
   const title = stripAnsi(titleResult.stdout).trim();
+  const finalUrl = stripAnsi(urlResult.stdout).trim();
 
-  // Get text content
-  const textResult = await run([...sessionArgs, "get", "text", "body"], {
-    timeout: 15_000,
-    signal: options.signal,
-  });
-
-  const content = stripAnsi(textResult.stdout).trim();
+  // Get HTML and convert to markdown via pandoc for structured output
+  // (preserves headers, code blocks, links, lists).
+  // Falls back to plain text extraction if pandoc fails.
+  let content: string;
+  try {
+    const htmlResult = await run([...sessionArgs, "get", "html", "body"], {
+      timeout: 15_000,
+      signal: options.signal,
+    });
+    content = await htmlToMarkdown(htmlResult.stdout, options.signal);
+  } catch {
+    const textResult = await run([...sessionArgs, "get", "text", "body"], {
+      timeout: 15_000,
+      signal: options.signal,
+    });
+    content = stripAnsi(textResult.stdout).trim();
+  }
 
   // Reset idle timer
   resetIdleTimer(options.cwd);
 
-  return { url, title, content };
+  return { url: finalUrl, title, content };
+}
+
+/** Convert HTML to markdown via pandoc. Strips data: URI images. */
+function htmlToMarkdown(html: string, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pandoc", ["-f", "html", "-t", "commonmark-raw_html", "--wrap=none"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 15_000,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+
+    child.on("error", (err) => reject(new FetchError(`pandoc failed: ${err.message}`)));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new FetchError(`pandoc exited ${code}: ${stderr}`));
+        return;
+      }
+      resolve(cleanMarkdown(stdout));
+    });
+
+    if (signal) {
+      signal.addEventListener("abort", () => child.kill(), { once: true });
+    }
+
+    child.stdin.write(html);
+    child.stdin.end();
+  });
+}
+
+/** Clean up pandoc markdown output: strip data: URI images, collapse blank lines. */
+export function cleanMarkdown(md: string): string {
+  return (
+    md
+      // Strip image links with data: URIs (e.g. GitHub anchor SVGs)
+      .replace(/!?\[(?:[^\]]*)\]\(data:[^)]+\)/g, "")
+      // Strip image links wrapping other images (common GitHub pattern)
+      .replace(/\[!\[(?:[^\]]*)\]\([^)]+\)\]\([^)]+\)/g, "")
+      // Collapse 3+ blank lines to 2
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 function resetIdleTimer(cwd: string): void {
