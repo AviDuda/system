@@ -29,18 +29,125 @@ in
     - Only use write for genuinely new files or when the entire file content is changing.
   '';
 
+  # Custom model providers (LM Studio local models, etc.)
+  # Pi reloads this on /model -- no restart needed.
+  home.file.".pi/agent/models.json".text = builtins.toJSON {
+    providers = {
+      lmstudio = {
+        baseUrl = "http://127.0.0.1:1234/v1";
+        api = "openai-completions";
+        apiKey = "lm-studio";
+        compat = {
+          supportsDeveloperRole = false;
+          supportsReasoningEffort = false;
+          thinkingFormat = "qwen-chat-template";
+        };
+        models = [
+          {
+            id = "qwen/qwen3.5-9b";
+            name = "Qwen3.5 9B (Local)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 8192;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+          }
+        ];
+      };
+      # OpenRouter: backup models for when Claude is down.
+      # ZDR enforced at account level -- data never retained by providers.
+      # Two providers with separate API keys for cost tracking:
+      #   openrouter-main: backup main models (higher spend cap)
+      #   openrouter-sidecar: cheap fallback for explain/draft roles (tight cap)
+      # Create keys: security add-generic-password -s openrouter-pi-main -a $USER -w 'sk-or-...'
+      #              security add-generic-password -s openrouter-pi-sidecar -a $USER -w 'sk-or-...'
+      # Model info: curl -s https://openrouter.ai/api/v1/models | jq '.data[] | select(.id == "MODEL_ID") | {id, context_length, max_completion: .top_provider.max_completion_tokens, pricing}'
+      openrouter-main = {
+        baseUrl = "https://openrouter.ai/api/v1";
+        api = "openai-completions";
+        apiKey = "!security find-generic-password -s openrouter-pi-main -w";
+        models = [
+          # Auto-router: picks best model per prompt from allowed set.
+          # Configure allowed models in OpenRouter Settings > Plugins > Auto Router.
+          # Suggested patterns: z-ai/*, deepseek/*, moonshotai/*, qwen/*
+          {
+            id = "openrouter/auto";
+            name = "Auto (OpenRouter)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 2000000;
+            maxTokens = 16384;
+            cost = { input = 0.5; output = 2; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "z-ai/glm-5";
+            name = "GLM 5 (OpenRouter)";
+            reasoning = false;
+            input = [ "text" ];
+            contextWindow = 80000;
+            maxTokens = 16384;
+            cost = { input = 0.72; output = 2.3; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "moonshotai/kimi-k2.5";
+            name = "Kimi K2.5 (OpenRouter)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 65535;
+            cost = { input = 0.42; output = 2.2; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "deepseek/deepseek-v3.2";
+            name = "DeepSeek V3.2 (OpenRouter)";
+            reasoning = false;
+            input = [ "text" ];
+            contextWindow = 163840;
+            maxTokens = 16384;
+            cost = { input = 0.26; output = 0.38; cacheRead = 0; cacheWrite = 0; };
+          }
+        ];
+      };
+      openrouter-sidecar = {
+        baseUrl = "https://openrouter.ai/api/v1";
+        api = "openai-completions";
+        apiKey = "!security find-generic-password -s openrouter-pi-sidecar -w";
+        models = [
+          {
+            id = "deepseek/deepseek-v3.2";
+            name = "DeepSeek V3.2 (Sidecar)";
+            reasoning = false;
+            input = [ "text" ];
+            contextWindow = 163840;
+            maxTokens = 4096;
+            cost = { input = 0.26; output = 0.38; cacheRead = 0; cacheWrite = 0; };
+          }
+        ];
+      };
+    };
+  };
+
   # Model roles config for sidecar LLM calls (used by permission gate explain, draft suggestion, etc.)
   # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high),
   # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
+  # Haiku first: fast and reliable for sidecar tasks. Local Qwen3.5-9B tested but too
+  # slow for permission gate (~10s/call) and similar quality to Haiku for drafts.
+  # Fallback: OpenRouter DeepSeek V3.2 (cheap, ZDR), then local as last resort.
   home.file.".pi/agent/roles.json".text = builtins.toJSON {
     explain = {
+      maxTokens = 256;
       models = [
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
+        { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
+        { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
       ];
     };
     draft = {
+      maxTokens = 128;
       models = [
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
+        { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
+        { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
       ];
     };
   };

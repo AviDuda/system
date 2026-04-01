@@ -51,6 +51,8 @@ export interface ModelEntry {
 
 export interface RoleConfig {
   models: ModelEntry[];
+  /** Max output tokens for this role. Applied to all models in the chain. */
+  maxTokens?: number;
 }
 
 export interface RolesFile {
@@ -208,6 +210,7 @@ export async function sidecarComplete(
         headers: auth.headers,
         reasoning: reasoning as PiThinkingLevel | undefined,
         signal: options?.signal,
+        maxTokens: role.maxTokens,
       });
 
       const cost = message.usage.cost.total;
