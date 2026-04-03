@@ -1,5 +1,10 @@
 # NixOS VM in UTM on Apple Silicon (aarch64)
-{ config, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 {
   imports = [
     ../../profiles/personal.nix
@@ -60,6 +65,28 @@
 
   # Enable AT-SPI2 D-Bus accessibility service
   services.gnome.at-spi2-core.enable = true;
+
+  # Disable screen locking and screensaver -- dev VM, no need
+  # GNOME
+  hm.dconf.settings."org/gnome/desktop/screensaver" = {
+    lock-enabled = false;
+    idle-activation-enabled = false;
+  };
+  hm.dconf.settings."org/gnome/desktop/session" = {
+    idle-delay = 0;
+  };
+  # KDE
+  hm.xdg.configFile."kscreenlockerrc".text = ''
+    [Daemon]
+    Autolock=false
+    LockOnResume=false
+  '';
+
+  # Suppress IBus autostart -- pulled in by GNOME/KDE deps but not needed
+  # (no CJK input), and spams a Wayland config warning on every login
+  environment.etc."xdg/autostart/ibus-daemon.desktop".source = lib.mkForce (
+    pkgs.writeText "ibus-daemon.desktop" ""
+  );
 
   # VM guest services
   services.qemuGuest.enable = true;
