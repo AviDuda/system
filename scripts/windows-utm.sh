@@ -35,13 +35,13 @@ SKIP_DOWNLOAD=false
 # URLs
 # Resolved dynamically via GitHub API (version is in the filename)
 VIRTIO_REPO="qemus/virtiso-arm"
-SPICE_TOOLS_URL="https://www.spice-space.org/download/windows/spice-guest-tools/spice-guest-tools-latest.exe"
+UTM_GUEST_TOOLS_URL="https://getutm.app/downloads/utm-guest-tools-latest.iso"
 # massgrave.dev maintains a markdown file with current direct Microsoft CDN links.
 # We parse this at runtime to always get the latest build URL.
 MASGRAVE_ARM_LINKS="https://raw.githubusercontent.com/massgravel/massgrave.dev/main/docs/windows_arm_links.md"
-# UTM guest tools has SPICE tools + VirtIO guest agent bundled, but also ships
-# its own autounattend.xml which conflicts with ours (UTM issue #7476).
-# So we download VirtIO drivers separately and add SPICE tools to our ISO.
+# We extract the UTM guest tools exe from their ISO (which also ships an
+# autounattend.xml that would conflict with ours -- UTM issue #7476).
+# VirtIO ARM64 drivers are downloaded separately for the install phase.
 
 usage() {
     sed -n '/^# Usage:/,/^[^#]/p' "$0" | head -n -1 | sed 's/^# \?//'
@@ -155,15 +155,33 @@ download_virtio_iso() {
     echo "  Done: $(du -h "$dest" | cut -f1)"
 }
 
-# Download SPICE guest tools installer
-download_spice_tools() {
+# Download UTM guest tools exe (extracted from their ISO).
+# This includes VirtIO GPU display driver + SPICE agent for dynamic resolution
+# and clipboard sharing.
+download_utm_guest_tools() {
     local dest="$1"
     if [[ -f "$dest" ]] && $SKIP_DOWNLOAD; then
-        echo "Using cached SPICE tools: $dest"
+        echo "Using cached UTM guest tools: $dest"
         return 0
     fi
-    echo "Downloading SPICE guest tools..."
-    curl --progress-bar --fail -L -o "$dest" "$SPICE_TOOLS_URL"
+    echo "Downloading UTM guest tools..."
+    local iso="$WORK_DIR/utm-guest-tools.iso"
+    curl --progress-bar --fail -L -o "$iso" "$UTM_GUEST_TOOLS_URL"
+
+    # Extract the exe from the ISO
+    local mount="$WORK_DIR/utm-gt-mount"
+    mkdir -p "$mount"
+    hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$iso" >/dev/null 2>&1
+    local exe
+    exe="$(find "$mount" -maxdepth 1 -name 'utm-guest-tools-*.exe' -print -quit)"
+    if [[ -z "$exe" ]]; then
+        hdiutil detach "$mount" >/dev/null 2>&1 || true
+        echo "ERROR: Could not find utm-guest-tools exe in ISO."
+        exit 1
+    fi
+    cp "$exe" "$dest"
+    hdiutil detach "$mount" >/dev/null 2>&1 || true
+    rm -f "$iso"
     echo "  Done: $(du -h "$dest" | cut -f1)"
 }
 
@@ -174,7 +192,7 @@ download_spice_tools() {
 # - SPICE guest tools installer
 build_unattended_iso() {
     local virtio_iso="$1"
-    local spice_tools="$2"
+    local utm_guest_tools="$2"
     local output_iso="$3"
 
     echo "Building unattended installation ISO..."
@@ -215,8 +233,8 @@ build_unattended_iso() {
 
     hdiutil detach "$virtio_mount" >/dev/null 2>&1 || true
 
-    # Copy SPICE guest tools
-    cp "$spice_tools" "$staging/spice-guest-tools.exe"
+    # Copy UTM guest tools (VirtIO drivers + SPICE agent for resolution + clipboard)
+    cp "$utm_guest_tools" "$staging/utm-guest-tools.exe"
 
     # Add startup.nsh -- tells the UEFI shell to boot from the Windows ISO.
     # Without this, UEFI shows "Press any key to boot from CD" which times out
@@ -370,15 +388,15 @@ main() {
     local virtio_iso="$WORK_DIR/virtio-win-arm64.iso"
     download_virtio_iso "$virtio_iso"
 
-    # Step 3: Download SPICE guest tools
-    local spice_tools="$WORK_DIR/spice-guest-tools.exe"
-    download_spice_tools "$spice_tools"
+    # Step 3: Download UTM guest tools (display driver + SPICE agent)
+    local utm_guest_tools="$WORK_DIR/utm-guest-tools.exe"
+    download_utm_guest_tools "$utm_guest_tools"
 
     # Step 4: Build unattended ISO
     local unattended_iso="$WORK_DIR/unattended.iso"
-    build_unattended_iso "$virtio_iso" "$spice_tools" "$unattended_iso"
+    build_unattended_iso "$virtio_iso" "$utm_guest_tools" "$unattended_iso"
 
-    # Step 5: Create UTM VM
+    # Step 6: Create UTM VM
     create_utm_vm "$win_iso" "$unattended_iso"
 
     # Clean up staging dir (downloaded ISOs kept in WORK_DIR for ETag caching)

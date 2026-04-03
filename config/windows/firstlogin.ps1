@@ -52,12 +52,24 @@ if (-not $virtioDir) {
         }
     }
 
-    # --- Install SPICE guest tools if present ---
-    $spiceInstaller = Join-Path $virtioDir "spice-guest-tools.exe"
-    if (Test-Path $spiceInstaller) {
-        Write-Host "`n=== Installing SPICE guest tools ==="
-        Start-Process -FilePath $spiceInstaller -ArgumentList "/S" -Wait
-        Write-Host "SPICE guest tools installed."
+    # --- Install UTM guest tools (VirtIO drivers + SPICE agent) ---
+    # Prefer UTM guest tools over standalone SPICE tools -- UTM tools include
+    # the display driver for dynamic resolution + clipboard sharing.
+    # Note: on Windows 11 24H2/25H2, the display driver may cause a black screen
+    # on first reboot. If that happens, reboot again and it should recover.
+    $utmInstaller = Join-Path $virtioDir "utm-guest-tools.exe"
+    if (Test-Path $utmInstaller) {
+        Write-Host "`n=== Installing UTM guest tools ==="
+        Start-Process -FilePath $utmInstaller -ArgumentList "/S" -Wait
+        Write-Host "UTM guest tools installed."
+    }
+
+    # --- Start SPICE VDAgent service (clipboard + dynamic resolution) ---
+    if (Get-Service vdservice -ErrorAction SilentlyContinue) {
+        Write-Host "`n=== Starting SPICE VDAgent ==="
+        Set-Service vdservice -StartupType Automatic
+        Start-Service vdservice -ErrorAction SilentlyContinue
+        Write-Host "SPICE VDAgent started."
     }
 
     # --- Install QEMU Guest Agent if present ---
