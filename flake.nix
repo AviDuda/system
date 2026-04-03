@@ -129,6 +129,38 @@
             inputs.sops-nix.darwinModules.sops
           ];
         };
+
+      # Helper to create NixOS configurations with common settings
+      mkNixosHost =
+        {
+          machine,
+          system ? "aarch64-linux",
+        }:
+        let
+          pkgs-unstable = pkgs-unstable-for system;
+        in
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          specialArgs = { inherit inputs self pkgs-unstable; };
+          modules = [
+            machine
+            home-manager.nixosModules.home-manager
+            (
+              { config, ... }:
+              {
+                home-manager.useUserPackages = true;
+                home-manager.useGlobalPkgs = true;
+                home-manager.backupFileExtension = "backup";
+                home-manager.extraSpecialArgs = {
+                  inherit pkgs-unstable;
+                  inherit (config) systemFlakeDir;
+                };
+              }
+            )
+            lix-module.nixosModules.default
+            inputs.sops-nix.nixosModules.sops
+          ];
+        };
     in
     {
       # nix fmt
@@ -136,6 +168,10 @@
 
       darwinConfigurations."procyonid-trailblazer" = mkDarwinHost {
         machine = ./machines/procyonid-trailblazer;
+      };
+
+      nixosConfigurations."phantom-tanuki" = mkNixosHost {
+        machine = ./machines/phantom-tanuki;
       };
     };
 }
