@@ -74,6 +74,45 @@ nix repl --expr 'let
   { inherit flake pkgs; inherit (pkgs) lib; configs = flake.darwinConfigurations // flake.nixosConfigurations; }'
 """
 
+[tasks.nixos-build-image]
+alias = "nbi"
+description = "Build a NixOS VM disk image (usage: mise nbi -- [hostname] [variant])"
+depends = ["_check-git"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+host="${1:?Usage: mise nbi -- <hostname> [variant]}"
+variant="${2:-qemu-efi}"
+# GC the builder before building -- with auto-GC disabled, old builds accumulate
+echo "Collecting garbage on linux-builder..."
+sudo ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o IdentitiesOnly=yes -i /etc/nix/builder_ed25519 -p 31022 \
+    builder@localhost 'nix-collect-garbage' 2>/dev/null || true
+
+echo "Building $variant image for $host..."
+nix build ".#nixosConfigurations.$host.config.system.build.images.$variant" --print-build-logs
+echo ""
+echo "Image built:"
+ls -lh result/
+"""
+
+[tasks.nixos-utm]
+alias = "nbu"
+description = "Build NixOS image and create/replace UTM VM (usage: mise nbu -- [hostname] [variant])"
+depends = ["_check-git"]
+run = "./scripts/nixos-utm.sh"
+
+[tasks.nixos-remote-switch]
+alias = "nrs"
+description = "Deploy NixOS config to a remote host via SSH (usage: mise nrs -- <hostname> [target])"
+depends = ["_check-git"]
+run = "./scripts/nixos-switch-remote.sh"
+
+[tasks.nixos-builder-reset]
+alias = "nbr"
+description = "Reset the linux-builder VM (recreates disk after config changes)"
+run = "./scripts/nixos-builder-reset.sh"
+
 [tasks.gc]
 description = "Garbage-collect the Nix store (usage: mise gc -- 60)"
 run = """
