@@ -108,6 +108,16 @@ description = "Deploy NixOS config to a remote host via SSH (usage: mise nrs -- 
 depends = ["_check-git"]
 run = "./scripts/nixos-switch-remote.sh"
 
+[tasks.nixos-builder-start]
+alias = "nbs"
+description = "Start the linux-builder VM"
+run = "sudo launchctl bootstrap system /Library/LaunchDaemons/org.nixos.linux-builder.plist 2>/dev/null || echo 'Already running'"
+
+[tasks.nixos-builder-stop]
+alias = "nbt"
+description = "Stop the linux-builder VM (frees ~16GB RAM)"
+run = "sudo launchctl bootout system/org.nixos.linux-builder 2>/dev/null || echo 'Already stopped'"
+
 [tasks.nixos-builder-reset]
 alias = "nbr"
 description = "Reset the linux-builder VM (recreates disk after config changes)"

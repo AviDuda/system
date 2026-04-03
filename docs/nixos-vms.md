@@ -21,6 +21,8 @@ The linux-builder is a background NixOS VM managed by nix-darwin that acts as a 
 | `mise nixos-remote-switch -- <host> [target]` | `mise nrs` | Deploy config changes via SSH (fast, seconds) |
 | `mise nixos-build-image -- <host> [variant]` | `mise nbi` | Build a disk image only |
 | `mise nixos-utm -- <host> [variant]` | `mise nbu` | Build image + create/replace UTM VM (slow, initial setup) |
+| `mise nixos-builder-stop` | `mise nbt` | Stop the linux-builder (frees ~16GB RAM) |
+| `mise nixos-builder-start` | `mise nbs` | Start the linux-builder |
 | `mise nixos-builder-reset` | `mise nbr` | Reset the linux-builder (recreate disk after config changes) |
 
 Examples:
@@ -75,6 +77,17 @@ mise nbr                 # Reset builder (deletes old disk, recreates)
 ```
 
 The disk image lives at `/var/lib/linux-builder/nixos.qcow2` (sparse qcow2 -- only uses actual written size on disk).
+
+### Starting and stopping
+
+The builder uses ~16GB RAM and runs 24/7 by default. Stop it when not needed:
+
+```bash
+mise nbt    # stop (frees RAM)
+mise nbs    # start (needed before nbi/nbu/nrs)
+```
+
+The `nrs`, `nbi`, and `nbu` tasks do not auto-start the builder -- you'll get a build error if it's stopped.
 
 ### Builder GC
 
