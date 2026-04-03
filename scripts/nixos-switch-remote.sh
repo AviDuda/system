@@ -7,6 +7,13 @@ ssh_target="avi@$target"
 ssh_key="$HOME/.ssh/nixos-vm"
 ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i "$ssh_key")
 
+# Check target is reachable before building (fail fast)
+echo "Checking $target is reachable..."
+if ! ssh "${ssh_opts[@]}" -o ConnectTimeout=5 "$ssh_target" true 2>/dev/null; then
+    echo "ERROR: Cannot reach $target. Is the VM running?" >&2
+    exit 1
+fi
+
 echo "Building NixOS config '$host'..."
 toplevel=$(nix build ".#nixosConfigurations.$host.config.system.build.toplevel" --print-out-paths --print-build-logs)
 
@@ -19,3 +26,6 @@ ssh -tt "${ssh_opts[@]}" "$ssh_target" "sudo nix-env -p /nix/var/nix/profiles/sy
 
 echo ""
 echo "Done. Config '$host' applied to $target."
+
+# Stop the linux-builder to free resources (~8GB RAM)
+mise run nixos-builder-stop

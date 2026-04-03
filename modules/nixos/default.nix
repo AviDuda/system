@@ -5,5 +5,6 @@
     ../common.nix
     ./core.nix
     ./graphical.nix
+    ./spice-clipboard.nix
   ];
 }

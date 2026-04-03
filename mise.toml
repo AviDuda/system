@@ -77,7 +77,8 @@ nix repl --expr 'let
 [tasks.nixos-build-image]
 alias = "nbi"
 description = "Build a NixOS VM disk image (usage: mise nbi -- [hostname] [variant])"
-depends = ["_check-git"]
+depends = ["_check-git", "_ensure-builder"]
+raw = true
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -94,18 +95,23 @@ nix build ".#nixosConfigurations.$host.config.system.build.images.$variant" --pr
 echo ""
 echo "Image built:"
 ls -lh result/
+
+# Stop the linux-builder to free resources (~8GB RAM)
+mise run nixos-builder-stop
 """
 
 [tasks.nixos-utm]
 alias = "nbu"
 description = "Build NixOS image and create/replace UTM VM (usage: mise nbu -- [hostname] [variant])"
-depends = ["_check-git"]
+depends = ["_check-git", "_ensure-builder"]
+raw = true
 run = "./scripts/nixos-utm.sh"
 
 [tasks.nixos-remote-switch]
 alias = "nrs"
 description = "Deploy NixOS config to a remote host via SSH (usage: mise nrs -- <hostname> [target])"
-depends = ["_check-git"]
+depends = ["_check-git", "_ensure-builder"]
+raw = true
 run = "./scripts/nixos-switch-remote.sh"
 
 [tasks.nixos-builder-start]
@@ -136,6 +142,11 @@ nix-collect-garbage --delete-older-than "${age}d"
 alias = "ts-push"
 description = "Push Tailscale ACL policy to the admin console"
 run = "./tailscale/push-acl.sh"
+
+[tasks._ensure-builder]
+hide = true
+description = "Ensure the linux-builder VM is running"
+run = "./scripts/ensure-linux-builder.sh"
 
 [tasks._check-git]
 hide = true

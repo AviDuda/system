@@ -13,6 +13,9 @@
   # Trust the user for remote deployments (nix copy from macOS host)
   nix.settings.trusted-users = [ "avi" ];
 
+  # NOPASSWD sudo -- it's a local dev VM, no need for password prompts
+  security.sudo.wheelNeedsPassword = false;
+
   # Both DEs: GNOME (Wayland-only) and KDE (X11 + Wayland sessions at login)
   desktop.environments = [
     "gnome"
@@ -43,8 +46,9 @@
     vim
     swiftPackages.swift # Swift toolchain
 
-    # VM guest tools
-    spice-vdagent # mouse integration, clipboard sharing, dynamic resolution
+    # Clipboard tools (for testing)
+    wl-clipboard # wl-copy, wl-paste for Wayland
+    xclip # X11 clipboard access (works with XWayland)
 
     # Useful in VM
     htop
@@ -58,8 +62,10 @@
   services.gnome.at-spi2-core.enable = true;
 
   # VM guest services
-  services.spice-vdagentd.enable = true;
   services.qemuGuest.enable = true;
+
+  # SPICE clipboard sharing (vdagent user service + Wayland→X11 bridge)
+  services.spice-clipboard.enable = true;
 
   # Enable SSH for easy access from host
   # mDNS so the VM is reachable as phantom-tanuki.local from the host

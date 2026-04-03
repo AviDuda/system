@@ -58,3 +58,6 @@ APPLESCRIPT
 
 echo ""
 echo "VM '$host' created in UTM. Open UTM to start it."
+
+# Stop the linux-builder to free resources (~8GB RAM)
+mise run nixos-builder-stop
