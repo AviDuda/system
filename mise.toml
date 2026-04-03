@@ -114,6 +114,12 @@ depends = ["_check-git", "_ensure-builder"]
 raw = true
 run = "./scripts/nixos-switch-remote.sh"
 
+[tasks.windows-utm]
+alias = "nwu"
+description = "Download Windows 11 ARM64 and create UTM VM (usage: mise nwu -- [options])"
+raw = true
+run = "./scripts/windows-utm.sh"
+
 [tasks.nixos-builder-start]
 alias = "nbs"
 description = "Start the linux-builder VM"

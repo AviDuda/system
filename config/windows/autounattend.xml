@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unattended Windows 11 ARM64 installation for UTM VMs.
+  - Installs Windows 11 Pro with local account (no Microsoft account)
+  - Bypasses TPM/SecureBoot/RAM checks
+  - Loads VirtIO storage + network drivers from second CD-ROM
+  - Skips OOBE bloat (Cortana, telemetry, etc.)
+
+  Placeholders replaced by windows-utm.sh:
+    __USERNAME__  - local account name
+    __PASSWORD__  - local account password
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend"
+          xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+
+  <!-- ============================================================
+       Pass 1: windowsPE — runs in the installer environment
+       ============================================================ -->
+  <settings pass="windowsPE">
+    <!-- Language / locale -->
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <!-- Windows Setup: product key, image selection, disk layout, driver paths -->
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <!-- Generic Windows 11 Pro key (does not activate, just selects edition) -->
+      <UserData>
+        <ProductKey>
+          <Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key>
+          <WillShowUI>Never</WillShowUI>
+        </ProductKey>
+        <AcceptEula>true</AcceptEula>
+      </UserData>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key>
+              <Value>Windows 11 Pro</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>3</PartitionID>
+          </InstallTo>
+        </OSImage>
+      </ImageInstall>
+
+      <!-- Disk configuration: EFI System + MSR + Windows -->
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <!-- EFI System Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Size>260</Size>
+              <Type>EFI</Type>
+            </CreatePartition>
+            <!-- Microsoft Reserved Partition -->
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Size>16</Size>
+              <Type>MSR</Type>
+            </CreatePartition>
+            <!-- Windows partition (uses remaining space) -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
+              <Extend>true</Extend>
+              <Type>Primary</Type>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Format>FAT32</Format>
+              <Label>System</Label>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order>
+              <PartitionID>3</PartitionID>
+              <Format>NTFS</Format>
+              <Label>Windows</Label>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <!-- Load VirtIO drivers from the unattended CD-ROM.
+           Drive letter is unpredictable in WindowsPE, so we list D: through G:
+           to cover common assignments. Invalid paths are silently ignored. -->
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+          <Path>D:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+          <Path>D:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>D:\viogpudo\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
+          <Path>E:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5">
+          <Path>E:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6">
+          <Path>E:\viogpudo\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7">
+          <Path>F:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8">
+          <Path>F:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9">
+          <Path>F:\viogpudo\w11\ARM64</Path>
+        </PathAndCredentials>
+      </DriverPaths>
+
+      <!-- Bypass hardware requirement checks -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <!-- ============================================================
+       Pass 4: specialize — runs after image is applied, before OOBE
+       ============================================================ -->
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <RunSynchronous>
+        <!-- Bypass OOBE network requirement -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <!-- Disable Windows Consumer Features (suggested apps, etc.) -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <ComputerName>WINDOWS-VM</ComputerName>
+    </component>
+  </settings>
+
+  <!-- ============================================================
+       Pass 7: oobeSystem — Out of Box Experience
+       ============================================================ -->
+  <settings pass="oobeSystem">
+    <!-- Set locale to suppress region/keyboard prompts during OOBE -->
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+
+
+
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>__USERNAME__</Name>
+            <Group>Administrators</Group>
+            <Password>
+              <Value>__PASSWORD__</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>__USERNAME__</Username>
+        <Password>
+          <Value>__PASSWORD__</Value>
+          <PlainText>true</PlainText>
+        </Password>
+        <LogonCount>1</LogonCount>
+      </AutoLogon>
+
+      <!-- Run firstlogin.ps1 on first logon.
+           Search D:-G: for the unattended drive since letter is unpredictable. -->
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "foreach ($d in 'D','E','F','G') { $p = \"${d}:\firstlogin.ps1\"; if (Test-Path $p) { &amp; $p; break } }"</CommandLine>
+          <Description>Post-install setup</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
