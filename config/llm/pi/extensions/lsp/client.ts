@@ -11,6 +11,13 @@ import * as path from "node:path";
 
 // ── Types ──
 
+/** Glob pattern registered by a server for file watching */
+export interface RegisteredWatcher {
+  globPattern: string;
+  /** Bitmask: 1=Create, 2=Change, 4=Delete. Default 7 (all). */
+  kind: number;
+}
+
 export interface LspClient {
   /** Server process */
   proc: ChildProcess;
@@ -24,6 +31,8 @@ export interface LspClient {
   diagnostics: Map<string, Diagnostic[]>;
   /** Monotonic version counter for diagnostics (increments on any publish) */
   diagnosticsVersion: number;
+  /** Glob patterns registered by the server via client/registerCapability */
+  registeredWatchers: RegisteredWatcher[];
   /** Send a JSON-RPC request and wait for response */
   request: (method: string, params?: unknown) => Promise<unknown>;
   /** Send a JSON-RPC notification (no response expected) */
@@ -134,6 +143,7 @@ function createTransport(proc: ChildProcess) {
   let buffer = "";
   let contentLength = -1;
   const notificationHandlers = new Map<string, (params: unknown) => void>();
+  const requestHandlers = new Map<string, (params: unknown) => unknown>();
 
   const stdout = proc.stdout;
   if (!stdout) throw new Error("LSP process has no stdout");
@@ -162,7 +172,7 @@ function createTransport(proc: ChildProcess) {
       try {
         const msg = JSON.parse(body) as JsonRpcMessage;
         if (msg.id !== undefined && !msg.method) {
-          // Response
+          // Response to our request
           const req = pending.get(msg.id);
           if (req) {
             pending.delete(msg.id);
@@ -172,14 +182,23 @@ function createTransport(proc: ChildProcess) {
               req.resolve(msg.result);
             }
           }
-        } else if (msg.method) {
-          // Notification or server request
-          const handler = notificationHandlers.get(msg.method);
-          if (handler) handler(msg.params);
-          // Server requests (with id) that we don't handle -- respond with method not found
-          if (msg.id !== undefined) {
+        } else if (msg.method && msg.id !== undefined) {
+          // Server-to-client request (needs response)
+          const reqHandler = requestHandlers.get(msg.method);
+          if (reqHandler) {
+            try {
+              const result = reqHandler(msg.params);
+              send({ jsonrpc: "2.0", id: msg.id, result: result ?? null });
+            } catch (e) {
+              send({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(e) } });
+            }
+          } else {
             send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
           }
+        } else if (msg.method) {
+          // Server-to-client notification (no response)
+          const handler = notificationHandlers.get(msg.method);
+          if (handler) handler(msg.params);
         }
       } catch {
         // Ignore parse errors
@@ -227,6 +246,10 @@ function createTransport(proc: ChildProcess) {
     notificationHandlers.set(method, handler);
   }
 
+  function onRequest(method: string, handler: (params: unknown) => unknown) {
+    requestHandlers.set(method, handler);
+  }
+
   function cleanup() {
     for (const [, req] of pending) {
       req.reject(new Error("LSP client shut down"));
@@ -234,7 +257,7 @@ function createTransport(proc: ChildProcess) {
     pending.clear();
   }
 
-  return { request, notify, onNotification, cleanup };
+  return { request, notify, onNotification, onRequest, cleanup };
 }
 
 // ── Client lifecycle ──
@@ -265,6 +288,7 @@ const CLIENT_CAPABILITIES = {
   workspace: {
     workspaceFolders: true,
     didChangeConfiguration: { dynamicRegistration: false },
+    didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true },
     symbol: { dynamicRegistration: false },
   },
 };
@@ -388,6 +412,8 @@ export async function createClient(
   const diagnostics = new Map<string, Diagnostic[]>();
   let diagnosticsVersion = 0;
 
+  const registeredWatchers: RegisteredWatcher[] = [];
+
   // Handle diagnostic notifications
   transport.onNotification("textDocument/publishDiagnostics", (params: unknown) => {
     const p = params as { uri: string; diagnostics: Diagnostic[] };
@@ -395,9 +421,43 @@ export async function createClient(
     diagnosticsVersion++;
   });
 
-  // Handle workspace/configuration requests (some servers require this)
-  transport.onNotification("workspace/configuration", () => {
-    // Return empty settings
+  // Handle server-to-client requests
+  transport.onRequest("client/registerCapability", (params: unknown) => {
+    const p = params as {
+      registrations: Array<{
+        id: string;
+        method: string;
+        registerOptions?: {
+          watchers?: Array<{ globPattern: string | { baseUri?: string; pattern: string }; kind?: number }>;
+        };
+      }>;
+    };
+    for (const reg of p.registrations) {
+      if (reg.method === "workspace/didChangeWatchedFiles" && reg.registerOptions?.watchers) {
+        for (const w of reg.registerOptions.watchers) {
+          const glob = typeof w.globPattern === "string" ? w.globPattern : w.globPattern.pattern;
+          registeredWatchers.push({ globPattern: glob, kind: w.kind ?? 7 });
+        }
+      }
+    }
+    return null;
+  });
+
+  transport.onRequest("client/unregisterCapability", (params: unknown) => {
+    const p = params as { unregisterations: Array<{ id: string; method: string }> };
+    for (const unreg of p.unregisterations) {
+      if (unreg.method === "workspace/didChangeWatchedFiles") {
+        // Remove all watchers (unregister doesn't specify which patterns, just the registration ID)
+        registeredWatchers.length = 0;
+      }
+    }
+    return null;
+  });
+
+  transport.onRequest("workspace/configuration", (params: unknown) => {
+    // Return empty settings for each requested item
+    const p = params as { items?: unknown[] };
+    return (p.items ?? []).map(() => ({}));
   });
 
   // Initialize
@@ -431,6 +491,7 @@ export async function createClient(
     openFiles,
     diagnostics,
     diagnosticsVersion,
+    registeredWatchers,
     request: transport.request,
     notify: transport.notify,
     dead: false,
@@ -476,8 +537,9 @@ export async function openFile(client: LspClient, filePath: string): Promise<voi
 
 /**
  * Sync file content to LSP server (didOpen or didChange).
+ * Returns the synced text (for passing to notifySaved with includeText).
  */
-export async function syncFile(client: LspClient, filePath: string, content?: string): Promise<void> {
+export async function syncFile(client: LspClient, filePath: string, content?: string): Promise<string> {
   const uri = fileToUri(filePath);
   const text = content ?? (await fs.promises.readFile(filePath, "utf-8"));
 
@@ -495,14 +557,49 @@ export async function syncFile(client: LspClient, filePath: string, content?: st
       contentChanges: [{ text }],
     });
   }
+  return text;
+}
+
+/**
+ * Close a file in the LSP server (textDocument/didClose).
+ * Removes from openFiles tracking. Servers drop their in-memory state for the file.
+ */
+export function closeFile(client: LspClient, filePath: string): void {
+  const uri = fileToUri(filePath);
+  if (!client.openFiles.has(uri)) return;
+  client.openFiles.delete(uri);
+  client.notify("textDocument/didClose", { textDocument: { uri } });
 }
 
 /**
  * Notify the server that a file was saved.
+ * Includes file text if the server requested it via capabilities.
  */
-export function notifySaved(client: LspClient, filePath: string): void {
+export function notifySaved(client: LspClient, filePath: string, text?: string): void {
   const uri = fileToUri(filePath);
-  client.notify("textDocument/didSave", { textDocument: { uri } });
+  const sync = client.capabilities.textDocumentSync;
+  const wantsText = typeof sync === "object" && typeof sync.save === "object" && sync.save.includeText === true;
+
+  if (wantsText && text !== undefined) {
+    client.notify("textDocument/didSave", { textDocument: { uri }, text });
+  } else {
+    client.notify("textDocument/didSave", { textDocument: { uri } });
+  }
+}
+
+/** FileChangeType from LSP spec */
+export const FileChangeType = { Created: 1, Changed: 2, Deleted: 3 } as const;
+
+/**
+ * Notify the server about file create/change/delete events.
+ * Sends workspace/didChangeWatchedFiles so servers can update their index.
+ */
+export function notifyFileChanges(
+  client: LspClient,
+  changes: Array<{ uri: string; type: (typeof FileChangeType)[keyof typeof FileChangeType] }>,
+): void {
+  if (changes.length === 0) return;
+  client.notify("workspace/didChangeWatchedFiles", { changes });
 }
 
 /**

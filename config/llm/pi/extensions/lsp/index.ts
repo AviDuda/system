@@ -17,12 +17,15 @@ import { isEditToolResult, isWriteToolResult } from "@mariozechner/pi-coding-age
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
+  closeFile,
   createClient,
   type Diagnostic,
   type DocumentSymbol,
+  FileChangeType,
   fileToUri,
   type Hover,
   type LspClient,
+  notifyFileChanges,
   notifySaved,
   openFile,
   type SymbolInformation,
@@ -43,6 +46,7 @@ import {
 } from "./format";
 import { type DetectedLinter, detectLinters, findLinterByExtension, lintersForFile, lintFile } from "./linters";
 import { type DetectedServer, detectServers, findServerByExtension, serversForFile } from "./servers";
+import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType } from "./watcher";
 
 // ── State ──
 
@@ -60,6 +64,9 @@ let currentCwd = "";
 
 /** Stored UI context for lazy status updates */
 let sessionCtx: ExtensionContext | null = null;
+
+/** Active file watcher for cwd */
+let fileWatcher: FileWatcher | null = null;
 
 // ── Client management ──
 
@@ -120,10 +127,114 @@ async function shutdownAll(): Promise<void> {
   clients.clear();
 }
 
+// ── File tracking helpers ──
+
+/** Check if any active LSP client has this file open (i.e., it's not new to the LSP). */
+function isFileOpenInAnyClient(filePath: string, cwd: string): boolean {
+  const abs = path.resolve(cwd, filePath);
+  const uri = fileToUri(abs);
+  for (const client of clients.values()) {
+    if (!client.dead && client.openFiles.has(uri)) return true;
+  }
+  return false;
+}
+
+// ── File watcher ──
+
+/** WatchKind bitmask values from LSP spec */
+const WatchKind = { Create: 1, Change: 2, Delete: 4 } as const;
+
+/**
+ * Route file change events from the watcher to LSP servers.
+ * Matches each change against server-registered watcher patterns,
+ * falling back to file type extensions from detected servers.
+ */
+function handleFileChanges(changes: FileChange[]): void {
+  // Group changes by client
+  type ChangeType = (typeof FileChangeType)[keyof typeof FileChangeType];
+  const clientChanges = new Map<string, Array<{ uri: string; type: ChangeType; absolutePath: string }>>();
+
+  for (const change of changes) {
+    const uri = fileToUri(change.absolutePath);
+
+    for (const [clientName, client] of clients) {
+      if (client.dead) continue;
+
+      let matched = false;
+
+      // Check registered watcher patterns
+      if (client.registeredWatchers.length > 0) {
+        for (const watcher of client.registeredWatchers) {
+          // Check kind bitmask matches the change type
+          if (change.type === WatchChangeType.Created && !(watcher.kind & WatchKind.Create)) continue;
+          if (change.type === WatchChangeType.Changed && !(watcher.kind & WatchKind.Change)) continue;
+          if (change.type === WatchChangeType.Deleted && !(watcher.kind & WatchKind.Delete)) continue;
+
+          if (path.matchesGlob(change.absolutePath, watcher.globPattern)) {
+            matched = true;
+            break;
+          }
+        }
+      } else {
+        // Fallback: match against detected server file types
+        const server = detectedServers.find((s) => s.name === clientName);
+        if (server) {
+          const ext = path.extname(change.absolutePath).toLowerCase();
+          matched = server.config.fileTypes.some((ft) => ft === ext);
+        }
+      }
+
+      if (matched) {
+        let arr = clientChanges.get(clientName);
+        if (!arr) {
+          arr = [];
+          clientChanges.set(clientName, arr);
+        }
+        arr.push({ uri, type: change.type, absolutePath: change.absolutePath });
+      }
+    }
+  }
+
+  // Send notifications to each client
+  for (const [clientName, changes] of clientChanges) {
+    const client = clients.get(clientName);
+    if (client && !client.dead) {
+      // For deleted files, send didClose first so the server drops its in-memory state.
+      // Without this, servers like tsserver keep didOpen'd files cached even after
+      // receiving didChangeWatchedFiles(Deleted).
+      for (const change of changes) {
+        if (change.type === FileChangeType.Deleted) {
+          closeFile(client, change.absolutePath);
+        }
+      }
+      notifyFileChanges(
+        client,
+        changes.map((c) => ({ uri: c.uri, type: c.type })),
+      );
+    }
+  }
+}
+
+function startFileWatcher(): void {
+  stopFileWatcher();
+  if (!currentCwd) return;
+  fileWatcher = createFileWatcher(currentCwd, handleFileChanges);
+}
+
+function stopFileWatcher(): void {
+  if (fileWatcher) {
+    fileWatcher.close();
+    fileWatcher = null;
+  }
+}
+
 // ── Diagnostics helpers ──
 
-/** Timeout for LSP diagnostic polling */
+/** Timeout for LSP diagnostic polling (existing files) */
 const DIAG_WAIT_MS = 3000;
+
+/** Longer timeout for new files (server needs to re-index) */
+const DIAG_WAIT_NEW_FILE_MS = 6000;
 
 /**
  * Tracks servers that timed out during auto-diagnostics.
@@ -154,9 +265,16 @@ async function waitForDiagnostics(
 async function getDiagnosticsForFile(
   filePath: string,
   cwd: string,
-  /** If true, include cold servers (for explicit `lsp diagnostics` calls) */
-  explicit = false,
+  opts: {
+    /** If true, include cold servers (for explicit `lsp diagnostics` calls) */
+    explicit?: boolean;
+    /** Override diagnostic wait timeout (ms) */
+    timeoutMs?: number;
+    /** If true, send workspace/didChangeWatchedFiles Created notification */
+    isNewFile?: boolean;
+  } = {},
 ): Promise<{ messages: string[]; summary: string; errored: boolean; server?: string } | null> {
+  const { explicit = false, timeoutMs, isNewFile = false } = opts;
   const abs = path.resolve(cwd, filePath);
   let servers = getServersForFile(abs);
 
@@ -189,11 +307,19 @@ async function getDiagnosticsForFile(
     sourceNames.push(server.name);
 
     const prevVersion = client.diagnosticsVersion;
-    await syncFile(client, abs);
-    notifySaved(client, abs);
+
+    // For new files, notify the server about the file creation before syncing.
+    // This lets servers like sourcekit-lsp and tsserver update their project index.
+    if (isNewFile) {
+      notifyFileChanges(client, [{ uri: fileToUri(abs), type: FileChangeType.Created }]);
+    }
+
+    const text = await syncFile(client, abs);
+    notifySaved(client, abs, text);
 
     const uri = fileToUri(abs);
-    const diags = await waitForDiagnostics(client, uri, DIAG_WAIT_MS, prevVersion);
+    const waitMs = timeoutMs ?? (isNewFile ? DIAG_WAIT_NEW_FILE_MS : DIAG_WAIT_MS);
+    const diags = await waitForDiagnostics(client, uri, waitMs, prevVersion);
 
     if (!explicit && diags.length === 0) {
       // Timed out or empty -- mark cold, retry after WARMUP_RETRY_MS
@@ -261,7 +387,7 @@ export default function (pi: ExtensionAPI) {
 
     updateStatusBar();
 
-    // Warm up servers in background (don't block session start)
+    // Warm up servers in background, then start file watcher
     setTimeout(async () => {
       for (const server of detectedServers) {
         try {
@@ -270,10 +396,13 @@ export default function (pi: ExtensionAPI) {
           // Non-fatal: server will be started on demand
         }
       }
+      // Start after servers are warm so registered watcher patterns are available
+      startFileWatcher();
     }, 500);
   });
 
   pi.on("session_shutdown", async () => {
+    stopFileWatcher();
     await shutdownAll();
   });
 
@@ -289,8 +418,14 @@ export default function (pi: ExtensionAPI) {
     // Don't run diagnostics if the edit itself failed
     if (event.isError) return;
 
+    // Detect if this file is new to the LSP (not yet opened by any server).
+    // Write tool creates files but doesn't distinguish create vs overwrite.
+    // If no server has this file open, it's new -- use longer timeout and
+    // send workspace/didChangeWatchedFiles so servers re-index.
+    const isNewFile = isWriteToolResult(event) && !isFileOpenInAnyClient(filePath, ctx.cwd);
+
     try {
-      const result = await getDiagnosticsForFile(filePath, ctx.cwd);
+      const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
       if (!result || result.messages.length === 0) return;
 
       // Append diagnostics to the tool result so the LLM sees them
@@ -400,7 +535,7 @@ export default function (pi: ExtensionAPI) {
 
         switch (action) {
           case "diagnostics": {
-            const result = await getDiagnosticsForFile(file, ctx.cwd, true);
+            const result = await getDiagnosticsForFile(file, ctx.cwd, { explicit: true });
             if (!result) return text("No language server found for this file");
             if (result.messages.length === 0) return text("No diagnostics");
             return text(`${result.summary}:\n${result.messages.join("\n")}`);
