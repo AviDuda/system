@@ -24,11 +24,6 @@ export default function atMentionsExtension(pi: ExtensionAPI) {
     resolvedMentions = new Set();
   });
 
-  pi.on("session_switch", async (_event, ctx) => {
-    cwd = ctx.cwd;
-    resolvedMentions = new Set();
-  });
-
   // Resolve @file and @dir mentions from user input
   pi.on("input", async (event, ctx) => {
     if (!cwd) return { action: "continue" as const };

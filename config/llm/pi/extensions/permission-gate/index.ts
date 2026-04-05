@@ -199,14 +199,7 @@ Be direct, no filler.`;
     ctx.ui.setStatus("permission-gate", `${MODE_LABELS[state.mode]}${autoStr}${explainStr}${autoCount}${costStr}`);
   }
 
-  // Discover git root on session start
   pi.on("session_start", async (_event, ctx) => {
-    state.gitRoot = findGitRoot(ctx.cwd);
-    explainEnabled = hasRole("explain");
-    updateStatus(ctx);
-  });
-
-  pi.on("session_switch", async (_event, ctx) => {
     state.gitRoot = findGitRoot(ctx.cwd);
     state.allowedBashPrefixes = [];
     state.allowedPaths = [];
@@ -214,6 +207,7 @@ Be direct, no filler.`;
     state.toolOverrides = {};
     state.classifyCache.clear();
     state.autoAllowLog = [];
+    explainEnabled = hasRole("explain");
     updateStatus(ctx);
   });
 

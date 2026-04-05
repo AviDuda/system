@@ -64,12 +64,6 @@ export default function journalExtension(pi: ExtensionAPI) {
     await loadContext(ctx.cwd, ctx);
   });
 
-  pi.on("session_switch", async (_event, ctx) => {
-    firstPrompt = true;
-    nudged = false;
-    await loadContext(ctx.cwd, ctx);
-  });
-
   pi.on("before_agent_start", async () => {
     if (!firstPrompt || !cachedContext) return;
     firstPrompt = false;

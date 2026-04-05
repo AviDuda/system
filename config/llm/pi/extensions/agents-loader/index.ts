@@ -50,13 +50,6 @@ export default function agentsLoaderExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_switch", async (_event, ctx) => {
-    init(ctx.cwd);
-    if (startupContext) {
-      ctx.ui.notify("Loaded AGENTS.local.md", "info");
-    }
-  });
-
   // Discover agents files from @path mentions
   pi.on("input", async (event, ctx) => {
     if (!cwd) return { action: "continue" as const };

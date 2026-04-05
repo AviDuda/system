@@ -146,16 +146,6 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // On session switch (e.g., /resume), generate if there's history
-  pi.on("session_switch", async (_event, ctx) => {
-    latestCtx = ctx;
-    const entries = ctx.sessionManager.getBranch();
-    const hasMessages = entries.some((e) => e.type === "message" && e.message.role === "user");
-    if (hasMessages) {
-      tryGenerateSuggestion(ctx);
-    }
-  });
-
   // On journal load, generate a "what to work on" suggestion for fresh sessions
   pi.events.on("journal:loaded", (raw: unknown) => {
     const { notes } = raw as { notes: Array<{ filename: string; content: string }> };
