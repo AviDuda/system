@@ -7,7 +7,9 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 1. **`lsp` tool** — the LLM can call this directly for diagnostics, definition, hover, references, symbols, rename
 2. **Auto-diagnostics** — after every edit/write, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
-4. **Cold server gating** — if a server times out on auto-diagnostics, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
+4. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
+5. **Server request handling** — responds to `client/registerCapability` (stores watcher glob patterns), `client/unregisterCapability`, and `workspace/configuration`
+6. **Cold server gating** — if a server times out on auto-diagnostics, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
 
 ## Supported servers
 
@@ -37,10 +39,13 @@ Configured out of the box (requires the binary on PATH):
 
 When the model uses `edit` or `write` on a file that has an active language server:
 
-1. The new content is synced to the LSP server
-2. The server is notified of the save
-3. Diagnostics are collected (up to 3s timeout)
-4. Any errors/warnings are appended to the tool result
+1. The new content is synced to the LSP server (`didOpen` or `didChange` with incrementing version)
+2. The server is notified of the save (`didSave`, with `includeText` if the server requests it)
+3. For new files (not yet opened by any server), a `workspace/didChangeWatchedFiles` Created notification is sent first, with a longer 6s timeout for re-indexing
+4. Diagnostics are collected (up to 3s timeout for existing files, 6s for new files)
+5. Any errors/warnings are appended to the tool result
+
+The file watcher also handles changes made via bash (e.g., `rm`, `echo >`, `git checkout`). When a file is deleted, `didClose` is sent before the deletion notification so servers like tsserver drop their cached state.
 
 The model sees something like:
 
@@ -55,8 +60,10 @@ src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable
 
 | File | Purpose |
 |------|---------|
-| index.ts | Extension entry point, tool registration, tool_result hooks, cold server gating |
-| client.ts | JSON-RPC client over stdio, LSP protocol handling (10s request timeout) |
+| watcher.ts | File system watcher (fs.watch recursive, git check-ignore filtering, debounce) |
+| watcher.test.ts | Tests for file watcher |
+| index.ts | Extension entry point, tool registration, tool_result hooks, file change routing, cold server gating |
+| client.ts | JSON-RPC client over stdio, LSP protocol handling, server request handlers (10s request timeout) |
 | servers.ts | Known server configs, auto-detection, dynamic tsserver memory scaling |
 | linters.ts | CLI linter configs (biome, golangci-lint), detection, JSON output parsing |
 | format.ts | Formatting utilities (diagnostics, locations, symbols, hover) |
@@ -87,3 +94,4 @@ When `lsp rename` fails (no renameable symbol at the given position), the error 
 - **tsserver in large monorepos**: first access to each TS project reference is slow (5-30s warmup). Cold server gating handles this gracefully.
 - **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
 - **yamlls on large files**: `symbols` times out on YAML files >400 lines. Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
+- **Files outside cwd**: the file watcher only covers cwd. Files in other directories (e.g., a Go project elsewhere on disk) get basic `didOpen`/`didChange`/`didSave` but no watcher-driven notifications. Cross-file references may fail because the server is rooted at cwd, not the target project's module directory.

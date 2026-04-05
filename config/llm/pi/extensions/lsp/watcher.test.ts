@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -81,8 +82,10 @@ describe("createFileWatcher", () => {
     }
   });
 
-  test("ignores node_modules directory", async () => {
+  test("ignores node_modules via .gitignore", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-watcher-"));
+    // Init a git repo with .gitignore so git check-ignore works
+    execSync("git init && echo 'node_modules/' > .gitignore", { cwd: dir });
     const nmDir = path.join(dir, "node_modules", "pkg");
     fs.mkdirSync(nmDir, { recursive: true });
 
