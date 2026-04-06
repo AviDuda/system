@@ -19,6 +19,7 @@
     owner = config.user.name;
   };
   sops.templates."nix-github.conf" = {
+    owner = config.user.name;
     content = ''
       access-tokens = github.com=${config.sops.placeholder.github_access_token}
     '';
@@ -55,6 +56,13 @@
       "devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw="
       # "cache.lix.systems:aBnZUw8zA7H35Cz2RyKFVs3H4PlGTLawyY5KRbvJR8o="
     ];
+  };
+
+  # Weekly garbage collection: delete generations older than 60 days
+  nix.gc = {
+    automatic = true;
+    interval = { Weekday = 0; Hour = 21; Minute = 0; }; # Sunday 9pm
+    options = "--delete-older-than 60d";
   };
 
   # Used for backwards compatibility, please read the changelog before changing.

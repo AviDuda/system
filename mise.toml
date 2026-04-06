@@ -12,7 +12,13 @@ depends = ["fmt", "fast-switch"]
 
 [tasks.nix-upgrade]
 description = "Update flake inputs and switch"
-run = "nix flake update && mise gc && mise nix-switch"
+depends = ["_ensure-builder"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'mise run nixos-builder-stop' EXIT
+nix flake update && mise nix-switch && mise gc
+"""
 
 [tasks.fast-switch]
 alias = "fs"
