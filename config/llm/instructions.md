@@ -41,6 +41,8 @@ Prefer structural tools over regex when the pattern is about code structure:
 - `shellcheck` on any shell script before committing
 - `hyperfine` over `time` for benchmarking
 
+`rg` uses Rust regex (extended syntax). Use bare `|` for alternation, not `\|` (that's `grep` BRE). Example: `rg "foo|bar"` not `rg "foo\|bar"`.
+
 ## REQUIRED: Journal
 
 Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if Avi explicitly says to skip journaling for this session.
