@@ -15,8 +15,8 @@ let
   godot-4-6 =
     if isDarwin then
       pkgs.callPackage ../../packages/godot.nix {
-        version = "4.6";
-        sha256 = "0fzdhmhjf56qbl1bkvpsg200ic2dclr27xjfmcbz280452vcw5gw";
+        version = "4.6.2";
+        sha256 = "01q8nlkrghbcpv971s309ryynwpbi2w0ailpwjq9vidmwij2lsv6";
       }
     else
       null;
