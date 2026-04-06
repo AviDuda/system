@@ -52,42 +52,10 @@
 
       # Overlay to fix packages with broken tests on Darwin
       # Only applied in mkDarwinHost, so no need for isDarwin check
-      darwinFixesOverlay =
-        final: prev:
-        let
-          # 2026-01-11: setproctitle fork tests segfault on macOS 13.2+ (signal 11)
-          # https://github.com/dvarrazzo/py-setproctitle/issues/113
-          fixSetproctitle = pyFinal: pyPrev: {
-            setproctitle = pyPrev.setproctitle.overridePythonAttrs {
-              doCheck = false;
-            };
-          };
-          overridePython =
-            python:
-            python.override {
-              packageOverrides = fixSetproctitle;
-            };
-        in
-        {
-          python3 = overridePython prev.python3;
-          python313 = overridePython prev.python313;
-
-          # 2026-01-11: nix/lix functional tests flaky on macOS (shebang, plugins, etc)
-          # Fixed upstream in NixOS/nix#14778, not yet in 25.11 branch
-          # Can't use doCheck=false (removes rapidcheck dep needed for build)
-          # Instead, skip running the actual tests while keeping deps
-          nix = prev.nix.overrideAttrs { checkPhase = ":"; };
-          lix = prev.lix.overrideAttrs {
-            doCheck = false;
-            doInstallCheck = false;
-          };
-          nixVersions = prev.nixVersions // {
-            nix_2_28 = prev.nixVersions.nix_2_28.overrideAttrs { checkPhase = ":"; };
-            nix_2_29 = prev.nixVersions.nix_2_29.overrideAttrs { checkPhase = ":"; };
-            stable = prev.nixVersions.stable.overrideAttrs { checkPhase = ":"; };
-          };
-
-        };
+      darwinFixesOverlay = final: prev: {
+        # 2026-04-06: direnv fish tests get Killed (signal 9) on macOS during sandbox build
+        direnv = prev.direnv.overrideAttrs { doCheck = false; };
+      };
 
       # Unstable packages for when stable is too outdated
       pkgs-unstable-for =
