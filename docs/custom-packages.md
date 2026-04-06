@@ -228,20 +228,17 @@ curl -s https://api.github.com/repos/owner/repo/releases | jq -r '.[].tag_name' 
    mise nix-switch  # or: nix-switch (from anywhere)
    ```
 
-### Automating update checks
-
-Add a shell function to `modules/home-manager/shell.nix`:
+### Checking for updates
 
 ```bash
-# Check custom package versions
-custom-pkg-updates() {
-  echo "APPlayMIDI:"
-  echo "  current: 1.12"
-  echo "  latest:  $(curl -s https://api.github.com/repos/benwiggy/applaymidi/releases/latest | jq -r '.tag_name')"
-}
+mise cpu   # or: mise check-pkg-updates
 ```
 
-Or create a script that parses your package files and checks upstream.
+This runs `scripts/check-pkg-updates.sh`, which checks each package against its GitHub repo's latest release. The script maintains a registry mapping package files to their upstream repos, handling tag prefixes (e.g., `v1.0` -> `1.0`) and pre-release packages.
+
+Uses `gh` CLI for authenticated API access (via 1Password plugin). Falls back to unauthenticated `curl` if `gh` is unavailable (60 req/hr rate limit).
+
+To add a new package to the check, add an entry to the `REGISTRY` array in the script.
 
 ## Troubleshooting
 

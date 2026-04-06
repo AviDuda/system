@@ -150,6 +150,11 @@ sudo nix-collect-garbage --delete-older-than "${age}d"
 nix-collect-garbage --delete-older-than "${age}d"
 """
 
+[tasks.check-pkg-updates]
+alias = "cpu"
+description = "Check custom packages for newer GitHub releases"
+run = "./scripts/check-pkg-updates.sh"
+
 [tasks."tailscale:push-acl"]
 alias = "ts-push"
 description = "Push Tailscale ACL policy to the admin console"

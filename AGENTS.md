@@ -10,6 +10,7 @@ mise fast-switch      # Build/apply without formatting
 mise nix-diff         # Preview changes before applying
 mise fmt              # Format .nix files
 mise repl             # REPL with flake outputs
+mise cpu              # Check custom packages for upstream updates
 ```
 
 ## Key Paths
@@ -49,3 +50,4 @@ mise repl             # REPL with flake outputs
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
 - Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
 - Do NOT run `mise nix-switch` or `mise fast-switch` yourself. Use `mise nix-diff` to verify changes build, then tell the user to run the switch. This is their live system - they control when changes are applied.
+- When doing Nix upgrades (`mise nix-upgrade` or `nix flake update`), run `mise cpu` to check if custom packages in `packages/` have newer upstream releases. Offer to update any that are outdated. See `scripts/check-pkg-updates.sh` for the registry of tracked packages.
