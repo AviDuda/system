@@ -9,11 +9,11 @@
 
 stdenvNoCC.mkDerivation rec {
   pname = "forepaw-stable";
-  version = "0.1.0";
+  version = "0.3.0";
 
   src = fetchurl {
     url = "https://github.com/aviraccoon/forepaw/releases/download/v${version}/forepaw-darwin-arm64.tar.gz";
-    hash = "sha256-kiYtssShr/gQYdZ5IakuTp6nrdR9d4dI07yzZw3FXCQ=";
+    hash = "sha256-liWkvRLeCtuKxnKzok9hPnp9pFJpO8AMlu/urLbZAB8=";
   };
 
   sourceRoot = ".";
