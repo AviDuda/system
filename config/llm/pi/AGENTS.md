@@ -43,11 +43,43 @@ Pi extensions run in **Node.js**, not Bun. Tests run under `bun test`. This mism
 
 ## TUI API notes
 
-Read the `.d.ts` files for actual APIs — don't guess method names. Key components:
-- `SelectList`: `getSelectedItem()` (not `getSelectedIndex()`), `onSelect`, `onCancel`, `onSelectionChange`, `setSelectedIndex()`
-- `Input`: `getValue()` / `setValue()` (not `getText()`), `onSubmit`, `onEscape`
-- `Text`: `setText()`, constructor takes `(text, paddingLeft, paddingTop)`
-- `Container`: `addChild()`, renders children vertically
-- `DynamicBorder`: from `@mariozechner/pi-coding-agent`, not pi-tui
-- `matchesKey(data, key)`: from pi-tui, use for key matching in `handleInput`
-- `ctx.ui.custom<T>()`: returns a Component, must have `render(width)`, `invalidate()`, `handleInput(data)`
+Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go-to-definition, hover) on imports from `@mariozechner/pi-tui` and `@mariozechner/pi-coding-agent` to explore available types and methods.
+
+### Key types (from `@mariozechner/pi-coding-agent`)
+
+- `ExtensionAPI` — the `pi` parameter passed to the extension factory. Has `registerCommand`, `registerTool`, `on`, `registerProvider`, etc.
+- `ExtensionContext` — the `ctx` parameter in event handlers and command handlers. Has `ui`, `modelRegistry`, `sessionManager`, `model`, `cwd`, etc.
+- `ExtensionUIContext` — `ctx.ui` separately. Use when a helper only needs UI methods. Has `select`, `confirm`, `input`, `notify`, `custom`, `setStatus`, `theme`, etc.
+- `Theme` — theming object with `fg(color, text)`, `bold(text)`, `dim(text)`, etc. Color names: `"accent"`, `"muted"`, `"dim"`, `"success"`, `"warning"`, `"error"`, etc.
+
+### UI methods (`ctx.ui.*`)
+
+- `ctx.ui.custom<T>(factory)` — show a custom keyboard-focused component. Factory receives `(tui, theme, keybindings, done)`. Return an object with `render(width)`, `invalidate()`, `handleInput(data)`. `done(result)` dismisses it. The component can be a flat object (no Container needed) or a class.
+- `ctx.ui.setStatus(key, text)` — add/update a footer status pill. Pass `undefined` as text to remove. Use `ctx.ui.theme.fg("muted", text)` for styling. Keys are unique per extension: `"sidecar"`, `"web-search"`, `"draft"`, `"lsp"`.
+- `ctx.ui.notify(message, type)` — show a toast notification. Types: `"info"`, `"warning"`, `"error"`.
+- `ctx.ui.select(title, options)`, `ctx.ui.confirm(title, message)`, `ctx.ui.input(title, placeholder)` — simple dialog methods for non-complex interactions.
+
+### pi-tui components (from `@mariozechner/pi-tui`)
+
+- `Input` — single-line text input. Full Component with `render(width)` and `handleInput(data)`. Methods: `getValue()`, `setValue()`. Use directly inside `ctx.ui.custom()` for search boxes instead of hand-rolling filter state.
+- `SelectList` — scrollable selection list. `getSelectedItem()`, `onSelect`, `onCancel`, `setSelectedIndex()`. Note: `setFilter` only matches `value` with `startsWith` — for fuzzy search, use `fuzzyFilter` instead.
+- `Text` — static text display. `setText()`. Constructor: `(text?, paddingLeft?, paddingTop?)`.
+- `Container` — vertical layout container. `addChild()`, `removeChild()`, `clear()`.
+- `Spacer` — vertical spacer. Constructor: `(lines?)`.
+- `DynamicBorder` — from `@mariozechner/pi-coding-agent` (not pi-tui). Horizontal border that adjusts to viewport width.
+
+### Keyboard handling
+
+- `Key` — helper for typed key identifiers. `Key.enter`, `Key.escape`, `Key.ctrl("a")`, `Key.alt("up")`, etc. Always prefer this over raw string matching.
+- `matchesKey(data, keyId)` — check if raw input matches a key. Use with `Key.*` helpers.
+- `getKeybindings()` — returns `KeybindingsManager`. Use `kb.matches(data, "tui.select.up")` for navigation keys — this respects user keybinding overrides. Available binding names: `tui.select.up/down/pageUp/pageDown/confirm/cancel`, `tui.editor.*`.
+- `fuzzyFilter(items, query, getText)` — fuzzy-match and sort items by relevance. Much better than `SelectList.setFilter` or custom `includes`/`startsWith` matching.
+
+### Patterns to follow
+
+- **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
+- **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
+- **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
+- **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@mariozechner/pi-coding-agent`.
+- **Footer status is cheap** — use `ctx.ui.setStatus(key, text)` to show extension state. Update on `session_start` and after any config changes.
+- **Check `extensions/shared/` before building new UI components or utility logic.** It has reusable modules that multiple extensions share. When two extensions need the same logic, extract it here (no `index.ts` = not discovered as an extension). Keep shared code generic and reusable.
