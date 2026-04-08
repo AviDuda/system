@@ -18,6 +18,14 @@
     key = "api_key";
     owner = config.user.name;
   };
+
+  # z.ai GLM Coding plan for Pi agent
+  sops.secrets.glm_pi = {
+    sopsFile = ../../secrets/llm.yaml;
+    key = "glm_pi";
+    owner = config.user.name;
+  };
+
   sops.templates."nix-github.conf" = {
     owner = config.user.name;
     content = ''
@@ -61,7 +69,11 @@
   # Weekly garbage collection: delete generations older than 60 days
   nix.gc = {
     automatic = true;
-    interval = { Weekday = 0; Hour = 21; Minute = 0; }; # Sunday 9pm
+    interval = {
+      Weekday = 0;
+      Hour = 21;
+      Minute = 0;
+    }; # Sunday 9pm
     options = "--delete-older-than 60d";
   };
 

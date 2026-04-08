@@ -33,6 +33,41 @@ in
   # Pi reloads this on /model -- no restart needed.
   home.file.".pi/agent/models.json".text = builtins.toJSON {
     providers = {
+      # z.ai GLM Coding plan -- direct provider (not via OpenRouter)
+      # API key stored in sops: sops secrets/llm.yaml -> glm_pi
+      zai = {
+        baseUrl = "https://api.z.ai/api/coding/paas/v4";
+        api = "openai-completions";
+        apiKey = "!cat /run/secrets/glm_pi";
+        models = [
+          {
+            id = "glm-5.1";
+            name = "GLM-5.1 (z.ai)";
+            reasoning = true;
+            input = [ "text" ];
+            contextWindow = 204800;
+            maxTokens = 131072;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            compat = {
+              supportsDeveloperRole = false;
+              thinkingFormat = "zai";
+            };
+          }
+          {
+            id = "glm-4.7-flash";
+            name = "GLM-4.7 Flash (z.ai)";
+            reasoning = true;
+            input = [ "text" ];
+            contextWindow = 200000;
+            maxTokens = 131072;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            compat = {
+              supportsDeveloperRole = false;
+              thinkingFormat = "zai";
+            };
+          }
+        ];
+      };
       lmstudio = {
         baseUrl = "http://127.0.0.1:1234/v1";
         api = "openai-completions";
@@ -130,13 +165,13 @@ in
   # Model roles config for sidecar LLM calls (used by permission gate explain, draft suggestion, etc.)
   # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high),
   # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
-  # Haiku first: fast and reliable for sidecar tasks. Local Qwen3.5-9B tested but too
-  # slow for permission gate (~10s/call) and similar quality to Haiku for drafts.
-  # Fallback: OpenRouter DeepSeek V3.2 (cheap, ZDR), then local as last resort.
+  # GLM-4.7-Flash first: free on z.ai coding plan, fast, 30B-class. Fallback: Haiku,
+  # then OpenRouter DeepSeek V3.2 (cheap, ZDR).
   home.file.".pi/agent/roles.json".text = builtins.toJSON {
     explain = {
       maxTokens = 256;
       models = [
+        { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
         { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
         { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
@@ -145,6 +180,7 @@ in
     draft = {
       maxTokens = 128;
       models = [
+        { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
         { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
         { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }

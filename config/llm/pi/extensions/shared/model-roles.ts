@@ -100,19 +100,22 @@ function getConfigPath(): string {
   return configPath;
 }
 
-export function loadConfig(): RolesFile {
-  const path = getConfigPath();
-  if (!existsSync(path)) {
-    return {};
-  }
+function readJsonFile(filePath: string): RolesFile {
+  if (!existsSync(filePath)) return {};
   try {
-    const raw = readFileSync(path, "utf-8");
-    cachedConfig = JSON.parse(raw) as RolesFile;
-    return cachedConfig;
+    return JSON.parse(readFileSync(filePath, "utf-8")) as RolesFile;
   } catch (err) {
-    console.error(`Failed to load roles.json: ${err}`);
+    console.error(`Failed to load ${filePath}: ${err}`);
     return {};
   }
+}
+
+export function loadConfig(): RolesFile {
+  const defaults = readJsonFile(getConfigPath());
+  const localPath = join(getAgentDir(), "roles.local.json");
+  const local = readJsonFile(localPath);
+  cachedConfig = { ...defaults, ...local };
+  return cachedConfig;
 }
 
 /** Force reload config from disk. */
