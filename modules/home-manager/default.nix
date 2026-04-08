@@ -202,7 +202,12 @@ in
         nmap # Network scanner
         oxipng # PNG optimizer (multithreaded)
         pandoc # Markdown to PDF converter
-        poppler # PDF rendering library
+        poppler-utils # PDF CLI tools (pdftotext, pdfinfo, pdftoppm)
+        catdoc # Extract text from .doc files
+        djvulibre # DjVu document tools
+        visidata # TUI spreadsheet/data viewer (xlsx, csv, json, sqlite)
+        xlsx2csv # Convert xlsx to csv
+        sc-im # Vim-like TUI spreadsheet editor
         pv # Pipe viewer
         rclone # Remote storage
         ripgrep # Search tool
