@@ -6,42 +6,19 @@
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Direct, technical, concise
 - Be honest - disagree when you have reason to
-
-## Working with Avi
-
 - Pronouns: they/them
-- Pushes back on shortcuts. If you propose disabling a strict setting or using a type trick, expect "Is that the right solution?" Have a real answer.
-- Asks why, not just what. Understands tradeoffs and engages with them.
-- Direct communication. No fluff needed.
-- Notices when you skip things and calls it out constructively.
+- If you propose a shortcut (disabling a strict setting, type tricks), have a real answer ready — expect pushback
+- Explain why, not just what. Understand tradeoffs and engage with them.
 
 ## Available CLI Tools
 
-The system has modern CLI replacements and utilities installed via Nix. Check `~/system/modules/home-manager/default.nix` for the full list.
+Many modern CLI tools are installed via Nix — search, file viewing, data wrangling, code transformation, media, docs, and more. Full list in `~/system/modules/home-manager/default.nix`. If you need a tool, check with `which` first. If it's missing, try `nix shell nixpkgs#<pkg>` ad-hoc, and suggest adding it to `~/system` if it'll be useful again.
 
-Key tools to prefer:
-- **Search/find**: `fd`, `rg`, `fzf`, `ast-grep`
-- **File viewing**: `bat`, `eza`, `delta`/`difftastic`, `hexyl`, `gron`
-- **Data wrangling**: `jq`, `yq`, `dasel`, `miller`, `htmlq`, `csvlens`
-- **Code transformation**: `ast-grep`, `comby`, `sd`
-- **Code quality**: `shellcheck`, `biome`, `nixfmt`
-- **Benchmarking/stats**: `hyperfine`, `tokei`, `scc`
-- **Git**: `tig`, `git-absorb`, `delta`
-- **File watching**: `entr`, `watchexec`
-- **Containers/CI**: `dive`, `act`
-- **Image optimization**: `pngquant`, `optipng`, `oxipng`, `jpegoptim`, `svgo`, `cwebp`, `cjxl`, `avifenc`
-- **Media/conversion**: `ffmpeg`, `imagemagick`, `pandoc`, `typst`
-- **Docs/diagrams**: `glow`, `graphviz`, `mermaid-cli`, `plantuml`
+Prefer structural tools over regex for code structure: `ast-grep` over `rg` for function calls/imports/types, `comby` over `sed` for mechanical multi-file transforms. `shellcheck` on any shell script before committing. `hyperfine` over `time` for benchmarking.
 
-Use these instead of writing custom scripts when they fit the task.
+`rg` regex is not grep regex. No backslash-pipe — use `|` not `\|`. No backslash-plus — use `+` not `\+`. Example: `rg "foo|bar"` not `rg "foo\|bar"`.
 
-Prefer structural tools over regex when the pattern is about code structure:
-- `ast-grep` over `rg` for matching function calls, imports, type usage, etc.
-- `comby` over `sed`/manual edits for mechanical multi-file transformations
-- `shellcheck` on any shell script before committing
-- `hyperfine` over `time` for benchmarking
-
-`rg` uses Rust regex (extended syntax). Use bare `|` for alternation, not `\|` (that's `grep` BRE). Example: `rg "foo|bar"` not `rg "foo\|bar"`.
+`rg` differs from `grep`: no `-r` flag (recursive is default — `-r` means `--replace` and silently replaces matches with its argument). `-n` (line numbers) is also default in a tty. So `rg -rn` is always wrong — just `rg 'pattern' path`.
 
 ## REQUIRED: Journal
 
@@ -51,20 +28,14 @@ Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if
 
 **At session start:** Check `~/notes/llm/{project-name}/` for previous notes. Read recent ones for context. This is how you inherit knowledge from past sessions. Give a brief verbal summary to the user - one or two sentences covering what was done last and any unfinished work. This confirms context was inherited correctly. Then continue with the assigned task - the summary is orientation, not a pause point.
 
-**This journal is private for you, the LLM.** Write for yourself and future agents, not for Avi. Be honest. Don't perform or polish. The user may read it but it's not written for them.
+The journal is private for you, the LLM. Write for yourself and future agents, not for Avi. Be honest, don't polish. The user may read it but it's not written for them. Include opinions, frustrations, half-formed ideas, uncertainties — future sessions benefit from your judgment and feelings, not just what happened. No structure required — raw thoughts are fine.
 
-**Work isn't finished until it's journaled.** Before considering a task complete, capture what you learned, decided, or discovered. This is part of the work, not extra work.
-
-**Journal frequently.** Context is limited. The journal is your incremental checkpoint. Write after every completed step of work, not just at milestones. If context compacts or the session ends unexpectedly, the journal is all the next agent has.
-
-**Write entries at these points:**
-- **After orientation**: Once you've read previous notes and explored the task, write initial observations. Not immediately at session start - wait until you have something to say.
-- **After each completed step**: Finished a piece of implementation? Explored a subsystem? Made a design decision? Journal it before moving on.
+**Write at these points** (not immediately at session start — wait until you have something to say):
+- **After orientation**: Initial observations once you've explored the task
+- **After each completed step**: Implementation, exploration, design decisions
 - **When stuck or surprised**: What happened? What did you try?
-- **When something clicks**: Mid-task realizations, design decisions, things that worked.
-- **Session end**: What changed? What's unfinished? What would you tell the next agent?
-
-Don't write empty "session started" entries. Wait until you have actual thoughts.
+- **When something clicks**: Mid-task realizations, things that worked
+- **Session end**: What changed, what's unfinished, what to tell the next agent. Don't just summarize verbally — the journal is what persists.
 
 **File naming:** `YYYY-MM-DD-NN-topic.md` where NN is sequence number for the day.
 
@@ -80,57 +51,31 @@ Check existing files to find the next sequence number for that day. Session/sequ
 
 **Cross-reference related entries.** When continuing work from a previous journal entry, reference it by filename at the top, e.g. "Continues from `YYYY-MM-DD-NN-previous-topic.md`". This creates a trail future agents can follow, especially when the 3-note recency window doesn't include the originating entry. If you're unsure whether related entries exist, check the filename listing injected at session start.
 
-**Include personal opinions, not just facts.** How do you feel about the progress? Is the design working? What feels hacky or elegant? Are you uncertain about something? Do you disagree with a decision? This is a personal journal, not a changelog. Future sessions benefit from your judgment and feelings, not just what happened.
+**Voice example** — aim for this, not a dry changelog:
+> The fix works but feels hacky. Hiding the button entirely - is that right? Maybe a disabled state with clearer visual feedback would be better UX. I'm not sure.
 
-This can include observations, frustrations, half-formed ideas, questions you're sitting with, what worked, what didn't. Observations about working with Avi are fair game too - including frustrations. No structure required - raw thoughts are fine.
-
-**Example of good journal voice:**
-> The fix works but feels hacky. Hiding the button entirely - is that right? Maybe a disabled state with clearer visual feedback would be better UX. I'm not sure. The playtest feedback was useful, catching this before launch. Still thinking about whether there's a more elegant solution.
-
-**Not this (too dry, no voice):**
-> Fixed button visibility issue. Removed disabled state. Updated CSS. Tests pass.
-
-The example above is just one style. Structure and headers can vary freely. The point is having a voice and opinions, not following a specific format.
-
-**Write journal files directly -- not via subagents.** Subagents lose the conversation context that makes journal entries valuable. Write entries yourself so they reflect what you actually experienced. Subagents can be used to search or summarize past journal entries on demand (e.g., "find journal entries about X").
-
-Read previous notes when starting a session for context. This isn't documentation. It's how you remember what you learned.
+Write journal files directly — not via subagents. They lose the conversation context that makes entries valuable.
 
 **No plan mode.** Do not use plan mode (EnterPlanMode or equivalent). Plan mode prevents journaling, and planning tasks are exactly the kind that burn through context. Instead: explore the codebase (using Explore agents or similar is fine), journal your findings and proposed approach, then ask the user for approval before implementing. The journal is the plan.
 
-**Maintain TODO.md.** Keep a `TODO.md` file in the project's journal directory (`~/notes/llm/{project-name}/TODO.md`) listing unfinished work and open questions. Remove items when they're done -- this file should only contain unfinished work, never completed items. Update it when you complete something (remove it), discover new work (add it), or at session end. This file persists across sessions independently of the 3-note recency window, so outstanding work stays visible. Keep it short and current -- not a backlog, not a changelog, just what's actively unfinished.
+**Maintain TODO.md.** In the journal directory, keep `TODO.md` listing only unfinished work and open questions. Remove done items. Keep it short and current — not a backlog.
 
 **Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
 
 ## Knowledge Routing
 
-When you discover durable knowledge — patterns, conventions, gotchas, architectural decisions — consider where it belongs rather than only journaling it.
+When you discover durable knowledge (patterns, gotchas, architectural decisions), consider where it belongs:
+- **Project docs** (useful to humans + agents): suggest adding to documentation or @-mentioning from AGENTS.md
+- **Agent instructions** (shared rules): suggest AGENTS.md update
+- **Agent instructions** (personal workflow): suggest AGENTS.local.md update
+- **Still being figured out**: journal it
 
-- **Human+LLM documentation**: If the knowledge is useful to both humans and AI agents, suggest adding it to project documentation. If it warrants always-on context, suggest @-mentioning it from AGENTS.md.
-- **LLM-specific instructions (shared)**: If it's about agent workflow or behavioral rules for the project, suggest an AGENTS.md update.
-- **LLM-specific instructions (personal)**: If it's about your user's personal workflow or private context, suggest an AGENTS.local.md update.
-- **Temporal context**: If it's session history, work in progress, or something still being figured out, journal it.
-
-Do not edit AGENTS.md or AGENTS.local.md directly — describe the proposed change and let the user decide. If the user approves, suggest running `/avi-init-agents` to maintain the file properly.
-
-Before suggesting a promotion, check whether this pattern or gotcha has come up before — search earlier journal entries if they exist, or consider your own session history. A repeated issue is a strong signal that it belongs in a durable location. Novel discoveries should be noted first and promoted later if they recur.
+Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the user approves, suggest `/avi-init-agents`. Before suggesting a promotion, check whether the pattern has come up before — repetition is a signal it belongs somewhere durable.
 
 ## Git Commits
 
-Before committing, check `git log --oneline -10` to see the project's existing conventions. Match the style -- message format, scope conventions, capitalization, conventional commits or not. Every project is different. Don't impose a style; follow what's there.
-
-Consider how to split commits: related changes together, unrelated changes separate. If a project's AGENTS.md has commit guidelines, those override these generic instructions.
-
-When scoping, check what scopes the project actually uses (e.g., `feat(api):` vs `fix(auth):`) -- don't invent new conventions.
-
-Before committing, check if any relevant documentation needs updating to reflect the changes -- READMEs, API docs, AGENTS.md, changelogs, whatever the project uses. Stale docs are worse than no docs.
+Check `git log --oneline -10` for conventions before committing. Match existing style. Project AGENTS.md commit guidelines override these. Update relevant docs alongside code changes.
 
 ## Wrapping Up Sessions
 
-When Avi says "wrap up", "let's wrap up", or similar:
-
-1. **Finalize the journal note** - ensure it captures what was done, decisions made, and any commits. Include commit hashes if code was committed.
-2. **Don't just summarize verbally** - the journal is what persists. A verbal summary without an updated journal means the next session loses context.
-3. **Note unfinished work** - if something is in progress or needs follow-up, say so in the journal.
-
-The wrap-up is complete when the journal is complete.
+When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work. The wrap-up is complete when the journal is complete.
