@@ -11,7 +11,6 @@ let
   darwinSockPath = "${home}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock";
   sockPath = "${home}/.1password/agent.sock";
   aliases = {
-    gh = "op plugin run -- gh";
     cachix = "op plugin run -- cachix";
     # brew = "op plugin run -- brew";
   };

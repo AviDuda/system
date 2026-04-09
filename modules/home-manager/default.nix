@@ -25,6 +25,24 @@ let
   vkquake = if isDarwin then pkgs.callPackage ../../packages/vkquake.nix { } else null;
   forepaw = if isDarwin then pkgs.callPackage ../../packages/forepaw.nix { } else null;
 
+  # GitHub CLI wrapper: authenticates via `op read` (1Password, full token in
+  # memory only), falls back to sops-nix read-only token.
+  gh-wrapper = pkgs.writeShellScriptBin "gh" ''
+    #!/usr/bin/env bash
+    if command -v op >/dev/null 2>&1 && [[ -r /run/secrets/github_op_reference ]]; then
+      ref="$(< /run/secrets/github_op_reference)"
+      account=""
+      if [[ -r /run/secrets/github_op_account ]]; then
+        account="$(< /run/secrets/github_op_account)"
+      fi
+      token="$(op read "''${ref}" ''${account:+--account "''${account}"} 2>/dev/null)" && export GH_TOKEN="$token"
+    fi
+    if [[ -z "$GH_TOKEN" ]] && [[ -r /run/secrets/github_access_token ]]; then
+      export GH_TOKEN="$(< /run/secrets/github_access_token)"
+    fi
+    exec ${pkgs.gh}/bin/gh "$@"
+  '';
+
   # All custom macOS .app packages — symlinks are generated automatically
   customApps = lib.optionals isDarwin [
     applaymidi
@@ -187,7 +205,7 @@ in
         fastfetch # System info
         fswatch # File system watcher
         furnace # Multi-system chiptune tracker
-        gh # GitHub CLI
+        gh-wrapper # GitHub CLI (wraps op plugin run with sops fallback)
         htop # Process viewer
         # lazygit - managed by programs.lazygit in lazygit.nix
         imagemagick # Image processing

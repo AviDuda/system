@@ -10,6 +10,17 @@
   sops.secrets.github_access_token = {
     sopsFile = ../../secrets/github.yaml;
     key = "access_token";
+    owner = config.user.name;
+  };
+  sops.secrets.github_op_reference = {
+    sopsFile = ../../secrets/github.yaml;
+    key = "op_reference";
+    owner = config.user.name;
+  };
+  sops.secrets.github_op_account = {
+    sopsFile = ../../secrets/github.yaml;
+    key = "op_account";
+    owner = config.user.name;
   };
 
   # Kagi API key for web search (used by pi extension, needs user read access)
