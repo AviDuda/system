@@ -66,6 +66,19 @@ in
               thinkingFormat = "zai";
             };
           }
+          {
+            id = "glm-4.6v-flash";
+            name = "GLM-4.6V Flash (z.ai)";
+            reasoning = false;
+            input = [ "text" "image" ];
+            contextWindow = 128000;
+            maxTokens = 4096;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            compat = {
+              supportsDeveloperRole = false;
+              thinkingFormat = "zai";
+            };
+          }
         ];
       };
       lmstudio = {
@@ -184,6 +197,12 @@ in
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
         { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
         { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
+      ];
+    };
+    vision = {
+      maxTokens = 2048;
+      models = [
+        { ref = "zai/glm-4.6v-flash"; thinking = "off"; }
       ];
     };
   };

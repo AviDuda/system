@@ -24,11 +24,11 @@ mise nix-diff    # verify Nix build after changes
 
 ## Guidelines
 
-- Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README.
+- Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README. See `ls config/llm/pi/extensions/` for current extensions.
 - Extract testable logic into a pure module (no pi imports). Test with bun.
 - All extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
 - Runtime config (journal constants, model roles) is read from `~/.config/llm/journal.json` and `~/.pi/agent/roles.json` respectively.
-- Auto-discovery: any directory under `config/llm/pi/extensions/` with an `index.ts` is symlinked automatically by `pi.nix`. No Nix changes needed to add a new extension.
+- Auto-discovery: any directory under `config/llm/pi/extensions/` with an `index.ts` is symlinked automatically by `pi.nix` (the `allExtDirs` let binding reads the directory at eval time and generates symlink commands). Adding a new extension directory only requires `mise nix-switch` — no manual Nix edits. Directories without `index.ts` (like `shared/`) are also symlinked but pi only loads them as extensions if they have `index.ts`.
 - Cross-extension imports work via `../shared/` (Node resolves symlinks to real paths before resolving relative imports).
 - Shared code goes in `extensions/shared/` (no `index.ts` = not discovered as an extension).
 - Run `mise pi-check` before committing. `mise check` includes it.
@@ -80,6 +80,6 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
 - **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
 - **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
-- **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@mariozechner/pi-coding-agent`.
+- **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@mariozechner/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
 - **Footer status is cheap** — use `ctx.ui.setStatus(key, text)` to show extension state. Update on `session_start` and after any config changes.
 - **Check `extensions/shared/` before building new UI components or utility logic.** It has reusable modules that multiple extensions share. When two extensions need the same logic, extract it here (no `index.ts` = not discovered as an extension). Keep shared code generic and reusable.
