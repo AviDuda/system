@@ -17,12 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import {
-  type ExtensionAPI,
-  type ExtensionContext,
-  isReadToolResult,
-  type ModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, isReadToolResult } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { extractText, hasRole, reloadConfig, type SidecarResult, sidecarComplete } from "../shared/model-roles.js";
 
@@ -58,12 +53,7 @@ function extractImageParts(content: (TextContent | ImageContent)[]): ImageConten
 
 // ── Vision sidecar call ──
 
-async function describeImage(
-  image: ImageContent,
-  prompt: string,
-  modelRegistry: ModelRegistry,
-  signal?: AbortSignal,
-): Promise<string | null> {
+async function describeImage(image: ImageContent, prompt: string, ctx: ExtensionContext): Promise<string | null> {
   if (!hasRole("vision")) {
     return null;
   }
@@ -82,7 +72,10 @@ async function describeImage(
     ],
   };
 
-  const result: SidecarResult | null = await sidecarComplete("vision", context, modelRegistry, { signal });
+  const result: SidecarResult | null = await sidecarComplete("vision", context, ctx.modelRegistry, {
+    signal: ctx.signal,
+    notify: ctx.ui.notify,
+  });
   if (!result) return null;
 
   return extractText(result.message);
@@ -134,12 +127,7 @@ export default function visionExtension(pi: ExtensionAPI) {
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
       const label = images.length === 1 ? "this image" : `image ${i + 1}`;
-      const description = await describeImage(
-        img,
-        `Describe ${label} in detail. Include any visible text.`,
-        ctx.modelRegistry,
-        ctx.signal,
-      );
+      const description = await describeImage(img, `Describe ${label} in detail. Include any visible text.`, ctx);
       if (description) {
         descriptions.push(`[Vision: ${label}]\n${description}`);
       } else {
@@ -236,7 +224,7 @@ export default function visionExtension(pi: ExtensionAPI) {
       const image: ImageContent = { type: "image", data: base64, mimeType };
       const prompt = params.prompt ?? "Describe this image in detail. Include any visible text.";
 
-      const description = await describeImage(image, prompt, ctx.modelRegistry, ctx.signal);
+      const description = await describeImage(image, prompt, ctx);
 
       if (!description) {
         return {

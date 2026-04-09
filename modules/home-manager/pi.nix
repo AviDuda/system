@@ -184,6 +184,7 @@ in
     explain = {
       maxTokens = 256;
       models = [
+        { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
         { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
@@ -193,6 +194,7 @@ in
     draft = {
       maxTokens = 128;
       models = [
+        { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
         { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }

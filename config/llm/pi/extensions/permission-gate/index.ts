@@ -7,7 +7,13 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type ExtensionAPI, type ExtensionUIContext, renderDiff, type Theme } from "@mariozechner/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionUIContext,
+  renderDiff,
+  type Theme,
+} from "@mariozechner/pi-coding-agent";
 
 // Deep import: pi doesn't export edit-diff from its package exports map.
 // Use import.meta.resolve to find the package entry, then derive the internal path.
@@ -62,22 +68,27 @@ export default function permissionGate(pi: ExtensionAPI) {
     ctx.ui.setWidget("permission-gate", [lastVerdict], { placement: "belowEditor" });
   }
 
-  /** Classify a tool call via sidecar. Returns parsed result or null on failure. */
+  /** Classify a tool call via sidecar. Returns parsed result or null on failure/timeout. */
   async function classify(
     toolName: string,
     input: Record<string, unknown>,
-    modelRegistry: Parameters<typeof sidecarComplete>[2],
+    ctx: ExtensionContext,
     rawDiff?: string,
+    timeoutMs = 5000,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
     const description = describeToolCall(toolName, input, rawDiff);
-    const result = await sidecarComplete(
-      "explain",
-      {
-        systemPrompt: EXPLAIN_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: description, timestamp: Date.now() }],
-      },
-      modelRegistry,
-    );
+    const result = await Promise.race([
+      sidecarComplete(
+        "explain",
+        {
+          systemPrompt: EXPLAIN_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: description, timestamp: Date.now() }],
+        },
+        ctx.modelRegistry,
+        { notify: ctx.ui.notify },
+      ),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
     if (!result) return null;
     // strict: parse failure = null (don't auto-allow garbage)
     return parseExplanation(extractText(result.message), true);
@@ -108,7 +119,7 @@ Be direct, no filler.`;
   function makeExplanation(
     toolName: string,
     input: Record<string, unknown>,
-    modelRegistry: Parameters<typeof sidecarComplete>[2],
+    ctx: ExtensionContext,
     rawDiff?: string,
   ): ExplanationProvider | undefined {
     if (!explainEnabled) return undefined;
@@ -130,8 +141,8 @@ Be direct, no filler.`;
           systemPrompt: EXPLAIN_SYSTEM_PROMPT,
           messages: [{ role: "user", content: description, timestamp: Date.now() }],
         },
-        modelRegistry,
-        { signal: abortController.signal },
+        ctx.modelRegistry,
+        { signal: abortController.signal, notify: ctx.ui.notify },
       );
       if (!result) return null;
       const parsed = parseExplanation(extractText(result.message));
@@ -552,7 +563,7 @@ Be direct, no filler.`;
 
       if (!cached) {
         ctx.ui.setWorkingMessage("Classifying...");
-        const explResult = await classify(event.toolName, input, ctx.modelRegistry, rawDiff);
+        const explResult = await classify(event.toolName, input, ctx, rawDiff);
         ctx.ui.setWorkingMessage();
 
         if (explResult) {
@@ -589,7 +600,7 @@ Be direct, no filler.`;
     }
 
     // Normal path: build explanation provider (fires concurrently with dialog)
-    const explanation = makeExplanation(event.toolName, input, ctx.modelRegistry, rawDiff);
+    const explanation = makeExplanation(event.toolName, input, ctx, rawDiff);
     return await showConfirmDialog(ctx, event, decision, explanation, diffBody);
   });
 

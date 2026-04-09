@@ -300,7 +300,10 @@ assistant: Hey! Last session we built the auth module. What are you working on t
 
   try {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await sidecarComplete("draft", sidecarContext, ctx.modelRegistry, { signal });
+      const result = await sidecarComplete("draft", sidecarContext, ctx.modelRegistry, {
+        signal,
+        notify: ctx.ui.notify,
+      });
       if (!result) return null;
 
       const raw = extractText(result.message);
@@ -378,7 +381,7 @@ async function generateFromContext(
           ],
         },
         ctx.modelRegistry,
-        { signal },
+        { signal, notify: ctx.ui.notify },
       );
 
       if (!result) return null;

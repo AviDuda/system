@@ -183,13 +183,15 @@ export async function sidecarComplete(
   roleName: string,
   context: Context,
   modelRegistry: ModelRegistry,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; notify?: (msg: string, level: "info" | "warning") => void },
 ): Promise<SidecarResult | null> {
   const config = getConfig();
   const role = config[roleName];
   if (!role?.models?.length) return null;
 
   const errors: Array<{ ref: string; error: unknown }> = [];
+  const failedModels: string[] = [];
+  const notify = options?.notify;
 
   for (const entry of role.models) {
     const parsed = parseRef(entry.ref);
@@ -220,12 +222,17 @@ export async function sidecarComplete(
       cumulativeCost += cost;
       cumulativeCalls += 1;
 
+      if (failedModels.length > 0 && notify) {
+        notify(`${roleName}: ${failedModels.join(", ")} failed, fell back to ${entry.ref}`, "warning");
+      }
+
       return {
         message,
         modelUsed: entry.ref,
         cost,
       };
     } catch (err) {
+      failedModels.push(entry.ref);
       errors.push({ ref: entry.ref, error: err });
     }
   }
