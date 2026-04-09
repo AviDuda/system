@@ -6,7 +6,18 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    "baseUrl": ".",
+    "paths": {
+      "@mariozechner/pi-coding-agent": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/dist/index.d.ts"],
+      "@mariozechner/pi-coding-agent/*": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/dist/*"],
+      "@mariozechner/pi-ai": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/index.d.ts"],
+      "@mariozechner/pi-ai/*": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/*"],
+      "@mariozechner/pi-tui": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-tui/dist/index.d.ts"],
+      "@mariozechner/pi-tui/*": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-tui/dist/*"],
+      "@sinclair/typebox": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@sinclair/typebox"],
+      "@sinclair/typebox/*": ["/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@sinclair/typebox/*"]
+    }
   },
   "include": ["**/*.ts"],
   "exclude": ["**/node_modules"]

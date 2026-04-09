@@ -15,6 +15,9 @@ describe("createFileWatcher", () => {
     });
 
     try {
+      // Brief pause to ensure watcher is fully registered
+      await new Promise((r) => setTimeout(r, 100));
+
       // Create a file
       const filePath = path.join(dir, "test.ts");
       fs.writeFileSync(filePath, "export const x = 1;");

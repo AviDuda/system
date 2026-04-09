@@ -251,8 +251,10 @@ export default function visionExtension(pi: ExtensionAPI) {
         };
       }
 
+      const promptBlock = params.prompt ? `[Prompt: ${params.prompt}]\n\n` : "";
+
       return {
-        content: [{ type: "text", text: description }],
+        content: [{ type: "text", text: `${promptBlock}${description}` }],
         details: {},
       };
     },
