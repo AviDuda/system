@@ -73,7 +73,9 @@ in
   imports = [
     ./1password.nix
     ./direnv.nix
+    ./fonts.nix
     ./git.nix
+    ./iterm2.nix
     ./lazygit.nix
     ./llm.nix
     ./pi.nix

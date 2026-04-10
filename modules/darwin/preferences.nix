@@ -17,7 +17,7 @@
       persistent-apps = [
         "/System/Applications/Apps.app"
         "/Applications/Orion.app"
-        "/Applications/Warp.app"
+        "/Applications/iTerm.app"
         "/Applications/Zed.app"
         "/Applications/Bruno.app"
         "/Applications/TablePlus.app"
