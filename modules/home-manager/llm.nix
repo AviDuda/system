@@ -38,19 +38,23 @@ let
   bun = "${pkgs.bun}/bin/bun";
   journalContextScript = "${config.home.homeDirectory}/system/config/llm/pi/extensions/shared/journal-context.ts";
 
-  # Session start hook: calls shared journal-context builder
+  # Session start hook: called once per journal part to stay under Claude Code's
+  # 10K char per-hook output limit. The part name is passed as $1 from settings.json.
   # Env vars:
   #   LLM_VANILLA=1 - skip all custom context (truly vanilla experience)
   #   NO_JOURNAL=1  - skip journal reading only (fresh session, no prior context)
   sessionStartScript = pkgs.writeShellScript "claude-session-start" ''
     set -euo pipefail
-    CONTEXT=$(${bun} "${journalContextScript}" "$PWD")
-    ${jq} -n --arg ctx "$CONTEXT" '{
-      hookSpecificOutput: {
-        hookEventName: "SessionStart",
-        additionalContext: $ctx
-      }
-    }'
+    PART="''${1:?usage: session-start.sh <part>}"
+    CONTEXT=$(${bun} "${journalContextScript}" --part "$PART" "$PWD")
+    if [[ -n "$CONTEXT" ]]; then
+      ${jq} -n --arg ctx "$CONTEXT" '{
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: $ctx
+        }
+      }'
+    fi
   '';
 
   # Subagent start hook: tells subagents not to write journal entries

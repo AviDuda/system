@@ -19,6 +19,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { parseArgs } from "node:util";
 
 /** Max recent filenames to list for the current project. */
 const FILENAME_LIST_CURRENT = 30;
@@ -120,36 +121,56 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
   return `Other project journals (recent entries):\n${lines.join("\n")}`;
 }
 
-export async function buildJournalContext(config: JournalConfig, cwd: string): Promise<string> {
+/**
+ * Structured journal context split into parts, each under the 10K char hook
+ * output limit for Claude Code. Pi uses buildJournalContext() which joins them.
+ */
+export interface JournalParts {
+  /** Global instructions + journal behavioral guidance */
+  instructions: string;
+  /** TODO.md + directory listing + cross-project awareness */
+  metadata: string;
+  /** Individual journal entries (most recent first), one per element */
+  journals: string[];
+}
+
+export async function buildJournalParts(config: JournalConfig, cwd: string): Promise<JournalParts> {
+  const empty: JournalParts = { instructions: "", metadata: "", journals: [] };
+
   if (process.env.LLM_VANILLA === "1") {
-    return config.vanillaMessage;
+    return { ...empty, instructions: config.vanillaMessage };
   }
 
-  let context = `${config.globalInstructions}\n\n`;
+  let instructions = config.globalInstructions;
 
   if (process.env.NO_JOURNAL === "1") {
-    return `${context}${config.journalSkipMessage}`;
+    return { ...empty, instructions: `${instructions}\n\n${config.journalSkipMessage}` };
   }
+
+  instructions += `\n\n${config.journalReminder}`;
 
   const projectName = basename(cwd);
   const result = await getRecentNotes(config.notesDir, projectName);
 
+  const metaParts: string[] = [];
+  const journals: string[] = [];
+
   if (result.notes.length === 0) {
-    context += `No previous session notes for ${projectName}.\n`;
-    context += `Notes directory: ${result.path}/\n`;
+    let noNotes = `No previous session notes for ${projectName}.\nNotes directory: ${result.path}/\n`;
     if (!result.exists) {
-      context += "(Directory was just created)\n";
+      noNotes += "(Directory was just created)\n";
     }
-    context += `\n${config.noNotesReminder}\n${config.journalReminder}`;
+    noNotes += `\n${config.noNotesReminder}`;
+    metaParts.push(noNotes);
   } else {
-    context += `Previous session notes for ${projectName}:\n\n`;
+    metaParts.push(`Previous session notes for ${projectName}:`);
 
     if (result.todo) {
-      context += `<file name="${result.path}/TODO.md">\n${result.todo}\n</file>\n\n`;
+      metaParts.push(`<file name="${result.path}/TODO.md">\n${result.todo}\n</file>`);
     }
 
     for (const note of result.notes) {
-      context += `<file name="${result.path}/${note.filename}">\n${note.content}\n</file>\n\n`;
+      journals.push(`<file name="${result.path}/${note.filename}">\n${note.content}\n</file>`);
     }
 
     if (result.allFilenames.length > 3) {
@@ -159,27 +180,60 @@ export async function buildJournalContext(config: JournalConfig, cwd: string): P
       if (total > FILENAME_LIST_CURRENT) {
         listing += `\n... and ${total - FILENAME_LIST_CURRENT} more`;
       }
-      context += `<directory-listing name="${result.path}" description="Older entries (${total} total, use read tool if relevant)">\n${listing}\n</directory-listing>\n\n`;
+      metaParts.push(
+        `<directory-listing name="${result.path}" description="Older entries (${total} total, use read tool if relevant)">\n${listing}\n</directory-listing>`,
+      );
     }
-
-    context += config.journalReminder;
   }
 
   const otherProjects = await getOtherProjectSummaries(config.notesDir, projectName);
   if (otherProjects) {
-    context += `\n\n${otherProjects}`;
+    metaParts.push(otherProjects);
   }
 
-  return context;
+  return { instructions, metadata: metaParts.join("\n\n"), journals };
 }
 
-// CLI mode: bun .../journal-context.ts [cwd]
+/** Full context string (used by Pi, backward compatible). */
+export async function buildJournalContext(config: JournalConfig, cwd: string): Promise<string> {
+  const parts = await buildJournalParts(config, cwd);
+  return [parts.instructions, parts.metadata, ...parts.journals].filter(Boolean).join("\n\n");
+}
+
+/** Resolve a named part from JournalParts. Returns empty string for missing journal indices. */
+export function resolvePart(parts: JournalParts, name: string): string {
+  if (name === "instructions") return parts.instructions;
+  if (name === "metadata") return parts.metadata;
+  if (name.startsWith("journal:")) {
+    const idx = parseInt(name.split(":")[1]);
+    return parts.journals[idx] ?? "";
+  }
+  return "";
+}
+
+/** CLI entry point. Exported for testing. */
+export async function main(args: string[]): Promise<string> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { part: { type: "string" } },
+    allowPositionals: true,
+  });
+  const cwd = positionals[0] || process.cwd();
+  const config = loadJournalConfig();
+
+  if (values.part) {
+    const parts = await buildJournalParts(config, cwd);
+    return resolvePart(parts, values.part);
+  }
+  return buildJournalContext(config, cwd);
+}
+
+// CLI mode:
+//   bun .../journal-context.ts [cwd]                  -- full context (Pi, legacy)
+//   bun .../journal-context.ts --part <name> [cwd]    -- single part (Claude Code hooks)
+//     Parts: instructions, metadata, journal:0, journal:1, journal:2
 const isMainModule = typeof process !== "undefined" && process.argv[1]?.includes("journal-context");
 
 if (isMainModule) {
-  const cwd = process.argv[2] || process.cwd();
-  const config = loadJournalConfig();
-  buildJournalContext(config, cwd).then((ctx) => {
-    process.stdout.write(ctx);
-  });
+  main(process.argv.slice(2)).then((output) => process.stdout.write(output));
 }
