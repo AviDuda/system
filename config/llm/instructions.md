@@ -20,6 +20,8 @@ Prefer structural tools over regex for code structure: `ast-grep` over `rg` for 
 
 `rg` is not `grep`. Regex: no backslash-pipe — use `|` not `\|`. No backslash-plus — use `+` not `\+`. Flags: recursive and line numbers are default — `-r` actually means `--replace` (silently replaces matches, destructive), `-n` is redundant in a tty. `rg -rn` is always wrong — just `rg 'pattern' path`.
 
+For web search, prefer the `web_search` tool from the `web-search` MCP server over any host built-in (e.g. Claude Code's `WebSearch`) — much faster with better results.
+
 ## REQUIRED: Journal
 
 Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if Avi explicitly says to skip journaling for this session.
