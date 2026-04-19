@@ -2,6 +2,22 @@
 { config }:
 let
   homeDir = config.home.homeDirectory;
+
+  # Skills deployed to all LLM agents (Claude Code, OpenCode, pi).
+  # Bundled skills auto-discovered from config/llm/skills/.
+  # External skills point at other repos -- dangling symlink is fine if uncloned,
+  # agents skip missing skills.
+  skillsSrcDir = "${homeDir}/system/config/llm/skills";
+  bundledSkills = map (name: {
+    inherit name;
+    source = "${skillsSrcDir}/${name}";
+  }) (builtins.attrNames (builtins.readDir ../../config/llm/skills));
+  externalSkills = [
+    {
+      name = "forepaw";
+      source = "${homeDir}/dev/personal/forepaw/.agents/skills/forepaw";
+    }
+  ];
 in
 {
   notesDir = "${homeDir}/notes/llm";
@@ -20,4 +36,6 @@ in
   globalInstructions = builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] (
     builtins.readFile ../../config/llm/instructions.md
   );
+
+  skills = bundledSkills ++ externalSkills;
 }

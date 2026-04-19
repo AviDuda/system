@@ -17,10 +17,15 @@ let
     (name: (builtins.readDir ../../config/llm/pi/extensions).${name} == "directory")
     (builtins.attrNames (builtins.readDir ../../config/llm/pi/extensions));
 
+  # Shared skills list (bundled + external like forepaw)
+  shared = import ./llm-shared.nix { inherit config; };
+  inherit (shared) skills;
+
 in
 {
+  home.file = lib.mkMerge [ {
   # Pi-specific agent instructions (global instructions injected separately via journal extension)
-  home.file.".pi/agent/AGENTS.md".text = ''
+  ".pi/agent/AGENTS.md".text = ''
     # Pi Agent Instructions
 
     ## File Editing
@@ -31,7 +36,7 @@ in
 
   # Custom model providers (LM Studio local models, etc.)
   # Pi reloads this on /model -- no restart needed.
-  home.file.".pi/agent/models.json".text = builtins.toJSON {
+  ".pi/agent/models.json".text = builtins.toJSON {
     providers = {
       # z.ai GLM Coding plan -- direct provider (not via OpenRouter)
       # API key stored in sops: sops secrets/llm.yaml -> glm_pi
@@ -180,7 +185,7 @@ in
   # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
   # GLM-4.7-Flash first: free on z.ai coding plan, fast, 30B-class. Fallback: Haiku,
   # then OpenRouter DeepSeek V3.2 (cheap, ZDR).
-  home.file.".pi/agent/roles.json".text = builtins.toJSON {
+  ".pi/agent/roles.json".text = builtins.toJSON {
     explain = {
       maxTokens = 256;
       models = [
@@ -209,15 +214,15 @@ in
     };
   };
 
-  # Skills (shared with Claude Code)
-  home.file.".pi/agent/skills/avi-init-agents/SKILL.md".source =
-    ../../config/llm/skills/avi-init-agents/SKILL.md;
-  home.file.".pi/agent/skills/avi-init-agents/checklist.md".source =
-    ../../config/llm/skills/avi-init-agents/checklist.md;
-  # Symlink to local forepaw checkout. Dangling if repo not cloned -- pi skips missing skills.
-  home.file.".pi/agent/skills/forepaw/SKILL.md".source =
-    config.lib.file.mkOutOfStoreSymlink
-      "${config.home.homeDirectory}/dev/personal/forepaw/.agents/skills/forepaw/SKILL.md";
+  }
+
+  # Skills: whole-directory symlinks to live sources (shared list defined in llm-shared.nix).
+  (lib.listToAttrs (
+    map (s: {
+      name = ".pi/agent/skills/${s.name}";
+      value.source = config.lib.file.mkOutOfStoreSymlink s.source;
+    }) skills
+  )) ];
 
   # Extensions deployed to ~/.pi/agent/extensions/ for auto-discovery.
   # All are symlinked to live source — edit + /reload works without nix-switch.

@@ -18,6 +18,7 @@ let
     journalSkipMessage
     vanillaMessage
     globalInstructions
+    skills
     ;
 
   # Shared journal config consumed by pi extension and OpenCode plugin at runtime.
@@ -159,49 +160,52 @@ in
   # Shared
   # ============================================================================
 
-  # Ensure notes directory exists
-  home.file."notes/llm/.keep".text = "";
-
-  # Shared journal config -- read at runtime by pi extension and OpenCode plugin
-  xdg.configFile."llm/journal.json".text = journalConfig;
-
   # ============================================================================
   # Claude Code
   # ============================================================================
 
-  # Empty - instructions injected via SessionStart hook for conditional loading
-  home.file.".claude/CLAUDE.md".text = "";
+  home.file = lib.mkMerge [
+    {
+      # Ensure notes directory exists
+      "notes/llm/.keep".text = "";
 
-  home.file.".claude/hooks/session-start.sh" = {
-    source = sessionStartScript;
-    executable = true;
-  };
+      # Empty - instructions injected via SessionStart hook for conditional loading
+      ".claude/CLAUDE.md".text = "";
 
-  home.file.".claude/hooks/pre-compact.sh" = {
-    source = preCompactScript;
-    executable = true;
-  };
-
-  home.file.".claude/hooks/subagent-start.sh" = {
-    source = subagentStartScript;
-    executable = true;
-  };
-
-  # Custom skills
-  home.file.".claude/skills/avi-init-agents/SKILL.md".source =
-    ../../config/llm/skills/avi-init-agents/SKILL.md;
-  home.file.".claude/skills/avi-init-agents/checklist.md".source =
-    ../../config/llm/skills/avi-init-agents/checklist.md;
-
-  # Helium browser integration (macOS only)
-  # Claude Code hardcodes Chrome's config path for extension detection.
-  # Symlink extension from Helium to Chrome's path to trick detection.
-  # See: https://github.com/anthropics/claude-code/issues/14391
-  home.file."${heliumSupport}/NativeMessagingHosts/com.anthropic.claude_browser_extension.json" =
-    lib.mkIf isDarwin
-      {
-        text = nativeMessagingConfig;
+      ".claude/hooks/session-start.sh" = {
+        source = sessionStartScript;
+        executable = true;
       };
+
+      ".claude/hooks/pre-compact.sh" = {
+        source = preCompactScript;
+        executable = true;
+      };
+
+      ".claude/hooks/subagent-start.sh" = {
+        source = subagentStartScript;
+        executable = true;
+      };
+    }
+
+    # Skills: whole-directory symlinks to live sources (edit = immediate).
+    # Pi gets the same list via pi.nix; OpenCode via xdg.configFile below.
+    (lib.listToAttrs (
+      map (s: {
+        name = ".claude/skills/${s.name}";
+        value.source = config.lib.file.mkOutOfStoreSymlink s.source;
+      }) skills
+    ))
+
+    # Helium browser integration (macOS only)
+    # Claude Code hardcodes Chrome's config path for extension detection.
+    # Symlink extension from Helium to Chrome's path to trick detection.
+    # See: https://github.com/anthropics/claude-code/issues/14391
+    (lib.mkIf isDarwin {
+      "${heliumSupport}/NativeMessagingHosts/com.anthropic.claude_browser_extension.json".text =
+        nativeMessagingConfig;
+    })
+  ];
 
   home.activation.claudeCodeHeliumSetup = lib.mkIf isDarwin (
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
@@ -222,9 +226,24 @@ in
   # OpenCode
   # ============================================================================
 
-  xdg.configFile."opencode/opencode.json".text = builtins.toJSON opencodeConfig;
-  # Empty - instructions injected via plugin for conditional loading
-  xdg.configFile."opencode/AGENTS.md".text = "";
+  xdg.configFile = lib.mkMerge [
+    {
+      # Shared journal config -- read at runtime by pi extension and OpenCode plugin
+      "llm/journal.json".text = journalConfig;
+
+      "opencode/opencode.json".text = builtins.toJSON opencodeConfig;
+      # Empty - instructions injected via plugin for conditional loading
+      "opencode/AGENTS.md".text = "";
+    }
+
+    # Skills (same list as Claude Code + pi)
+    (lib.listToAttrs (
+      map (s: {
+        name = "opencode/skills/${s.name}";
+        value.source = config.lib.file.mkOutOfStoreSymlink s.source;
+      }) skills
+    ))
+  ];
 
   # OpenCode journal plugin -- copied (not symlinked) so bun resolves node_modules
   # from ~/.config/opencode/ rather than the source tree.
