@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Web Search Results</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --muted: #6b7280;
+    --border: rgba(127, 127, 127, 0.2);
+    --accent: #2563eb;
+    --err: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --muted: #9ca3af; --accent: #60a5fa; --err: #f87171; }
+  }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    margin: 0;
+    padding: 12px 16px;
+  }
+  header {
+    color: var(--muted);
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+  }
+  header .query { color: inherit; font-weight: 600; }
+  .hit { margin-bottom: 14px; }
+  .hit-title { font-size: 14px; margin: 0 0 2px 0; line-height: 1.35; }
+  .hit-title a { color: var(--accent); text-decoration: none; }
+  .hit-title a:hover { text-decoration: underline; }
+  .hit-idx { color: var(--muted); font-size: 11px; margin-right: 4px; }
+  .hit-url { color: var(--muted); font-size: 11px; word-break: break-all; margin-bottom: 3px; }
+  .hit-snippet { color: inherit; font-size: 13px; }
+  .hit-date { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .related {
+    border-top: 1px solid var(--border);
+    margin-top: 12px;
+    padding-top: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .related h4 {
+    margin: 0 0 4px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+  .related ul { margin: 0; padding-left: 18px; }
+  .empty, .err { padding: 24px 0; text-align: center; color: var(--muted); }
+  .err { color: var(--err); }
+</style>
+</head>
+<body>
+<div id="app">Loading…</div>
+<script>
+(() => {
+  const app = document.getElementById('app');
+  const INIT_ID = 1;
+
+  function post(msg) { window.parent.postMessage(msg, '*'); }
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  function render(result) {
+    const sc = result?.structuredContent;
+    if (!sc || !Array.isArray(sc.hits)) {
+      const text = (result?.content || []).find(c => c.type === 'text')?.text || 'No results';
+      app.innerHTML = `<pre style="white-space:pre-wrap">${esc(text)}</pre>`;
+      return;
+    }
+    if (sc.error) {
+      app.innerHTML = `<div class="err">${esc(sc.error)}</div>`;
+      return;
+    }
+    const { hits, provider, elapsedMs, query, relatedQuestions } = sc;
+    if (hits.length === 0) {
+      app.innerHTML = `<div class="empty">No results for "${esc(query || '')}"</div>`;
+      return;
+    }
+    const parts = [];
+    parts.push(`<header>`);
+    if (query) parts.push(`<span class="query">"${esc(query)}"</span> — `);
+    parts.push(`${hits.length} result${hits.length === 1 ? '' : 's'}`);
+    if (provider) parts.push(` from ${esc(provider)}`);
+    if (typeof elapsedMs === 'number') parts.push(` in ${elapsedMs}ms`);
+    parts.push(`</header>`);
+    for (const [i, h] of hits.entries()) {
+      parts.push(`<div class="hit">`);
+      parts.push(`<div class="hit-title"><span class="hit-idx">[${i + 1}]</span>`);
+      parts.push(`<a href="${esc(h.url)}" target="_blank" rel="noopener noreferrer">${esc(h.title)}</a></div>`);
+      parts.push(`<div class="hit-url">${esc(h.url)}</div>`);
+      if (h.snippet) parts.push(`<div class="hit-snippet">${esc(h.snippet)}</div>`);
+      if (h.publishedDate) parts.push(`<div class="hit-date">Published ${esc(h.publishedDate)}</div>`);
+      parts.push(`</div>`);
+    }
+    if (Array.isArray(relatedQuestions) && relatedQuestions.length > 0) {
+      parts.push(`<div class="related"><h4>Related</h4><ul>`);
+      for (const q of relatedQuestions) parts.push(`<li>${esc(q)}</li>`);
+      parts.push(`</ul></div>`);
+    }
+    app.innerHTML = parts.join('');
+  }
+
+  let initialized = false;
+
+  window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+
+    if (!initialized && msg.id === INIT_ID && msg.result) {
+      initialized = true;
+      post({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+      return;
+    }
+    if (msg.method === 'ui/notifications/tool-result') {
+      render(msg.params);
+    }
+  });
+
+  post({
+    jsonrpc: '2.0',
+    id: INIT_ID,
+    method: 'ui/initialize',
+    params: {
+      appCapabilities: {},
+      clientInfo: { name: 'web-search-view', version: '0.1.0' },
+      protocolVersion: '2025-06-18',
+    },
+  });
+})();
+</script>
+</body>
+</html>

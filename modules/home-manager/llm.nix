@@ -104,11 +104,18 @@ let
   # OpenCode
   # ============================================================================
 
+  # Shared MCP server list (formatted for OpenCode's schema)
+  mcpServers = import ../llm-mcp.nix {
+    inherit pkgs;
+    mcpDir = "${config.home.homeDirectory}/system/config/llm/mcp";
+  };
+
   opencodeConfig = {
     "$schema" = "https://opencode.ai/config.json";
     # AGENTS.md is read automatically by precedence rules
     # AGENTS.local.md needs to be explicitly included for per-project private context
     instructions = [ "AGENTS.local.md" ];
+    inherit (mcpServers.toOpenCodeMcp) mcp;
     permission = {
       "*" = "ask";
       read = "allow";

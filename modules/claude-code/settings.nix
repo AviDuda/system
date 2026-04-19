@@ -3,10 +3,20 @@
 #
 # Managed settings have highest precedence and cannot be overridden by user settings
 # See: https://docs.anthropic.com/en/docs/claude-code/settings
-{ pkgs }:
+#
+# Returns { settings, mcp } — two JSON files to deploy:
+#   managed-settings.json — hooks, autoMemory, etc.
+#   managed-mcp.json      — org-wide MCP servers (user-level ~/.claude.json mcpServers ignored when this is present)
+{ pkgs, config }:
 let
   # Hook scripts path (scripts installed via home-manager llm.nix)
   hookScriptsPath = "~/.claude/hooks";
+
+  # Shared MCP server list (formatted for Claude Code's schema)
+  mcpServers = import ../llm-mcp.nix {
+    inherit pkgs;
+    mcpDir = "${config.systemFlakeDir}/config/llm/mcp";
+  };
 
   settings = {
     # Disable auto-memory, using journal context instead
@@ -53,5 +63,9 @@ let
       ];
     };
   };
+
 in
-pkgs.writeText "claude-managed-settings.json" (builtins.toJSON settings)
+{
+  settings = pkgs.writeText "claude-managed-settings.json" (builtins.toJSON settings);
+  mcp = pkgs.writeText "claude-managed-mcp.json" (builtins.toJSON mcpServers.toClaudeMcp);
+}

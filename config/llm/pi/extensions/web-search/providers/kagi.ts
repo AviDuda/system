@@ -32,14 +32,24 @@ export class KagiApiError extends Error {
 }
 
 // ── API key ──
+//
+// Resolution order:
+//   1. KAGI_API_KEY env var (direct value)
+//   2. KAGI_API_KEY_FILE env var (path to file containing key)
+//   3. /run/secrets/kagi_api_key (sops-nix default)
 
-const SECRET_PATH = "/run/secrets/kagi_api_key";
+const DEFAULT_SECRET_PATH = "/run/secrets/kagi_api_key";
 
 export function loadApiKey(): string {
+  if (process.env.KAGI_API_KEY) return process.env.KAGI_API_KEY;
+
+  const path = process.env.KAGI_API_KEY_FILE ?? DEFAULT_SECRET_PATH;
   try {
-    return readFileSync(SECRET_PATH, "utf-8").trim();
+    return readFileSync(path, "utf-8").trim();
   } catch {
-    throw new KagiApiError(`Cannot read Kagi API key from ${SECRET_PATH}. Is the sops-nix secret deployed?`);
+    throw new KagiApiError(
+      `Cannot load Kagi API key: set KAGI_API_KEY env var, or KAGI_API_KEY_FILE to a readable path, or deploy ${DEFAULT_SECRET_PATH}.`,
+    );
   }
 }
 
