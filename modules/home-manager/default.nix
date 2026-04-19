@@ -25,6 +25,23 @@ let
   vkquake = if isDarwin then pkgs.callPackage ../../packages/vkquake.nix { } else null;
   forepaw = if isDarwin then pkgs.callPackage ../../packages/forepaw.nix { } else null;
 
+  # GNU tool symlinks (Darwin): expose GNU versions as g-prefixed names alongside
+  # BSD defaults at /usr/bin/. On Linux these utilities are already GNU by default.
+  # Symlink (not shell wrapper) so there's no fork overhead per invocation.
+  gnuTool =
+    name: pkg:
+    pkgs.runCommand "g${name}" { } ''
+      mkdir -p $out/bin
+      ln -s ${pkg}/bin/${name} $out/bin/g${name}
+    '';
+  gnuWrappers = lib.optionals isDarwin [
+    (gnuTool "sed" pkgs.gnused)
+    (gnuTool "awk" pkgs.gawk)
+    (gnuTool "grep" pkgs.gnugrep)
+    (gnuTool "find" pkgs.findutils)
+    (gnuTool "date" pkgs.coreutils)
+  ];
+
   # GitHub CLI wrapper: authenticates via `op read` (1Password, full token in
   # memory only), falls back to sops-nix read-only token.
   gh-wrapper = pkgs.writeShellScriptBin "gh" ''
@@ -140,6 +157,7 @@ in
         hexyl # Hex viewer
         htmlq # jq for HTML
         hyperfine # CLI benchmarking
+        jo # JSON object creator (complement to jq)
         jless # Interactive JSON viewer
         jpegoptim # JPEG optimizer
         lame # MP3 encoder
@@ -245,7 +263,8 @@ in
       lib.optionals isDarwin [
         ericw-tools # Quake map compiling (qbsp, vis, light)
         forepaw # Desktop automation CLI for AI agents
-      ];
+      ]
+    ++ gnuWrappers;
 
   # Dotfiles managed by Home Manager (symlinked from Nix store)
   home.file = {
