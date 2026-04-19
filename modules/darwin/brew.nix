@@ -104,7 +104,7 @@
         greedy = true;
       }
       {
-        name = "claude-code"; # Claude Code CLI
+        name = "claude-code@latest"; # Claude Code CLI
         greedy = true;
       }
       {
@@ -292,11 +292,7 @@
         greedy = true;
       }
       {
-        name = "yubico-authenticator"; # YubiKey authenticator
-        greedy = true;
-      }
-      {
-        name = "yubico-yubikey-manager"; # YubiKey manager
+        name = "yubico-authenticator"; # YubiKey authenticator (also replaces discontinued yubico-yubikey-manager)
         greedy = true;
       }
       {
