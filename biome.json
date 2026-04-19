@@ -30,7 +30,7 @@
     }
   },
   "files": {
-    "includes": ["**/*.ts"],
+    "includes": ["config/llm/**/*.ts", "!**/node_modules/**", "!**/dist/**"],
     "ignoreUnknown": true
   }
 }
