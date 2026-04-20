@@ -161,6 +161,17 @@ Write-Host "`n=== Disabling auto-restart for updates ==="
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord
 
+# --- Fix phantom second display (VirtIO GPU DOD + ramfb framebuffer) ---
+# The VirtIO GPU DOD driver exposes both the UEFI ramfb and VirtIO GPU as
+# separate monitors, causing windows to spawn offscreen.
+# Disable the phantom DEFAULT_MONITOR so only the QEMU Monitor remains.
+$phantom = Get-PnpDevice | Where-Object { $_.InstanceId -like 'DISPLAY\DEFAULT_MONITOR*' -and $_.Status -eq 'OK' }
+if ($phantom) {
+    Write-Host "`n=== Disabling phantom DEFAULT_MONITOR ==="
+    Disable-PnpDevice -InstanceId $phantom.InstanceId -Confirm:$false
+    Write-Host "Phantom monitor disabled."
+}
+
 # --- Disable AutoLogon after first use ---
 Write-Host "`n=== Disabling AutoLogon ==="
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DefaultPassword" -ErrorAction SilentlyContinue

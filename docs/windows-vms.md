@@ -110,7 +110,7 @@ The template VM must be stopped before cloning.
 ## Known Issues
 
 - **"Press any key to boot from CD/DVD"** — UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
-- **Clipboard sharing and dynamic resolution don't work** — UTM guest tools 0.1.271 has a display driver incompatibility with Windows 11 25H2. Upstream issue.
+- **Clipboard sharing works, dynamic resolution doesn't** — VirtIO GPU DOD driver on ARM64 has a known bug ([virtio-win#969](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/969)) that prevents resolution changes. `virtio-gpu-pci` non-VGA mode doesn't properly expose EDID to Windows. The phantom second monitor is the same bug. Workaround: `firstlogin.ps1` disables the phantom `DEFAULT_MONITOR`.
 
 ## Files
 
