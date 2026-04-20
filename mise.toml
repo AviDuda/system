@@ -126,6 +126,18 @@ description = "Download Windows 11 ARM64 and create UTM VM (usage: mise nwu -- [
 raw = true
 run = "./scripts/windows-utm.sh"
 
+[tasks.windows-test]
+alias = "nwt"
+description = "Clone Windows template VM for disposable testing (instant, APFS CoW)"
+raw = true
+run = "./scripts/windows-test.sh"
+
+[tasks.windows-test-cleanup]
+alias = "nwtc"
+description = "Stop and delete all Windows test clones"
+raw = true
+run = "./scripts/windows-test.sh cleanup"
+
 [tasks.nixos-builder-start]
 alias = "nbs"
 description = "Start the linux-builder VM"

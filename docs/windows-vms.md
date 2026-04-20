@@ -7,6 +7,8 @@ Scripted Windows 11 ARM64 VM creation in UTM.
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `mise windows-utm -- [options]` | `mise nwu` | Download ISO + create UTM VM |
+| `mise windows-test` | `mise nwt` | Clone template for disposable testing |
+| `mise windows-test-cleanup` | `mise nwtc` | Stop + delete test clones |
 
 ## Quick Start
 
@@ -102,6 +104,31 @@ $acl | Set-Acl
 Restart-Service sshd
 ```
 
+## Disposable Test Clones
+
+UTM cloning uses APFS copy-on-write, so cloning the template is instant (~0.25s)
+regardless of disk image size. This gives a snapshot-like workflow without Parallels:
+
+```bash
+# Clone the template, boot, wait for SSH
+mise nwt
+# ... run your tests ... (template stays pristine)
+
+# Clean up when done
+mise nwtc
+```
+
+The clone gets a randomized MAC address (UTM copies the template's MAC verbatim,
+so the script randomizes it via PlistBuddy post-clone) and a new IP via DHCP.
+The template VM must be stopped before cloning.
+
+### Workflow
+
+1. Create the template once: `mise nwu -- --username avi --password hunter2`
+2. Boot it, verify firstlogin.ps1 completed, deploy SSH key
+3. Shut it down — this is now your pristine template
+4. Before each test session: `mise nwt` → clone boots → SSH in → test → `mise nwtc`
+
 ## Known Issues
 
 - **Clipboard sharing and dynamic resolution don't work** — UTM guest tools 0.1.271 has a display driver incompatibility with Windows 11 25H2. Upstream issue.
@@ -112,5 +139,6 @@ Restart-Service sshd
 | File | Purpose |
 |------|---------|
 | `scripts/windows-utm.sh` | Main automation script |
+| `scripts/windows-test.sh` | Clone/delete disposable test VMs |
 | `config/windows/autounattend.xml` | Unattended answer file |
 | `config/windows/firstlogin.ps1` | Post-install setup script |
