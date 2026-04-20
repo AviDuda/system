@@ -88,7 +88,22 @@ Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyConti
 
 # --- Enable OpenSSH Server ---
 Write-Host "`n=== Installing OpenSSH Server ==="
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction SilentlyContinue
+# Add-WindowsCapability needs internet. Retry up to 5 times with 10s delay
+# in case the VirtIO network adapter hasn't finished initializing.
+$sshInstalled = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop
+        $sshInstalled = $true
+        break
+    } catch {
+        Write-Host "  Attempt $attempt failed: $($_.Exception.Message)"
+        if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
+    }
+}
+if (-not $sshInstalled) {
+    Write-Host "  WARNING: Failed to install OpenSSH Server after 5 attempts. SSH will not be available."
+}
 Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service sshd -ErrorAction SilentlyContinue
 
