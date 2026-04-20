@@ -105,19 +105,19 @@ The `mise nbu` task automates:
 
 - **Display**: UTM window (virtio-gpu-gl-pci)
 - **Serial**: UTM serial console (ptty, built-in terminal)
-- **SSH**: `ssh -i ~/.ssh/nixos-vm avi@phantom-tanuki.local` (mDNS via Avahi)
+- **SSH**: `ssh avi@phantom-tanuki.local` (mDNS via Avahi)
 - **IP lookup**: `osascript -e 'tell application "UTM" to query ip of virtual machine named "phantom-tanuki"'`
 
 ### SSH key setup
 
-A dedicated deploy key (`~/.ssh/nixos-vm`) is used for VM access. Generate with:
+A dedicated deploy key (`~/.ssh/vm`) is used for VM access. Generate with:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/nixos-vm -N "" -C "nixos-vm-deploy"
+ssh-keygen -t ed25519 -f ~/.ssh/vm -N "" -C "vm-deploy"
 ```
 
 The public key is configured in `machines/<host>/default.nix` via `openssh.authorizedKeys.keys`.
-For initial bootstrap, copy the key manually: `ssh-copy-id -i ~/.ssh/nixos-vm avi@<host>.local`
+For initial bootstrap, copy the key manually: `ssh-copy-id -i ~/.ssh/vm avi@<host>.local`
 
 ### Display card
 

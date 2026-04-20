@@ -320,9 +320,14 @@ build_unattended_iso() {
     mkdir -p "$staging"
 
     # Copy and customize autounattend.xml
+    # Derive Windows hostname from UTM VM name: uppercase, replace non-alphanumeric
+    # with hyphens, strip anything else. E.g. "windows-11" -> "WINDOWS-11"
+    local computer_name
+    computer_name=$(echo "$VM_NAME" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Za-z0-9]/-/g' | tr -cd 'A-Z0-9-')
     sed \
         -e "s/__USERNAME__/$USERNAME/g" \
         -e "s/__PASSWORD__/$PASSWORD/g" \
+        -e "s/__COMPUTERNAME__/$computer_name/g" \
         "$SCRIPT_DIR/config/windows/autounattend.xml" > "$staging/autounattend.xml"
 
     # Copy firstlogin script
@@ -353,6 +358,14 @@ build_unattended_iso() {
 
     # Copy UTM guest tools (VirtIO drivers + SPICE agent for resolution + clipboard)
     cp "$utm_guest_tools" "$staging/utm-guest-tools.exe"
+
+    # Copy SSH public key for automatic authorized_keys setup
+    local ssh_pub_key="$HOME/.ssh/vm.pub"
+    if [[ -f "$ssh_pub_key" ]]; then
+        cp "$ssh_pub_key" "$staging/vm.pub"
+    else
+        echo "  WARNING: $ssh_pub_key not found, SSH key won't be auto-deployed"
+    fi
 
     # Build ISO -- no bootloader or startup.nsh needed. The Windows install ISO
     # boots natively via UEFI, and Windows Setup automatically discovers

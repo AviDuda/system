@@ -106,8 +106,33 @@ if (Test-Path $sshdConfig) {
 # Allow SSH through Windows Firewall
 New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue
 
+# Allow ICMP (ping) for diagnostics
+New-NetFirewallRule -Name 'Allow ICMPv4' -DisplayName 'Allow ICMPv4' -Enabled True -Direction Inbound -Protocol ICMPv4 -Action Allow -Profile Any -ErrorAction SilentlyContinue
+
 # Set PowerShell as default shell for SSH
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force -ErrorAction SilentlyContinue
+
+# --- Deploy SSH authorized key from unattended ISO ---
+if ($virtioDir) {
+    $pubKey = Join-Path $virtioDir "vm.pub"
+    if (Test-Path $pubKey) {
+        Write-Host "`n=== Deploying SSH authorized key ==="
+        $key = (Get-Content $pubKey -Raw).Trim()
+        $sshDir = Join-Path $env:USERPROFILE ".ssh"
+        New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+        $authKeys = Join-Path $sshDir "authorized_keys"
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($authKeys, $key, $utf8)
+
+        # Set ACLs: user + SYSTEM only
+        $acl = Get-Acl $authKeys
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($env:USERNAME, "FullControl", "Allow")))
+        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")))
+        Set-Acl -Path $authKeys -AclObject $acl
+        Write-Host "SSH key deployed to $authKeys"
+    }
+}
 
 Restart-Service sshd -ErrorAction SilentlyContinue
 

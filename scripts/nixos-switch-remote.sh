@@ -4,7 +4,7 @@ set -euo pipefail
 host="${1:?Usage: mise nrs -- <hostname> [target]}"
 target="${2:-${host}.local}"
 ssh_target="avi@$target"
-ssh_key="$HOME/.ssh/nixos-vm"
+ssh_key="$HOME/.ssh/vm"
 ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i "$ssh_key")
 
 # Check target is reachable before building (fail fast)

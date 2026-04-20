@@ -259,7 +259,7 @@
                publicKeyToken="31bf3856ad364e35"
                language="neutral"
                versionScope="nonSxS">
-      <ComputerName>WINDOWS-VM</ComputerName>
+      <ComputerName>__COMPUTERNAME__</ComputerName>
     </component>
   </settings>
 

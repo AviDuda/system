@@ -37,11 +37,18 @@
     ../../modules/home-manager
   ];
 
-  # SSH config for local NixOS VM
-  hm.programs.ssh.matchBlocks."phantom-tanuki" = {
-    hostname = "phantom-tanuki.local";
-    user = "avi";
-    identityFile = "~/.ssh/nixos-vm";
-    identitiesOnly = true;
+  # SSH config for local VMs (shared key, not NixOS-specific)
+  hm.programs.ssh.matchBlocks = {
+    "phantom-tanuki" = {
+      hostname = "phantom-tanuki.local";
+      user = "avi";
+      identityFile = "~/.ssh/vm";
+      identitiesOnly = true;
+    };
+    "192.168.64.*" = {
+      user = "avi";
+      identityFile = "~/.ssh/vm";
+      identitiesOnly = true;
+    };
   };
 }

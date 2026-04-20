@@ -74,43 +74,13 @@ Runs automatically on first login:
 
 ## SSH Access
 
-The VM is accessible via mDNS (UTM uses Apple's vmnet.framework):
+The VM is accessible via the vmnet shared network (192.168.64.x). SSH key is automatically deployed from `~/.ssh/vm.pub` during first login via `firstlogin.ps1`. The SSH config in nix matches `192.168.64.*` so you can connect with:
 
 ```bash
-ssh -i ~/.ssh/nixos-vm avi@WINDOWS-VM.local
+ssh avi@192.168.64.x
 ```
 
-No port forwarding needed — the guest gets a real IP on the virtual network.
-
-Note: you need to deploy an SSH key to the VM. The `firstlogin.ps1` configures sshd but doesn't deploy keys. See the SSH key setup section below.
-
-### SSH Key Setup
-
-From the host, serve your public key and run the setup on the guest:
-
-```bash
-# On the host
-python3 -m http.server 8888 --directory ~/.ssh &
-```
-
-Then in the Windows VM's PowerShell (admin):
-
-```powershell
-$key = (Invoke-WebRequest -Uri "http://192.168.64.1:8888/nixos-vm.pub" -UseBasicParsing).ToString()
-$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-mkdir -Force C:\Users\avi\.ssh | Out-Null
-[System.IO.File]::WriteAllText("C:\Users\avi\.ssh\authorized_keys", $key, $Utf8NoBom)
-
-$userRule = New-Object System.Security.AccessControl.FileSystemAccessRule("avi","FullControl","Allow")
-$systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM","FullControl","Allow")
-$acl = Get-Acl "C:\Users\avi\.ssh\authorized_keys"
-$acl.SetAccessRuleProtection($true, $false)
-$acl.SetAccessRule($userRule)
-$acl.SetAccessRule($systemRule)
-$acl | Set-Acl
-
-Restart-Service sshd
-```
+Note: on macOS Sequoia+, the terminal app needs **Local Network** access (System Settings → Privacy & Security → Local Network) to reach vmnet interfaces. Without this, SSH will fail with "No route to host" even though the guest can reach the host.
 
 ## Disposable Test Clones
 
