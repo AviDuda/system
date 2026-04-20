@@ -60,6 +60,8 @@ The script builds an ISO containing:
 
 The unattended ISO is a data payload only -- no bootloader. UEFI boots from the Windows install ISO (which has its own bootloader), and Windows Setup discovers `autounattend.xml` on the second CD drive automatically.
 
+**Driver loading:** Windows 11 24H2+ broke the `DriverPaths` mechanism in autounattend.xml (Microsoft regression, error `0x80070103`; [Spiceworks discussion](https://community.spiceworks.com/t/autounattend-xml-driver-path-issue-for-windows-11-24h2-and-25h2/1244985)). Drivers are loaded via `drvload` commands in `RunSynchronousCommand` instead, which explicitly loads viostor, vioscsi, and NetKVM into WinPE before DiskConfiguration runs. The `DriverPaths` entries are kept as fallback for older ISOs.
+
 ### Post-Install (firstlogin.ps1)
 
 Runs automatically on first login:
@@ -137,7 +139,6 @@ The template VM must be stopped before cloning.
 
 ## Known Issues
 
-- **VirtIO storage driver not loaded during Setup** — Windows Setup shows "Select location to install" with no drives visible. The VirtIO storage driver (viostor) must be loaded manually via the Load Driver dialog, browsing to the unattended ISO's `viostor` directory. The `autounattend.xml` DriverPaths entry doesn't seem to work.
 - **"Press any key to boot from CD/DVD"** — UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
 - **Clipboard sharing and dynamic resolution don't work** — UTM guest tools 0.1.271 has a display driver incompatibility with Windows 11 25H2. Upstream issue.
 

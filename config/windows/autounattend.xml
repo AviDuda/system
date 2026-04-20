@@ -109,9 +109,11 @@
         </Disk>
       </DiskConfiguration>
 
-      <!-- Load VirtIO drivers from the unattended CD-ROM.
-           Drive letter is unpredictable in WindowsPE, so we list D: through G:
-           to cover common assignments. Invalid paths are silently ignored. -->
+      <!-- Fallback: DriverPaths for VirtIO drivers.
+           NOTE: DriverPaths is broken on Win11 24H2+ (0x80070103 regression).
+           Actual driver loading is handled by drvload RunSynchronousCommands above.
+           Kept as fallback for older ISOs. Drive letters D:-G: cover common
+           assignments; invalid paths are silently ignored. -->
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
           <Path>D:\viostor\w11\ARM64</Path>
@@ -164,7 +166,68 @@
           <Order>5</Order>
           <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
+
+        <!-- Load VirtIO storage + SCSI drivers via drvload.
+             DriverPaths is broken on Win11 24H2+ (0x80070103 regression),
+             so we explicitly load drivers into WinPE before DiskConfiguration.
+             Drive letters are unpredictable in WinPE, so search D:-G:. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>cmd /c "for %d in (D E F G) do @if exist %d:\viostor\w11\ARM64\viostor.inf drvload %d:\viostor\w11\ARM64\viostor.inf 2>nul"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>cmd /c "for %d in (D E F G) do @if exist %d:\vioscsi\w11\ARM64\vioscsi.inf drvload %d:\vioscsi\w11\ARM64\vioscsi.inf 2>nul"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>cmd /c "for %d in (D E F G) do @if exist %d:\NetKVM\w11\ARM64\netkvm.inf drvload %d:\NetKVM\w11\ARM64\netkvm.inf 2>nul"</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
+    </component>
+  </settings>
+
+  <!-- ============================================================
+       Pass 2: offlineServicing — runs against the installed image
+       before first boot. Injects VirtIO drivers so the disk is
+       bootable (drvload only loads into WinPE RAM disk, not the
+       installed image).
+       ============================================================ -->
+  <settings pass="offlineServicing">
+    <component name="Microsoft-Windows-PnpCustomizationsNonWinPE"
+               processorArchitecture="arm64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+          <Path>D:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+          <Path>D:\vioscsi\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>D:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
+          <Path>E:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5">
+          <Path>E:\vioscsi\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6">
+          <Path>E:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7">
+          <Path>F:\viostor\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8">
+          <Path>F:\vioscsi\w11\ARM64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9">
+          <Path>F:\NetKVM\w11\ARM64</Path>
+        </PathAndCredentials>
+      </DriverPaths>
     </component>
   </settings>
 
