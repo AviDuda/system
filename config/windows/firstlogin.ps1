@@ -36,7 +36,11 @@ if (-not $virtioDir) {
     # --- Install remaining VirtIO drivers via pnputil ---
     Write-Host "`n=== Installing VirtIO drivers ==="
     $driverDirs = Get-ChildItem -Path $virtioDir -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^(Balloon|vioinput|vioser|viogpudo|NetKVM|viostor|viofs)$' }
+        Where-Object { $_.Name -match '^(Balloon|vioinput|vioser|NetKVM|viostor|viofs)$' }
+    # Note: viogpudo (VirtIO GPU DOD) is intentionally excluded.
+    # On ARM64, virtio-gpu-pci non-VGA mode doesn't properly report EDID to Windows
+    # (virtio-win#969), causing a phantom second monitor and making the login screen
+    # render on the wrong display. The ramfb framebuffer alone works fine for display.
 
     foreach ($dir in $driverDirs) {
         $arm64Dir = Join-Path $dir.FullName "w11\ARM64"
@@ -175,17 +179,6 @@ powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
 Write-Host "`n=== Disabling auto-restart for updates ==="
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord
-
-# --- Fix phantom second display (VirtIO GPU DOD + ramfb framebuffer) ---
-# The VirtIO GPU DOD driver exposes both the UEFI ramfb and VirtIO GPU as
-# separate monitors, causing windows to spawn offscreen.
-# Disable the phantom DEFAULT_MONITOR so only the QEMU Monitor remains.
-$phantom = Get-PnpDevice | Where-Object { $_.InstanceId -like 'DISPLAY\DEFAULT_MONITOR*' -and $_.Status -eq 'OK' }
-if ($phantom) {
-    Write-Host "`n=== Disabling phantom DEFAULT_MONITOR ==="
-    Disable-PnpDevice -InstanceId $phantom.InstanceId -Confirm:$false
-    Write-Host "Phantom monitor disabled."
-}
 
 # --- Disable AutoLogon after first use ---
 Write-Host "`n=== Disabling AutoLogon ==="

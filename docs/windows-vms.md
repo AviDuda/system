@@ -62,6 +62,8 @@ The unattended ISO is a data payload only -- no bootloader. UEFI boots from the 
 
 **Driver loading:** Windows 11 24H2+ broke the `DriverPaths` mechanism in autounattend.xml (Microsoft regression, error `0x80070103`; [Spiceworks discussion](https://community.spiceworks.com/t/autounattend-xml-driver-path-issue-for-windows-11-24h2-and-25h2/1244985)). Drivers are loaded via `drvload` commands in `RunSynchronousCommand` instead, which explicitly loads viostor, vioscsi, and NetKVM into WinPE before DiskConfiguration runs. The `DriverPaths` entries are kept as fallback for older ISOs.
 
+**Note:** The VirtIO GPU DOD driver (viogpudo) is intentionally not installed. On ARM64 it causes a phantom second monitor and breaks resolution changes ([virtio-win#969](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/969)). The ramfb framebuffer alone handles display correctly, including dynamic resizing and clipboard sharing via SPICE.
+
 ### Post-Install (firstlogin.ps1)
 
 Runs automatically on first login:
@@ -109,8 +111,7 @@ The template VM must be stopped before cloning.
 
 ## Known Issues
 
-- **"Press any key to boot from CD/DVD"** — UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
-- **Clipboard sharing works, dynamic resolution doesn't** — VirtIO GPU DOD driver on ARM64 has a known bug ([virtio-win#969](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/969)) that prevents resolution changes. `virtio-gpu-pci` non-VGA mode doesn't properly expose EDID to Windows. The phantom second monitor is the same bug. Workaround: `firstlogin.ps1` disables the phantom `DEFAULT_MONITOR`.
+- **"Press any key to boot from CD/DVD"** -- UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
 
 ## Files
 

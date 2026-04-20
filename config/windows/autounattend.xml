@@ -113,7 +113,8 @@
            NOTE: DriverPaths is broken on Win11 24H2+ (0x80070103 regression).
            Actual driver loading is handled by drvload RunSynchronousCommands above.
            Kept as fallback for older ISOs. Drive letters D:-G: cover common
-           assignments; invalid paths are silently ignored. -->
+           assignments; invalid paths are silently ignored.
+           viogpudo is excluded (causes phantom second monitor on ARM64). -->
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
           <Path>D:\viostor\w11\ARM64</Path>
@@ -122,7 +123,7 @@
           <Path>D:\NetKVM\w11\ARM64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="3">
-          <Path>D:\viogpudo\w11\ARM64</Path>
+          <Path>D:\vioscsi\w11\ARM64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4">
           <Path>E:\viostor\w11\ARM64</Path>
@@ -131,7 +132,7 @@
           <Path>E:\NetKVM\w11\ARM64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="6">
-          <Path>E:\viogpudo\w11\ARM64</Path>
+          <Path>E:\vioscsi\w11\ARM64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="7">
           <Path>F:\viostor\w11\ARM64</Path>
@@ -140,7 +141,7 @@
           <Path>F:\NetKVM\w11\ARM64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="9">
-          <Path>F:\viogpudo\w11\ARM64</Path>
+          <Path>F:\vioscsi\w11\ARM64</Path>
         </PathAndCredentials>
       </DriverPaths>
 
