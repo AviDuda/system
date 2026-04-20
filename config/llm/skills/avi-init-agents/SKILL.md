@@ -127,6 +127,8 @@ If the project has private context (references to private files, personal planni
 
 And symlink: `ln -sf AGENTS.local.md CLAUDE.local.md`
 
+**Verify gitignore** before creating — run `git check-ignore AGENTS.local.md CLAUDE.local.md`. If not ignored, suggest adding to `.gitignore` (local or global). These files are personal and should never be committed.
+
 ### Step 8: Suggest Missing Docs
 
 If gaps found during exploration, describe what's missing by purpose:
