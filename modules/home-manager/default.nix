@@ -124,6 +124,7 @@ in
       # Stable packages (versions match homebrew)
       (with pkgs; [
         age # Encryption tool
+        aria2 # Multi-connection downloader (faster than curl for large files)
         assimp # 3D model importer
         bat # Cat with syntax highlighting
         binwalk # Firmware analysis

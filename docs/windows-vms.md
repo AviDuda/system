@@ -7,6 +7,7 @@ Scripted Windows 11 ARM64 VM creation in UTM.
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `mise windows-utm -- [options]` | `mise nwu` | Download ISO + create UTM VM |
+| `mise windows-utm -- --clean` | | Remove cached downloads (~7GB) |
 | `mise windows-test` | `mise nwt` | Clone template for disposable testing |
 | `mise windows-test-cleanup` | `mise nwtc` | Stop + delete test clones |
 
@@ -23,7 +24,7 @@ This will:
 4. Build an unattended installation ISO
 5. Create a UTM VM with ISOs bundled
 
-Then open UTM and start the VM. Windows installs automatically via `autounattend.xml`.
+Then open UTM and start the VM. Press any key when prompted to boot from CD/DVD. Windows installs via `autounattend.xml`.
 
 ## Options
 
@@ -37,22 +38,27 @@ Then open UTM and start the VM. Windows installs automatically via `autounattend
 | `--cores N` | `6` | CPU cores |
 | `--iso PATH` | | Use existing ISO instead of downloading |
 | `--emulate` | | QEMU emulation instead of Apple Hypervisor |
-| `--skip-download` | | Skip downloads, use cached copies |
+| `--clean` | | Remove cached downloads and exit |
 
 ## How It Works
 
 ### ISO Download
 
-The script resolves the latest Windows 11 ARM64 Consumer ISO URL from [massgrave.dev](https://massgrave.dev/windows_arm_links)'s GitHub-hosted link list. These are direct Microsoft CDN links — genuine files, no scraping of Microsoft's download page required. ETag caching avoids re-downloading ~7GB when the cached ISO is current.
+The script resolves the latest Windows 11 ARM64 ISO URL from [massgrave.dev](https://massgrave.dev/windows_arm_links)'s GitHub-hosted link list. It parses the **default (recommended) tab**, so when massgrave updates to a newer build, the script automatically follows. These are direct Microsoft CDN links — genuine files, no scraping of Microsoft's download page required.
+
+Downloads use **aria2c** (16 parallel connections) for much faster downloads than single-connection curl. Falls back to curl if aria2 isn't installed. Cached ISOs are reused automatically via ETag checking -- if the cached file matches the current server version, it skips the ~7GB download entirely.
+
+After download, the script automatically looks up the expected **SHA-256 hash** from [files.rg-adguard.net](https://files.rg-adguard.net/search) (the canonical third-party database of Microsoft file hashes) and verifies the downloaded file matches. If the hash doesn't match, it warns that the file may be corrupted or tampered. If the lookup fails (network issues, unknown build), it prints the computed hash with a manual verification link.
 
 ### Unattended Installation
 
 The script builds an ISO containing:
 - **`autounattend.xml`** — selects Windows 11 Pro, creates a local account, bypasses TPM/SecureBoot checks, loads VirtIO drivers
-- **`startup.nsh`** — tells the UEFI shell to boot from the Windows ISO (bypasses "Press any key to boot from CD" timeout)
 - **VirtIO ARM64 drivers** — storage, network, GPU, input (from [qemus/virtiso-arm](https://github.com/qemus/virtiso-arm))
 - **UTM guest tools** — SPICE agent for clipboard/resolution, VirtIO display driver
 - **`firstlogin.ps1`** — post-install setup (driver install, OpenSSH server, RDP, telemetry reduction)
+
+The unattended ISO is a data payload only -- no bootloader. UEFI boots from the Windows install ISO (which has its own bootloader), and Windows Setup discovers `autounattend.xml` on the second CD drive automatically.
 
 ### Post-Install (firstlogin.ps1)
 
@@ -131,8 +137,9 @@ The template VM must be stopped before cloning.
 
 ## Known Issues
 
+- **VirtIO storage driver not loaded during Setup** — Windows Setup shows "Select location to install" with no drives visible. The VirtIO storage driver (viostor) must be loaded manually via the Load Driver dialog, browsing to the unattended ISO's `viostor` directory. The `autounattend.xml` DriverPaths entry doesn't seem to work.
+- **"Press any key to boot from CD/DVD"** — UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
 - **Clipboard sharing and dynamic resolution don't work** — UTM guest tools 0.1.271 has a display driver incompatibility with Windows 11 25H2. Upstream issue.
-- **UEFI boot screen is not visible** — `virtio-gpu-gl-pci` doesn't render the UEFI firmware output. The `startup.nsh` handles boot automatically, so this is cosmetic.
 
 ## Files
 

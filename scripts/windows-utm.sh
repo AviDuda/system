@@ -16,7 +16,7 @@ set -euo pipefail
 #   --cores N           CPU cores (default: 6)
 #   --iso PATH          Use existing Windows ISO instead of downloading
 #   --emulate           Use QEMU emulation instead of Apple Hypervisor
-#   --skip-download     Skip ISO download (use cached copy)
+#   --clean             Remove cached downloads and exit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="/tmp/windows-utm-build"
@@ -30,14 +30,15 @@ MEMORY_MB=8192
 CPU_CORES=6
 ISO_PATH=""
 EMULATE=false
-SKIP_DOWNLOAD=false
+CLEAN=false
 
 # URLs
 # Resolved dynamically via GitHub API (version is in the filename)
 VIRTIO_REPO="qemus/virtiso-arm"
 UTM_GUEST_TOOLS_URL="https://getutm.app/downloads/utm-guest-tools-latest.iso"
 # massgrave.dev maintains a markdown file with current direct Microsoft CDN links.
-# We parse this at runtime to always get the latest build URL.
+# We parse the "default" (recommended) tab at runtime, so when massgrave
+# updates the recommended build, we automatically follow.
 MASGRAVE_ARM_LINKS="https://raw.githubusercontent.com/massgravel/massgrave.dev/main/docs/windows_arm_links.md"
 # We extract the UTM guest tools exe from their ISO (which also ships an
 # autounattend.xml that would conflict with ours -- UTM issue #7476).
@@ -59,33 +60,144 @@ parse_args() {
             --cores)     CPU_CORES="$2"; shift 2 ;;
             --iso)       ISO_PATH="$2"; shift 2 ;;
             --emulate)   EMULATE=true; shift ;;
-            --skip-download) SKIP_DOWNLOAD=true; shift ;;
+            --clean)     CLEAN=true; shift ;;
             --help|-h)   usage 0 ;;
             *)           echo "Unknown option: $1"; usage 1 ;;
         esac
     done
 }
 
-# Download Windows 11 ARM64 ISO.
-# Resolves the latest direct CDN link from massgrave.dev's maintained link list
-# (parsed from their GitHub repo). These are genuine Microsoft-hosted files.
-# Uses ETag caching to skip re-download if the cached ISO is current.
-download_windows_iso() {
-    local dest="$1"
+# Resolve the latest Windows ARM64 ISO download URL from massgrave.dev.
+# Parses the "default" (recommended) tab from the ARM64 links page,
+# which always tracks the current Microsoft CDN download link.
+resolve_iso_url() {
+    local content
+    content="$(curl -sL "$MASGRAVE_ARM_LINKS")"
 
-    if [[ -f "$dest" ]] && $SKIP_DOWNLOAD; then
-        echo "Using cached ISO: $dest (--skip-download)"
+    # Extract the first <TabItem ... default> block (recommended version)
+    # and find the English ISO link from Microsoft's CDN.
+    echo "$content" \
+        | awk '/<TabItem.*default>/{found=1} found{print} found&&/<\/TabItem>/{exit}' \
+        | grep '| English ' \
+        | grep -v 'United Kingdom' \
+        | grep -o 'https://software-static[^)]*' \
+        | head -1
+}
+
+# Check if cached file matches current server version via ETag.
+# Returns 0 (true) if cache is current, 1 (false) if stale or missing.
+check_etag() {
+    local dest="$1" url="$2"
+    local etag_file="${dest}.etag"
+
+    [[ -f "$dest" && -f "$etag_file" ]] || return 1
+
+    local cached_etag
+    cached_etag="$(cat "$etag_file")"
+    echo "  Checking if cached ISO is current..."
+    local http_code
+    http_code="$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "If-None-Match: $cached_etag" \
+        --head -L "$url")"
+
+    if [[ "$http_code" == "304" ]]; then
+        echo "  Cached ISO is current (ETag match), skipping download."
+        return 0
+    fi
+    echo "  Cached ISO is stale, re-downloading."
+    return 1
+}
+
+# Save ETag and CDN filename from server for future cache checks.
+save_etag() {
+    local dest="$1" url="$2"
+    local etag_file="${dest}.etag"
+
+    local header_file="$WORK_DIR/etag-headers.txt"
+    curl -s -D "$header_file" -o /dev/null --head -L "$url" 2>/dev/null || true
+    local new_etag
+    new_etag="$(grep -i '^etag:' "$header_file" 2>/dev/null | tail -1 \
+        | sed 's/^[Ee][Tt][Aa][Gg]: *//; s/\r$//')"
+    if [[ -n "$new_etag" ]]; then
+        echo "$new_etag" > "$etag_file"
+    fi
+    rm -f "$header_file"
+
+    # Store CDN filename for hash lookup on cached re-runs
+    basename "$url" > "${dest}.cdn_name"
+}
+
+# Look up the expected SHA-256 hash for an ISO file from files.rg-adguard.net.
+# This is the canonical third-party database of Microsoft file hashes.
+# Returns the hash on stdout, or empty string if lookup fails.
+lookup_expected_hash() {
+    local filename="$1"
+
+    # Step 1: Search by filename to get the detail page URL
+    local search_html
+    search_html="$(curl -s 'https://files.rg-adguard.net/search' \
+        -X POST \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "search=$filename")"
+
+    local detail_url
+    detail_url="$(echo "$search_html" \
+        | grep -o 'files.rg-adguard.net/file/[a-f0-9-]*' \
+        | head -1)"
+
+    if [[ -z "$detail_url" ]]; then
         return 0
     fi
 
+    # Step 2: Fetch detail page and extract SHA-256 from meta tag
+    local detail_html
+    detail_html="$(curl -sL "https://$detail_url")"
+    echo "$detail_html" \
+        | grep -o 'SHA-256: [a-f0-9]*' \
+        | head -1 \
+        | cut -d' ' -f2
+}
+
+# Compute SHA-256 hash of an ISO file and verify against known-good hash
+# from files.rg-adguard.net. Prints result and returns 1 on mismatch.
+# $1 = local ISO path, $2 = original CDN filename (for rg-adguard lookup)
+verify_iso_hash() {
+    local iso="$1" cdn_filename="${2:-}"
+    echo "  Computing SHA-256 for integrity verification..."
+    local actual_hash
+    actual_hash="$(shasum -a 256 "$iso" | cut -d' ' -f1)"
+    echo "  SHA-256: $actual_hash"
+
+    # Look up expected hash from rg-adguard database
+    local expected_hash
+    if [[ -n "$cdn_filename" ]]; then
+        expected_hash="$(lookup_expected_hash "$cdn_filename")"
+    fi
+
+    if [[ -n "$expected_hash" ]]; then
+        echo "  Expected: $expected_hash (from files.rg-adguard.net)"
+        if [[ "$actual_hash" == "$expected_hash" ]]; then
+            echo "  Hash verified -- ISO is genuine."
+        else
+            echo "  WARNING: Hash mismatch! File may be corrupted or tampered."
+            echo "  Verify manually at: https://files.rg-adguard.net/search"
+            return 1
+        fi
+    else
+        echo "  Could not look up expected hash (rg-adguard lookup failed)."
+        echo "  Verify manually at: https://files.rg-adguard.net/search"
+    fi
+}
+
+# Download Windows 11 ARM64 ISO.
+# Uses aria2c for multi-connection download (faster) with curl fallback.
+# ETag caching avoids re-downloading ~7GB when the cached ISO is current.
+download_windows_iso() {
+    local dest="$1"
+
     echo "Resolving Windows 11 ARM64 ISO download link..."
     local download_url
-    download_url="$(curl -sL "$MASGRAVE_ARM_LINKS" \
-        | sed -n '/Windows 11 Consumer 25H2/,/^<\/TabItem>/p' \
-        | grep '| English ' \
-        | grep -v 'United Kingdom' \
-        | sed 's/.*(\(https:\/\/software-static[^)]*\)).*/\1/' \
-        | head -1)"
+    download_url="$(resolve_iso_url)"
 
     if [[ -z "$download_url" ]]; then
         echo "ERROR: Could not resolve download URL from massgrave.dev."
@@ -100,46 +212,52 @@ download_windows_iso() {
     echo "  Build: $filename"
 
     # Check ETag to see if cached ISO is still current
-    local etag_file="${dest}.etag"
-    if [[ -f "$dest" && -f "$etag_file" ]]; then
-        local cached_etag
-        cached_etag="$(cat "$etag_file")"
-        echo "  Checking if cached ISO is current..."
-        local http_code
-        http_code="$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "If-None-Match: $cached_etag" \
-            --head -L "$download_url")"
-        if [[ "$http_code" == "304" ]]; then
-            echo "  Cached ISO is current (ETag match), skipping download."
-            return 0
-        fi
-        echo "  Cached ISO is stale, re-downloading."
+    if check_etag "$dest" "$download_url"; then
+        verify_iso_hash "$dest" "$filename"
+        return 0
     fi
 
-    echo "  Downloading (~7GB, this will take a while)..."
-    # Download and capture response headers to extract ETag
-    local header_file="$WORK_DIR/iso-headers.txt"
-    curl --progress-bar --fail -L -D "$header_file" -o "$dest" "$download_url" || {
-        rm -f "$dest" "$header_file"
-        echo "ERROR: Download failed."
-        exit 1
-    }
+    echo "  Downloading (~7GB)..."
+
+    if command -v aria2c &>/dev/null; then
+        echo "  Using aria2c (16 connections, much faster)"
+        # Remove stale aria2 control file from previous partial downloads
+        rm -f "${dest}.aria2"
+        aria2c --continue=true \
+            --max-connection-per-server=16 \
+            --split=16 \
+            --min-split-size=1M \
+            --file-allocation=none \
+            --summary-interval=10 \
+            --console-log-level=warn \
+            --dir="$(dirname "$dest")" \
+            --out="$(basename "$dest")" \
+            "$download_url" || {
+            rm -f "$dest" "${dest}.aria2"
+            echo "ERROR: Download failed."
+            exit 1
+        }
+        rm -f "${dest}.aria2"
+    else
+        echo "  Using curl (single-connection). Install aria2 for faster downloads."
+        curl --progress-bar --fail -L -o "$dest" "$download_url" || {
+            rm -f "$dest"
+            echo "ERROR: Download failed."
+            exit 1
+        }
+    fi
 
     # Save ETag for future cache checks
-    local new_etag
-    new_etag="$(grep -i '^etag:' "$header_file" | tail -1 | sed 's/^[Ee][Tt][Aa][Gg]: *//; s/\r$//')"
-    if [[ -n "$new_etag" ]]; then
-        echo "$new_etag" > "$etag_file"
-    fi
-    rm -f "$header_file"
+    save_etag "$dest" "$download_url"
 
     echo "  Download complete: $(du -h "$dest" | cut -f1)"
+    verify_iso_hash "$dest" "$filename"
 }
 
 # Download VirtIO ARM64 drivers ISO (minimal, ~7MB)
 download_virtio_iso() {
     local dest="$1"
-    if [[ -f "$dest" ]] && $SKIP_DOWNLOAD; then
+    if [[ -f "$dest" ]]; then
         echo "Using cached VirtIO ISO: $dest"
         return 0
     fi
@@ -160,7 +278,7 @@ download_virtio_iso() {
 # and clipboard sharing.
 download_utm_guest_tools() {
     local dest="$1"
-    if [[ -f "$dest" ]] && $SKIP_DOWNLOAD; then
+    if [[ -f "$dest" ]]; then
         echo "Using cached UTM guest tools: $dest"
         return 0
     fi
@@ -236,10 +354,10 @@ build_unattended_iso() {
     # Copy UTM guest tools (VirtIO drivers + SPICE agent for resolution + clipboard)
     cp "$utm_guest_tools" "$staging/utm-guest-tools.exe"
 
-    # Add startup.nsh -- tells the UEFI shell to boot from the Windows ISO.
-    # Without this, UEFI shows "Press any key to boot from CD" which times out
-    # and drops to the shell. startup.nsh auto-executes after 1 second.
-    printf '%s\n' 'FS0:\efi\boot\bootaa64.efi' > "$staging/startup.nsh"
+    # Build ISO -- no bootloader or startup.nsh needed. The Windows install ISO
+    # boots natively via UEFI, and Windows Setup automatically discovers
+    # autounattend.xml on any attached drive. This ISO is purely a data payload
+    # with the answer file, drivers, and guest tools.
 
     # Build ISO using hdiutil (built into macOS, no extra packages needed)
     rm -f "$output_iso"
@@ -267,16 +385,6 @@ create_utm_vm() {
         sleep 2
     fi
 
-    # Copy ISOs to /tmp -- AppleScript can't access arbitrary paths
-    local tmp_win="/tmp/${VM_NAME}-install.iso"
-    local tmp_unattended="/tmp/${VM_NAME}-unattended.iso"
-
-    echo "  Copying ISOs to /tmp..."
-    if ! ln -f "$win_iso" "$tmp_win" 2>/dev/null; then
-        cp "$win_iso" "$tmp_win"
-    fi
-    cp "$unattended_iso" "$tmp_unattended"
-
     # Create empty sparse disk image (raw format, zero actual disk usage).
     # UTM converts to qcow2 internally on import.
     local tmp_disk="/tmp/${VM_NAME}-disk.raw"
@@ -289,7 +397,7 @@ create_utm_vm() {
         hypervisor="false"
     fi
 
-    osascript - "$VM_NAME" "$tmp_win" "$tmp_unattended" "$tmp_disk" "$MEMORY_MB" "$CPU_CORES" "$hypervisor" <<'APPLESCRIPT'
+    osascript - "$VM_NAME" "$win_iso" "$unattended_iso" "$tmp_disk" "$MEMORY_MB" "$CPU_CORES" "$hypervisor" <<'APPLESCRIPT'
 on run argv
     set vmName to item 1 of argv
     set winISO to POSIX file (item 2 of argv)
@@ -300,37 +408,14 @@ on run argv
     set useHypervisor to (item 7 of argv) = "true"
 
     tell application "UTM"
-        -- virtio-gpu-gl-pci gives proper dynamic resolution post-install.
-        -- UEFI boot screen is invisible with this GPU but startup.nsh on the
-        -- unattended ISO auto-boots Windows from the UEFI shell.
-        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:diskImg}, {source:winISO, removable:true}, {source:unattendedISO, removable:true}}, displays:{{hardware:"virtio-gpu-gl-pci"}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
+        -- Configuration matches UTM's Windows 11 wizard template.
+        -- virtio-ramfb-gl renders UEFI firmware output (unlike virtio-gpu-gl-pci).
+        -- NVMe disk, TPM device, and Secure Boot UEFI are required by Windows 11.
+        -- Drive order: Windows ISO (bootindex 0), unattended ISO, NVMe disk.
+        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:winISO, removable:true}, {source:unattendedISO, removable:true}, {source:diskImg}}, displays:{{hardware:"virtio-ramfb-gl"}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
     end tell
 end run
 APPLESCRIPT
-
-    # UTM's AppleScript imports disk images into the .utm bundle but only
-    # references removable drives (ISOs) by path. Copy ISOs into the bundle
-    # and update the config so they persist regardless of /tmp cleanup.
-    local utm_bundle="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents/${VM_NAME}.utm"
-    local utm_data="$utm_bundle/Data"
-    if [[ -d "$utm_data" ]]; then
-        echo "  Copying ISOs into VM bundle..."
-        cp "$tmp_win" "$utm_data/${VM_NAME}-install.iso"
-        cp "$tmp_unattended" "$utm_data/${VM_NAME}-unattended.iso"
-
-        # Update config.plist to reference the bundled ISOs by name
-        local config="$utm_bundle/config.plist"
-        plutil -convert json "$config" -o /tmp/utm-wincfg.json
-        # Find CD drives (ImageType=CD) and assign ImageName values
-        jq --arg iso1 "${VM_NAME}-install.iso" --arg iso2 "${VM_NAME}-unattended.iso" '
-            .Drive |= [.[0]] + [.[1] + {ImageName: $iso1}] + [.[2] + {ImageName: $iso2}]
-        ' /tmp/utm-wincfg.json > /tmp/utm-wincfg-fixed.json
-        plutil -convert xml1 /tmp/utm-wincfg-fixed.json -o "$config"
-        rm -f /tmp/utm-wincfg.json /tmp/utm-wincfg-fixed.json
-
-        # Clean up /tmp copies
-        rm -f "$tmp_win" "$tmp_unattended"
-    fi
 
     # Clean up temp disk (UTM already imported it)
     rm -f "$tmp_disk"
@@ -350,6 +435,16 @@ APPLESCRIPT
 
 main() {
     parse_args "$@"
+
+    # Handle --clean: remove cached downloads and exit
+    if $CLEAN; then
+        echo "Cleaning cached downloads in $WORK_DIR..."
+        local size
+        size="$(du -sh "$WORK_DIR" 2>/dev/null | cut -f1)" || size="0B"
+        rm -rf "$WORK_DIR"
+        echo "  Freed $size from $WORK_DIR"
+        exit 0
+    fi
 
     echo "=== Windows 11 ARM64 UTM VM Builder ==="
     echo "  VM Name:  $VM_NAME"
@@ -401,7 +496,7 @@ main() {
 
     # Clean up staging dir (downloaded ISOs kept in WORK_DIR for ETag caching)
     chmod -R u+w "$WORK_DIR/unattended" 2>/dev/null || true
-    rm -rf "$WORK_DIR/unattended" "$WORK_DIR/iso-headers.txt"
+    rm -rf "$WORK_DIR/unattended" "$WORK_DIR/iso-headers.txt" "$WORK_DIR/etag-headers.txt"
 }
 
 main "$@"
