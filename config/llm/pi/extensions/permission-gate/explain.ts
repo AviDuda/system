@@ -54,6 +54,38 @@ export function stripVerdictPrefix(text: string): string {
 }
 
 /**
+ * Find the best verdict in a sidecar response.
+ *
+ * Some models reason out loud and produce a verdict at the end instead of
+ * the beginning. We check the first line first (standard format), then
+ * fall back to the last non-empty line. If both have verdicts and they
+ * disagree, the last one wins (the model's final judgment).
+ */
+export function findVerdictLine(text: string): { verdict: ExplanationVerdict; line: string; lineIdx: number } | null {
+  const lines = text.split("\n");
+  let firstResult: { verdict: ExplanationVerdict; line: string; lineIdx: number } | null = null;
+
+  // Check first line
+  const firstVerdict = parseVerdict(lines[0]);
+  if (firstVerdict) {
+    firstResult = { verdict: firstVerdict, line: lines[0], lineIdx: 0 };
+  }
+
+  // Check last non-empty line
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const trimmedLine = lines[i].trim();
+    if (!trimmedLine) continue;
+    const lastVerdict = parseVerdict(trimmedLine);
+    if (lastVerdict) {
+      return { verdict: lastVerdict, line: trimmedLine, lineIdx: i };
+    }
+    break; // Only check the very last non-empty line
+  }
+
+  return firstResult;
+}
+
+/**
  * Parse a sidecar response into verdict + short + detail.
  * Returns null if no verdict could be parsed and strict mode is on.
  * Strict mode is used for auto-classify where parse failure should
@@ -63,16 +95,33 @@ export function parseExplanation(text: string, strict: true): ExplanationResult 
 export function parseExplanation(text: string, strict?: false): ExplanationResult;
 export function parseExplanation(text: string, strict?: boolean): ExplanationResult | null {
   const trimmed = text.trim();
-  const firstNewline = trimmed.indexOf("\n");
-  const firstLine = firstNewline === -1 ? trimmed : trimmed.slice(0, firstNewline);
-  const detail = firstNewline === -1 ? "" : trimmed.slice(firstNewline + 1).trim();
 
-  const verdict = parseVerdict(firstLine);
-  if (!verdict && strict) return null;
+  // Find the best verdict — first line, or last non-empty line if the model
+  // reasoned out loud and put its final verdict at the end.
+  const found = findVerdictLine(trimmed);
+  if (!found) {
+    if (strict) return null;
+    // Non-strict: treat entire first line as the short description, default safe
+    const firstNewline = trimmed.indexOf("\n");
+    const firstLine = firstNewline === -1 ? trimmed : trimmed.slice(0, firstNewline);
+    const detail = firstNewline === -1 ? "" : trimmed.slice(firstNewline + 1).trim();
+    return { verdict: "risky", short: firstLine, detail };
+  }
 
-  const short = stripVerdictPrefix(firstLine) || firstLine;
+  const lines = trimmed.split("\n");
+  let detail: string;
+  let short: string;
+  if (found.lineIdx === 0) {
+    // Standard format: verdict on first line, detail after
+    short = stripVerdictPrefix(found.line) || found.line;
+    detail = lines.slice(1).join("\n").trim();
+  } else {
+    // Model reasoned then verdicted: detail is the reasoning, short from verdict line
+    short = stripVerdictPrefix(found.line) || found.line;
+    detail = lines.slice(0, found.lineIdx).join("\n").trim();
+  }
 
-  return { verdict: verdict ?? "safe", short, detail };
+  return { verdict: found.verdict, short, detail };
 }
 
 // ── Block reason ──

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockReason, describeToolCall, parseExplanation } from "./explain";
+import { blockReason, describeToolCall, findVerdictLine, parseExplanation } from "./explain";
 
 // ── describeToolCall ──
 
@@ -90,9 +90,9 @@ describe("parseExplanation", () => {
     expect(result.detail).toBe("First line of detail.\nSecond line.");
   });
 
-  test("no verdict prefix defaults to safe", () => {
+  test("no verdict prefix defaults to risky", () => {
     const result = parseExplanation("Just some text without a verdict");
-    expect(result.verdict).toBe("safe");
+    expect(result.verdict).toBe("risky");
     expect(result.short).toBe("Just some text without a verdict");
   });
 
@@ -111,7 +111,7 @@ describe("parseExplanation", () => {
 
   test("empty string", () => {
     const result = parseExplanation("");
-    expect(result.verdict).toBe("safe");
+    expect(result.verdict).toBe("risky");
     expect(result.short).toBe("");
     expect(result.detail).toBe("");
   });
@@ -147,10 +147,42 @@ describe("parseExplanation", () => {
     expect(result?.verdict).toBe("dangerous");
   });
 
-  test("non-strict: still defaults to safe when no verdict (backward compat)", () => {
+  test("non-strict: defaults to risky when no verdict", () => {
     const result = parseExplanation("Random text without verdict");
     expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("risky");
+  });
+});
+
+// ── findVerdictLine ──
+
+describe("findVerdictLine", () => {
+  test("verdict on first line", () => {
+    const result = findVerdictLine("SAFE|Reads a file");
+    expect(result).not.toBeNull();
     expect(result?.verdict).toBe("safe");
+    expect(result?.lineIdx).toBe(0);
+  });
+
+  test("trailing verdict wins over first line", () => {
+    const text = "SAFE: This seems fine\nActually on second thought\nRISKY|This is risky";
+    const result = findVerdictLine(text);
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("risky");
+    expect(result?.lineIdx).toBe(2);
+  });
+
+  test("first line verdict when no trailing verdict", () => {
+    const text = "DANGEROUS|Mass destruction\nSome reasoning here";
+    const result = findVerdictLine(text);
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("dangerous");
+    expect(result?.lineIdx).toBe(0);
+  });
+
+  test("returns null when no verdict anywhere", () => {
+    const result = findVerdictLine("Just some text\nNo verdict here");
+    expect(result).toBeNull();
   });
 });
 
