@@ -69,10 +69,17 @@ The unattended ISO is a data payload only -- no bootloader. UEFI boots from the 
 Runs automatically on first login:
 - Installs remaining VirtIO drivers via `pnputil`
 - Installs UTM guest tools (SPICE agent + display driver)
-- Enables OpenSSH server with admin key auth fix
+- Installs PowerShell 7 via winget
+- Sets Windows Terminal as default terminal (via `HKCU\Console\%%Startup` delegation CLSIDs)
+- Configures Windows Terminal to use PS7 as default profile
+- Enables OpenSSH server with PS7 as default shell
 - Enables Remote Desktop
+- Enables dark mode (system + apps)
+- Enables clipboard history (`Win+V`)
 - Disables lock screen and screen timeout
 - Reduces telemetry
+- Explorer: shows file extensions, hidden files, full path in title bar, launches to This PC
+- Disables taskbar widgets, search icon-only, OneDrive autostart disabled
 
 ## SSH Access
 
@@ -113,6 +120,22 @@ The template VM must be stopped before cloning.
 
 - **"Press any key to boot from CD/DVD"** -- UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
 
+## Personalization
+
+`config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO -- run it via SSH after the VM is up:
+
+```bash
+ssh avi@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+```
+
+Installs:
+- Firefox, Zed editor, JetBrainsMono Nerd Font (via winget)
+- mise (tool version manager)
+- CLI tools via `mise use -g`: neovim, fzf, ripgrep, fd, bat, delta, jq, yq, hexyl, duf, dust, glow, hyperfine, zoxide, tokei, gh, lazygit, pandoc, shellcheck, biome, bun, node, go, typst, xh, eza, procs, sd, just, tealdeer
+- Windows Terminal settings (font, color scheme, opacity)
+
+After the initial run, add more tools with `mise use -g <tool>@latest` over SSH. Tool selection mirrors `modules/home-manager/default.nix`.
+
 ## Files
 
 | File | Purpose |
@@ -121,3 +144,4 @@ The template VM must be stopped before cloning.
 | `scripts/windows-test.sh` | Clone/delete disposable test VMs |
 | `config/windows/autounattend.xml` | Unattended answer file |
 | `config/windows/firstlogin.ps1` | Post-install setup script |
+| `config/windows/personalize.ps1` | Personal tools (browsers, CLI, Terminal config) |

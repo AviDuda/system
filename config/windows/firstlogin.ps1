@@ -4,8 +4,11 @@
 # Goals:
 # - Install remaining VirtIO drivers (network, balloon, etc.)
 # - Install SPICE guest tools (clipboard sharing, dynamic resolution)
+# - Install PowerShell 7 via winget (AppX on ARM64)
+# - Set Windows Terminal as default terminal with PS7 profile
 # - Enable Remote Desktop
-# - Reduce telemetry
+# - Reduce telemetry, disable widgets, dark mode
+# - Explorer: file extensions, hidden files, This PC view
 # - Set up for forepaw accessibility testing
 
 $ErrorActionPreference = "Continue"
@@ -123,6 +126,83 @@ Write-Host "`n=== Disabling AutoLogon ==="
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -Value "0"
 
+# --- Explorer settings ---
+Write-Host "`n=== Configuring Explorer ==="
+$advPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+# Show file extensions
+Set-ItemProperty -Path $advPath -Name "HideFileExt" -Value 0 -Type DWord
+# Show hidden files
+Set-ItemProperty -Path $advPath -Name "Hidden" -Value 1 -Type DWord
+# Show full path in title bar
+Set-ItemProperty -Path $advPath -Name "ShowFullPathInTitleBar" -Value 1 -Type DWord
+# Launch Explorer to This PC instead of Quick Access
+Set-ItemProperty -Path $advPath -Name "LaunchTo" -Value 1 -Type DWord
+
+# --- Dark mode ---
+Write-Host "`n=== Enabling dark mode ==="
+$themePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+Set-ItemProperty -Path $themePath -Name "AppsUseLightTheme" -Value 0 -Type DWord
+Set-ItemProperty -Path $themePath -Name "SystemUsesLightTheme" -Value 0 -Type DWord
+
+# --- Quality of life settings ---
+Write-Host "`n=== Applying quality of life settings ==="
+# Enable clipboard history (Win+V)
+New-Item -Path 'HKCU:\Software\Microsoft\Clipboard' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Clipboard' -Name "EnableClipboardHistory" -Value 1 -Type DWord
+# Disable taskbar widgets (weather/news)
+# TaskbarDa is ACL-protected when set from a non-elevated session, but works fine
+# during firstlogin (elevated OOBE context). Value is 0=hidden, 1=visible.
+Set-ItemProperty -Path $advPath -Name "TaskbarDa" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+# Taskbar search: icon only (0=hidden, 1=icon, 2=search box)
+Set-ItemProperty -Path $advPath -Name "SearchboxTaskbarMode" -Value 1 -Type DWord
+# Disable OneDrive autostart
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name "OneDrive" -ErrorAction SilentlyContinue
+
+# --- Install PowerShell 7 ---
+# On ARM64 Windows 11, winget installs PS7 as an AppX package (not MSI).
+# The install path includes version numbers so we discover it dynamically.
+Write-Host "`n=== Installing PowerShell 7 ==="
+$pwshPath = $null
+try {
+    winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
+    # Find pwsh.exe -- check MSI path first, then AppX
+    if (Test-Path "C:\Program Files\PowerShell\7\pwsh.exe") {
+        $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
+    } else {
+        $appx = Get-AppxPackage Microsoft.PowerShell -ErrorAction SilentlyContinue
+        if ($appx) {
+            $candidate = Join-Path $appx.InstallLocation "pwsh.exe"
+            if (Test-Path $candidate) { $pwshPath = $candidate }
+        }
+    }
+    if ($pwshPath) {
+        Write-Host "PowerShell 7 installed at: $pwshPath"
+    } else {
+        Write-Host "WARNING: PowerShell 7 installed but pwsh.exe not found."
+    }
+} catch {
+    Write-Host "WARNING: Failed to install PowerShell 7: $($_.Exception.Message)"
+}
+
+# --- Set Windows Terminal as default terminal ---
+Write-Host "`n=== Setting Windows Terminal as default terminal ==="
+# Registry keys in HKCU:\Console\%%Startup control the default terminal app.
+# These CLSIDs are from Windows Terminal's AppxManifest.xml and are stable across versions:
+#   DelegationConsole (OpenConsole): {2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}
+#   DelegationTerminal (Terminal):   {E12CFF52-A866-4C77-9A90-F570A7AA2C6B}
+New-Item -Path 'HKCU:\Console\%%Startup' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Console\%%Startup' -Name "DelegationConsole" -Value "{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}" -Type String
+Set-ItemProperty -Path 'HKCU:\Console\%%Startup' -Name "DelegationTerminal" -Value "{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}" -Type String
+
+# --- Configure Windows Terminal: PS7 as default profile ---
+$wtSettingsDir = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState"
+$wtSettingsFile = Join-Path $wtSettingsDir "settings.json"
+if (-not (Test-Path $wtSettingsFile) -and (Test-Path $wtSettingsDir)) {
+    # PowerShell Core profile GUID is stable across Terminal versions
+    '{"defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}"}' | Set-Content $wtSettingsFile
+    Write-Host "Windows Terminal configured with PS7 as default profile."
+}
+
 # --- Enable OpenSSH Server (done last -- Add-WindowsCapability takes several minutes) ---
 Write-Host "`n=== Installing OpenSSH Server (this may take several minutes) ==="
 # Add-WindowsCapability contacts Windows Update even for locally-available
@@ -158,8 +238,10 @@ if (Test-Path $sshdConfig) {
 # Allow SSH through Windows Firewall
 New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue
 
-# Set PowerShell as default shell for SSH
-New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force -ErrorAction SilentlyContinue
+# Set PowerShell 7 as default shell for SSH (fall back to PS5.1 if PS7 not found)
+$defaultShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+if ($pwshPath) { $defaultShell = $pwshPath }
+New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $defaultShell -PropertyType String -Force -ErrorAction SilentlyContinue
 
 # --- Deploy SSH authorized key from unattended ISO ---
 if ($virtioDir) {
