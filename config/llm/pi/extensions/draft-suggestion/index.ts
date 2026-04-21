@@ -30,6 +30,7 @@ import {
   userMsg,
 } from "../shared/model-roles";
 import { filterSuggestion, injectGhostText, parseSuggestionTag } from "./ghost-text";
+import { FOLLOWUP_EXAMPLES, FOLLOWUP_SYSTEM_PROMPT, STARTUP_EXAMPLES, STARTUP_SYSTEM_PROMPT } from "./prompts";
 
 // ── Ghost text editor ──
 
@@ -276,23 +277,12 @@ async function generateSuggestion(ctx: ExtensionContext, signal: AbortSignal): P
   const maxAttempts = resolved?.entry.maxAttempts ?? 1;
 
   const sidecarContext = {
-    systemPrompt: `You predict what the HUMAN types next. The human is a developer talking to a coding AI. Humans type commands and questions like:
-- "Show me the test files"
-- "How does the auth module work?"
-- "Add error handling to the API"
-- "What's in the config directory?"
-
-NEVER generate assistant-style responses like "Would you like to...", "I can help with...", "Let me...", "Here's what I found...". Those are what the ASSISTANT says, not the human.`,
+    systemPrompt: FOLLOWUP_SYSTEM_PROMPT,
     messages: [
-      userMsg(`human: Fix the failing test in auth.ts
-assistant: I've fixed the test by updating the mock.`),
-      assistantMsg("<suggestion>Run the full test suite now</suggestion>"),
-      userMsg(`human: Show me the project structure
-assistant: Here's the directory layout: src/, tests/, config/...`),
-      assistantMsg("<suggestion>How many lines of code in each module?</suggestion>"),
-      userMsg(`human: Hello!
-assistant: Hey! Last session we built the auth module. What are you working on today?`),
-      assistantMsg("<suggestion>Let's add rate limiting to the auth endpoints</suggestion>"),
+      ...FOLLOWUP_EXAMPLES.flatMap((ex) => [
+        userMsg(ex.context),
+        assistantMsg(`<suggestion>${ex.suggestion}</suggestion>`),
+      ]),
       userMsg(conversationSummary),
       assistantMsg("<suggestion>"),
     ],
@@ -368,14 +358,12 @@ async function generateFromContext(
       const result = await sidecarComplete(
         "draft",
         {
-          systemPrompt: `You predict what a developer will type as their FIRST message when starting a session. Based on the project context and recent work, suggest what they'd work on next. One short sentence, a direct instruction or question. NEVER use assistant-style language like "Would you like", "I can help", "Let me".`,
+          systemPrompt: STARTUP_SYSTEM_PROMPT,
           messages: [
-            userMsg(`Context: Auth module project. Recent notes: Fixed auth bug, tests passing. Deploy pending.`),
-            assistantMsg("<suggestion>Deploy the auth fix to staging</suggestion>"),
-            userMsg(
-              `Context: Nix system config. Recent notes: Built draft-suggestion extension, needs live testing. Also need to run nix-switch.`,
-            ),
-            assistantMsg("<suggestion>Run mise nix-switch to deploy the pending changes</suggestion>"),
+            ...STARTUP_EXAMPLES.flatMap((ex) => [
+              userMsg(ex.context),
+              assistantMsg(`<suggestion>${ex.suggestion}</suggestion>`),
+            ]),
             userMsg(`Context:\n${startupContext}`),
             assistantMsg("<suggestion>"),
           ],

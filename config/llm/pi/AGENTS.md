@@ -22,6 +22,66 @@ mise nix-diff    # verify Nix build after changes
 | Shared LLM constants | `modules/home-manager/llm-shared.nix` |
 | Global instructions | `config/llm/instructions.md` |
 
+## Pi internals reference
+
+When you need to understand how pi resolves models, loads extensions, or handles auth — read the source. Everything is JS (compiled from TS) in the pi package.
+
+### Package layout
+
+```
+/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/
+├── dist/                          # pi core (compiled JS + .d.ts)
+│   ├── core/
+│   │   ├── model-registry.js      # model resolution: built-in + models.json merge
+│   │   ├── model-resolver.js      # model selection prompt parsing
+│   │   ├── auth-storage.js        # API key resolution: auth.json → env vars → models.json
+│   │   ├── sdk.js                 # ExtensionAPI, ExtensionContext types
+│   │   └── ...                    # session-manager, keybindings, exec, etc.
+│   └── docs/                      # extension docs, tui docs
+├── node_modules/@mariozechner/
+│   ├── pi-ai/                     # LLM provider abstraction
+│   │   └── dist/
+│   │       ├── models.js          # getProviders(), getModels() — built-in model catalog
+│   │       ├── models.generated.js # static model definitions per provider
+│   │       ├── env-api-keys.js    # getEnvApiKey() — env var → provider mapping
+│   │       ├── stream.js          # completeSimple(), streaming API
+│   │       └── providers/         # per-provider request formatting
+│   │           ├── openai-completions.js  # most providers use this
+│   │           ├── anthropic.js
+│   │           └── ...                    # google, bedrock, mistral, etc.
+│   ├── pi-tui/                    # terminal UI components (Input, SelectList, etc.)
+│   └── pi-agent-core/             # shared agent logic
+└── examples/extensions/          # example extensions
+```
+
+### Model resolution (`ModelRegistry`)
+
+`dist/core/model-registry.js` — the `ModelRegistry` class. Key flow:
+
+1. **Built-in models**: `pi-ai`'s `getProviders()` / `getModels()` return a static catalog of ~22 providers with model definitions (baseUrl, context window, costs, etc.). No config needed.
+2. **Custom providers**: `~/.pi/agent/models.json` adds or overrides providers. Custom providers need `baseUrl` + `apiKey`. Built-in providers can be overridden (change baseUrl, add models).
+3. **Merge**: `loadBuiltInModels()` then `mergeCustomModels()` — custom wins on `provider/id` conflicts.
+4. **Auth priority**: `getApiKeyAndHeaders()` checks: runtime override → auth.json → env var (`getEnvApiKey()`) → models.json apiKey.
+
+The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-ai built-ins) without instantiating `ModelRegistry` itself (which requires `AuthStorage`).
+
+### Auth resolution (`AuthStorage` + `getEnvApiKey`)
+
+`dist/core/auth-storage.js` — `AuthStorage` class. Priority chain for API keys:
+1. Runtime override (CLI `--api-key`)
+2. `~/.pi/agent/auth.json` (`api_key` or `oauth` credential)
+3. Environment variable (`ANTHROPIC_API_KEY`, `ZAI_API_KEY`, `OPENROUTER_API_KEY`, etc.)
+4. Fallback resolver (models.json `apiKey` field — supports `!command` prefix for shell execution)
+
+`pi-ai`'s `env-api-keys.js` has the provider → env var mapping. Useful for knowing which env var a provider needs.
+
+### When to read the source
+
+- **Adding a new provider to models.json**: read `model-registry.js` `loadCustomModels()` and `validateConfig()` for schema rules.
+- **Understanding model capabilities**: `pi-ai/dist/models.generated.js` has the full static model catalog with context windows, input types, costs.
+- **Extension API questions**: LSP go-to-definition usually works, but `dist/core/sdk.js` has the `ExtensionAPI` / `ExtensionContext` definitions.
+- **Auth debugging**: `auth-storage.js` `getApiKey()` shows the full resolution chain.
+
 ## Guidelines
 
 - Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README. See `ls config/llm/pi/extensions/` for current extensions.
