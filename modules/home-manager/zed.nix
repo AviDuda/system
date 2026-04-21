@@ -65,6 +65,9 @@ let
     };
 
     lsp = {
+      "bash-language-server".initialization_options = {
+        diagnosticsIgnorePatterns = [ "**/node_modules" ];
+      };
       vtsls = {
         settings = {
           typescript.updateImportsOnFileMove.enabled = "always";

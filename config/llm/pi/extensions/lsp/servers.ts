@@ -100,7 +100,10 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     fileTypes: [".sh", ".bash", ".zsh"],
     rootMarkers: [".git"],
     settings: {
-      bashIde: { globPattern: "*@(.sh|.inc|.bash|.command)" },
+      bashIde: {
+        globPattern: "*@(.sh|.inc|.bash|.command)",
+        diagnosticsIgnorePatterns: ["**/node_modules"],
+      },
     },
   },
 
