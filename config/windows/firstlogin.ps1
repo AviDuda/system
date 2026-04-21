@@ -90,70 +90,8 @@ Write-Host "`n=== Enabling Remote Desktop ==="
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Type DWord
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
 
-# --- Enable OpenSSH Server ---
-Write-Host "`n=== Installing OpenSSH Server ==="
-# Add-WindowsCapability needs internet. Retry up to 5 times with 10s delay
-# in case the VirtIO network adapter hasn't finished initializing.
-$sshInstalled = $false
-for ($attempt = 1; $attempt -le 5; $attempt++) {
-    try {
-        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop
-        $sshInstalled = $true
-        break
-    } catch {
-        Write-Host "  Attempt $attempt failed: $($_.Exception.Message)"
-        if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
-    }
-}
-if (-not $sshInstalled) {
-    Write-Host "  WARNING: Failed to install OpenSSH Server after 5 attempts. SSH will not be available."
-}
-Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
-Start-Service sshd -ErrorAction SilentlyContinue
-
-# Fix sshd_config: comment out the Match Group administrators block
-# that forces admin users to use administrators_authorized_keys.
-# This lets admin users use their own ~/.ssh/authorized_keys instead.
-$sshdConfig = "C:\ProgramData\ssh\sshd_config"
-if (Test-Path $sshdConfig) {
-    $content = Get-Content $sshdConfig -Raw
-    $content = $content -replace '(?m)^(Match Group administrators)', '#$1'
-    $content = $content -replace '(?m)^(\s+AuthorizedKeysFile __PROGRAMDATA__)', '#$1'
-    Set-Content -Path $sshdConfig -Value $content
-}
-
-# Allow SSH through Windows Firewall
-New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue
-
 # Allow ICMP (ping) for diagnostics
 New-NetFirewallRule -Name 'Allow ICMPv4' -DisplayName 'Allow ICMPv4' -Enabled True -Direction Inbound -Protocol ICMPv4 -Action Allow -Profile Any -ErrorAction SilentlyContinue
-
-# Set PowerShell as default shell for SSH
-New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force -ErrorAction SilentlyContinue
-
-# --- Deploy SSH authorized key from unattended ISO ---
-if ($virtioDir) {
-    $pubKey = Join-Path $virtioDir "vm.pub"
-    if (Test-Path $pubKey) {
-        Write-Host "`n=== Deploying SSH authorized key ==="
-        $key = (Get-Content $pubKey -Raw).Trim()
-        $sshDir = Join-Path $env:USERPROFILE ".ssh"
-        New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
-        $authKeys = Join-Path $sshDir "authorized_keys"
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($authKeys, $key, $utf8)
-
-        # Set ACLs: user + SYSTEM only
-        $acl = Get-Acl $authKeys
-        $acl.SetAccessRuleProtection($true, $false)
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($env:USERNAME, "FullControl", "Allow")))
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")))
-        Set-Acl -Path $authKeys -AclObject $acl
-        Write-Host "SSH key deployed to $authKeys"
-    }
-}
-
-Restart-Service sshd -ErrorAction SilentlyContinue
 
 # --- Reduce telemetry ---
 Write-Host "`n=== Reducing telemetry ==="
@@ -184,6 +122,68 @@ Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\
 Write-Host "`n=== Disabling AutoLogon ==="
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -Value "0"
+
+# --- Enable OpenSSH Server (done last -- Add-WindowsCapability takes several minutes) ---
+Write-Host "`n=== Installing OpenSSH Server (this may take several minutes) ==="
+# Add-WindowsCapability contacts Windows Update even for locally-available
+# capabilities. Retry up to 3 times with 10s delay in case of network issues.
+$sshInstalled = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop
+        $sshInstalled = $true
+        break
+    } catch {
+        Write-Host "  Attempt $attempt failed: $($_.Exception.Message)"
+        if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
+    }
+}
+if (-not $sshInstalled) {
+    Write-Host "  WARNING: Failed to install OpenSSH Server after 3 attempts. SSH will not be available."
+}
+Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service sshd -ErrorAction SilentlyContinue
+
+# Fix sshd_config: comment out the Match Group administrators block
+# that forces admin users to use administrators_authorized_keys.
+# This lets admin users use their own ~/.ssh/authorized_keys instead.
+$sshdConfig = "C:\ProgramData\ssh\sshd_config"
+if (Test-Path $sshdConfig) {
+    $content = Get-Content $sshdConfig -Raw
+    $content = $content -replace '(?m)^(Match Group administrators)', '#$1'
+    $content = $content -replace '(?m)^(\s+AuthorizedKeysFile __PROGRAMDATA__)', '#$1'
+    Set-Content -Path $sshdConfig -Value $content
+}
+
+# Allow SSH through Windows Firewall
+New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue
+
+# Set PowerShell as default shell for SSH
+New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force -ErrorAction SilentlyContinue
+
+# --- Deploy SSH authorized key from unattended ISO ---
+if ($virtioDir) {
+    $pubKey = Join-Path $virtioDir "vm.pub"
+    if (Test-Path $pubKey) {
+        Write-Host "`n=== Deploying SSH authorized key ==="
+        $key = (Get-Content $pubKey -Raw).Trim()
+        $sshDir = Join-Path $env:USERPROFILE ".ssh"
+        New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+        $authKeys = Join-Path $sshDir "authorized_keys"
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($authKeys, $key, $utf8)
+
+        # Set ACLs: user + SYSTEM only
+        $acl = Get-Acl $authKeys
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($env:USERNAME, "FullControl", "Allow")))
+        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")))
+        Set-Acl -Path $authKeys -AclObject $acl
+        Write-Host "SSH key deployed to $authKeys"
+    }
+}
+
+Restart-Service sshd -ErrorAction SilentlyContinue
 
 Write-Host "`n=== Post-install setup complete ==="
 Write-Host "Log saved to: $logFile"
