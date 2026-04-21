@@ -102,6 +102,28 @@ Per-model `requestParams` in roles.json controls thinking behavior per role (imp
 - `explain`/`draft`: `chat_template_kwargs: { enable_thinking: false }` -- skip chain-of-thought for fast sidecar responses
 - `vision`: `thinking_budget: 1024` -- capped thinking for better image descriptions
 
+### oMLX model management
+
+Models are managed through a combination of automatic and manual controls:
+
+- **LRU eviction**: least-recently-used models are unloaded automatically when memory runs low
+- **Manual load/unload**: status badges in the admin panel (`/admin`)
+- **Model pinning**: pin frequently used models (e.g., sidecar models) to keep them always loaded
+- **Per-model TTL**: auto-unload after a configurable idle timeout -- useful for freeing RAM for VMs when not doing LLM work
+- **Process memory limit**: default is system RAM - 8 GB, prevents OOM
+
+On unload, MLX arrays (weights + KV cache) are freed from Metal memory and returned to the OS. SSD-cached KV blocks persist on disk but don't consume RAM.
+
+### oMLX experimental features
+
+Enabled per-model in the admin panel under Experimental Features.
+
+**TurboQuant KV cache** (enabled on Qwen 3.6 at 4-bit): compresses KV cache using vector quantization. At 4-bit, ~4x compression with negligible quality loss. This is the most impactful feature for memory-constrained setups -- a 32K context that would need ~6-8 GB KV cache at fp16 drops to ~1.5-2 GB.
+
+**SpecPrefill** (not enabled): attention-based sparse prefill for MoE models. Skipped because prefill speed (~705 tok/s) isn't the bottleneck, and there are open bugs with quantized models.
+
+**DFlash** (not enabled): block diffusion speculative decoding for 3-4x faster generation. Only supports Qwen 3.5 family, falls back to normal engine for contexts >4K tokens (most agent conversations), and no paged/SSD cache integration. Faster generation would also make iTerm2 flicker worse.
+
 ### oMLX setup
 
 - **CLI**: `brew install jundot/omlx/omlx` (tap: `brew tap jundot/omlx https://github.com/jundot/omlx`)

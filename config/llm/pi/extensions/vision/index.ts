@@ -20,36 +20,18 @@ import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, isReadToolResult } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { extractText, hasRole, reloadConfig, type SidecarResult, sidecarComplete } from "../shared/model-roles.js";
-
-// ── Constants ──
-
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".tiff", ".tif"]);
-
-const VISION_SYSTEM_PROMPT = `You are a vision assistant. Describe the provided image accurately and concisely.
-Follow the user's instructions for what to focus on. If no specific instructions, provide:
-- A clear description of what's visible
-- Any text content (OCR) if present
-- Layout/structure if it's a UI screenshot or diagram
-Be factual. Don't guess at content you can't see clearly.`;
-
-// ── Helpers ──
-
-function isImageFile(filePath: string): boolean {
-  const ext = extname(filePath).toLowerCase();
-  return IMAGE_EXTENSIONS.has(ext);
-}
-
-function modelSupportsVision(ctx: ExtensionContext): boolean {
-  return ctx.model?.input?.includes("image") ?? false;
-}
-
-function hasImageContent(content: (TextContent | ImageContent)[]): boolean {
-  return content.some((c) => c.type === "image");
-}
-
-function extractImageParts(content: (TextContent | ImageContent)[]): ImageContent[] {
-  return content.filter((c): c is ImageContent => c.type === "image");
-}
+import {
+  buildVisionMessages,
+  extractImageParts,
+  formatDescription,
+  hasImageContent,
+  IMAGE_EXTENSIONS,
+  imageLabel,
+  isImageFile,
+  mimeTypeForPath,
+  modelSupportsImage,
+  VISION_SYSTEM_PROMPT,
+} from "./helpers.js";
 
 // ── Vision sidecar call ──
 
@@ -60,16 +42,7 @@ async function describeImage(image: ImageContent, prompt: string, ctx: Extension
 
   const context = {
     systemPrompt: VISION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user" as const,
-        content: [
-          { type: "image" as const, data: image.data, mimeType: image.mimeType },
-          { type: "text" as const, text: prompt },
-        ],
-        timestamp: Date.now(),
-      },
-    ],
+    messages: buildVisionMessages(image, prompt),
   };
 
   const result: SidecarResult | null = await sidecarComplete("vision", context, ctx.modelRegistry, {
@@ -89,7 +62,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 
   function updateVisionState(ctx: ExtensionContext) {
     reloadConfig();
-    needsVisionAssist = !modelSupportsVision(ctx) && hasRole("vision");
+    needsVisionAssist = !modelSupportsImage(ctx.model?.input) && hasRole("vision");
 
     if (needsVisionAssist) {
       ctx.ui.setStatus("vision", ctx.ui.theme.fg("muted", "eye:on"));
@@ -126,13 +99,9 @@ export default function visionExtension(pi: ExtensionAPI) {
     const descriptions: string[] = [];
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-      const label = images.length === 1 ? "this image" : `image ${i + 1}`;
+      const label = imageLabel(images.length, i);
       const description = await describeImage(img, `Describe ${label} in detail. Include any visible text.`, ctx);
-      if (description) {
-        descriptions.push(`[Vision: ${label}]\n${description}`);
-      } else {
-        descriptions.push(`[Vision: ${label} — vision model unavailable, cannot describe]`);
-      }
+      descriptions.push(formatDescription(label, description));
     }
 
     // Replace image content with text descriptions
@@ -204,24 +173,7 @@ export default function visionExtension(pi: ExtensionAPI) {
       // Read and base64-encode the image
       const data = readFileSync(filePath);
       const base64 = data.toString("base64");
-
-      // Determine MIME type from extension
-      const ext = extname(filePath).toLowerCase();
-      const mimeMap: Record<string, string> = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".bmp": "image/bmp",
-        ".svg": "image/svg+xml",
-        ".ico": "image/x-icon",
-        ".tiff": "image/tiff",
-        ".tif": "image/tiff",
-      };
-      const mimeType = mimeMap[ext] ?? "application/octet-stream";
-
-      const image: ImageContent = { type: "image", data: base64, mimeType };
+      const image: ImageContent = { type: "image", data: base64, mimeType: mimeTypeForPath(filePath) };
       const prompt = params.prompt ?? "Describe this image in detail. Include any visible text.";
 
       const description = await describeImage(image, prompt, ctx);

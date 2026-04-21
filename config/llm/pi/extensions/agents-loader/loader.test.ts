@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverStartupLocalFiles, extractPath, getDirectoryChain } from "./loader.js";
 
-const TEST_DIR = join(import.meta.dir, ".test-tmp");
+// Use /tmp to avoid parent-walk hitting real AGENTS.local.md in the project tree
+const TEST_DIR = join(tmpdir(), `agents-loader-test-${process.pid}`);
 
 describe("extractPath", () => {
   test("extracts path from read", () => {
@@ -171,7 +173,7 @@ describe("discoverStartupLocalFiles", () => {
     writeFileSync(join(TEST_DIR, "AGENTS.local.md"), "already seen");
 
     const loaded = new Set<string>();
-    loaded.add(join(TEST_DIR, "AGENTS.local.md"));
+    loaded.add(realpathSync(join(TEST_DIR, "AGENTS.local.md")));
 
     const results = discoverStartupLocalFiles(TEST_DIR, loaded);
     expect(results).toHaveLength(0);
