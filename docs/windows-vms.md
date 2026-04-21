@@ -14,17 +14,27 @@ Scripted Windows 11 ARM64 VM creation in UTM.
 ## Quick Start
 
 ```bash
+# 1. Create the template VM (~15 min first time, ISO cached after)
 mise nwu -- --username avi --password hunter2
+
+# 2. Start it in UTM, press any key at the boot prompt
+#    Windows installs unattended (~10 min), then reboots into desktop
+
+# 3. Verify SSH works (firstlogin.ps1 sets it up automatically)
+ssh avi@windows-11.local
+
+# 4. (Optional) Install personal tools
+ssh avi@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+
+# 5. Shut down the VM -- this is now your pristine template
 ```
 
-This will:
+After step 1, the script will:
 1. Download the Windows 11 ARM64 ISO (~7GB, cached with ETag)
 2. Download VirtIO ARM64 drivers (~7MB)
 3. Download UTM guest tools (~75MB)
 4. Build an unattended installation ISO
 5. Create a UTM VM with ISOs bundled
-
-Then open UTM and start the VM. Press any key when prompted to boot from CD/DVD. Windows installs via `autounattend.xml`.
 
 ## Options
 
@@ -111,10 +121,20 @@ The template VM must be stopped before cloning.
 
 ### Workflow
 
-1. Create the template once: `mise nwu -- --username avi --password hunter2`
-2. Boot it, verify firstlogin.ps1 completed, deploy SSH key
-3. Shut it down — this is now your pristine template
-4. Before each test session: `mise nwt` → clone boots → SSH in → test → `mise nwtc`
+The template stays pristine. Each test session gets a fresh clone:
+
+```bash
+# Clone the template (instant, APFS copy-on-write)
+mise nwt
+# Wait for SSH to come up, then do whatever you need
+ssh avi@192.168.64.x 'powershell -File -' < my-setup.ps1
+# ... run your tests ...
+# Clean up
+mise nwtc
+```
+
+SSH key is deployed automatically from `~/.ssh/vm.pub` during first login.
+The clone gets a randomized MAC and new DHCP IP (printed by `mise nwt`).
 
 ## Known Issues
 
@@ -122,19 +142,23 @@ The template VM must be stopped before cloning.
 
 ## Personalization
 
-`config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO -- run it via SSH after the VM is up:
+`config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO. Run via SSH:
 
 ```bash
 ssh avi@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
 ```
 
-Installs:
-- Firefox, Zed editor, JetBrainsMono Nerd Font (via winget)
-- mise (tool version manager)
-- CLI tools via `mise use -g`: neovim, fzf, ripgrep, fd, bat, delta, jq, yq, hexyl, duf, dust, glow, hyperfine, zoxide, tokei, gh, lazygit, pandoc, shellcheck, biome, bun, node, go, typst, xh, eza, procs, sd, just, tealdeer
-- Windows Terminal settings (font, color scheme, opacity)
+Or copy it to the VM and run locally (e.g. from Windows Terminal):
 
-After the initial run, add more tools with `mise use -g <tool>@latest` over SSH. Tool selection mirrors `modules/home-manager/default.nix`.
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\personalize.ps1"
+```
+
+Installs Firefox, Zed, JetBrainsMono Nerd Font (winget), mise, and 25 CLI tools via `mise use -g` (ripgrep, fd, bat, delta, jq, neovim, pandoc, etc.). Tool selection mirrors `modules/home-manager/default.nix`.
+
+After the initial run, add more tools with `mise use -g <tool>@latest` over SSH.
+
+For project-specific setup (e.g. forepaw test apps), write a per-project script and pipe it the same way. The template gives you SSH + PS7 + drivers + RDP -- enough to bootstrap anything in seconds.
 
 ## Files
 
