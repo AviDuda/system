@@ -62,6 +62,64 @@ Custom pi extensions follow a pattern: augment the agent with context and guardr
 - **MCP integration.** CLI tools with READMEs (skills) cover the same ground without the protocol overhead. May be added later if needed for specific project work.
 - **Autonomous features.** No auto-commit, auto-compact customization, or background processing. The human steers; the agent executes and journals.
 
+## Local LLMs
+
+Two local inference servers run on this machine for offline fallback and sidecar model serving.
+
+### Architecture
+
+| Server | Port | Engine | Format | Use |
+|--------|------|--------|--------|-----|
+| LM Studio | `:1234` | llama.cpp (GGUF) + MLX | GGUF Q4_K_M, MLX | Main model, model discovery |
+| oMLX | `:8124` | MLX | MLX 4-bit (unsloth UD) | Sidecar roles, continuous batching |
+
+Both share `~/.lmstudio/models/` -- LM Studio can load both GGUF and MLX models, oMLX only loads MLX. No duplication of model files.
+
+**LM Studio** is kept for model discovery (tells you if a model fits your RAM, curated suggestions, HuggingFace search). oMLX is the performance server -- tiered KV cache (RAM + SSD), continuous batching, multi-model serving with LRU eviction. oMLX's admin dashboard at `:8124/admin` also provides model search/download, chat, benchmarking, and settings -- sufficient for day-to-day without the GUI app.
+
+### Models (M4 Pro 48 GB)
+
+| Model | Format | Server | Size | Generation |
+|-------|--------|--------|------|------------|
+| Qwen 3.6 35B A3B | GGUF Q4_K_M | LM Studio :1234 | ~17.5 GB | ~41 tok/s |
+| Qwen 3.6 35B A3B UD | MLX 4-bit | oMLX :8124 | ~20.4 GB | ~65 tok/s |
+| Qwen 3.5 9B | GGUF | LM Studio :1234 | ~5 GB | -- |
+| GLM-4.7 Flash | MLX 6-bit | oMLX :8124 | ~23.8 GB | -- |
+
+Qwen 3.6 35B A3B is MoE (3B active params per token) -- fast enough for sidecar tasks.
+
+### Why both GGUF and MLX
+
+GGUF via llama.cpp has better quantization quality (K-quants allocate more bits to sensitive tensors, 4.7x lower perplexity than uniform 4-bit). MLX has faster generation (~60% faster) and continuous batching for concurrent requests. For main model coding work where quality matters, GGUF wins. For sidecar tasks (explain, draft, vision) where speed matters more, MLX via oMLX wins.
+
+Prefill speed: llama.cpp is faster at batch prompt processing (3+ years of optimization). MLX is younger here. For agent workloads with growing context, prefill dominates total response time. But oMLX's tiered KV cache mitigates this -- cached prefixes don't recompute.
+
+### Model routing in pi
+
+`modules/home-manager/pi.nix` defines providers and sidecar role fallback chains. Roles (explain, draft, vision) try cloud models first, then local oMLX, then local LM Studio as last resort. The `omlx` provider at `:8124` serves MLX models; `lmstudio` at `:1234` serves GGUF models.
+
+Per-model `requestParams` in roles.json controls thinking behavior per role (implemented via pi's `onPayload` hook):
+- `explain`/`draft`: `chat_template_kwargs: { enable_thinking: false }` -- skip chain-of-thought for fast sidecar responses
+- `vision`: `thinking_budget: 1024` -- capped thinking for better image descriptions
+
+### oMLX setup
+
+- **CLI**: `brew install jundot/omlx/omlx` (tap: `brew tap jundot/omlx https://github.com/jundot/omlx`)
+- **Start**: `omlx serve --model-dir ~/.lmstudio/models --port 8124`
+- **Admin**: `http://127.0.0.1:8124/admin` (HF downloader, benchmark, model management)
+- **GUI app**: Optional DMG from releases with in-app auto-update and menu bar control. Not in brew.nix (no cask available, auto-update conflicts with cask management). The admin dashboard via CLI is sufficient for most use.
+- **Config**: `~/.omlx/settings.json`
+- **Benchmarks**: [omlx.ai/benchmarks](https://omlx.ai/benchmarks) (filter by chip/model/quant)
+
+### Key references
+
+- [MLX vs GGUF benchmarks on Apple Silicon](https://famstack.dev/guides/mlx-vs-gguf-apple-silicon/) -- thorough comparison showing prefill vs generation tradeoffs, effective throughput vs UI-reported tok/s
+- [Part 2: isolating variables](https://famstack.dev/guides/mlx-vs-gguf-part-2-isolating-variables/) -- runtime comparison (LM Studio, Ollama, oMLX), quantization quality (K-quants vs uniform), bf16 fix for M1/M2
+- [oMLX](https://github.com/jundot/omlx) -- 10.9k stars, Apache 2.0, tiered KV cache, continuous batching
+- [Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) -- agent-focused MLX server with tool call parsers, DeltaNet state snapshots for Qwen hybrid attention. Worth watching.
+- [SwiftLM](https://github.com/SharpAI/SwiftLM) -- native Swift, SSD expert streaming for 100B+ MoE. Ambitious but young.
+- [Ollama MLX backend](https://ollama.com/blog/mlx) -- MLX support added March 2026, but 37% overhead from Go wrapper makes it uncompetitive for latency-sensitive use
+
 ## Nix Integration
 
 Agent configuration is declarative. `modules/home-manager/pi.nix` symlinks extensions, `modules/home-manager/llm.nix` generates shared config (`journal.json`), and `modules/home-manager/llm-shared.nix` defines constants shared across all agents. Adding a new pi extension is just creating a directory with `index.ts` -- the Nix module auto-discovers it.

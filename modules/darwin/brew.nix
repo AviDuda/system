@@ -42,6 +42,10 @@
       "lilypond" # Music notation (nixpkgs build fails)
       "mas" # Mac App Store CLI (macOS-specific)
       "f/mcptools/mcp" # MCP tools (custom tap)
+      {
+        name = "jundot/omlx/omlx"; # MLX inference server CLI (tap: brew tap jundot/omlx https://github.com/jundot/omlx). Auto-starts as brew service.
+        start_service = true;
+      }
       "ollama" # LLM runtime (nixpkgs build broken)
       "anomalyco/tap/opencode" # AI coding assistant
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)

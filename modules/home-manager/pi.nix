@@ -36,6 +36,8 @@ in
 
   # Custom model providers (LM Studio local models, etc.)
   # Pi reloads this on /model -- no restart needed.
+  # Models defined here are available as both main models (in pi's model picker)
+  # and sidecar models (via roles.json refs like "provider/model-id").
   ".pi/agent/models.json".text = builtins.toJSON {
     providers = {
       # z.ai GLM Coding plan -- direct provider (not via OpenRouter)
@@ -99,6 +101,36 @@ in
           {
             id = "qwen/qwen3.5-9b";
             name = "Qwen3.5 9B (Local)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 8192;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+          }
+        ];
+      };
+      # oMLX: MLX inference server with tiered KV cache, continuous batching.
+      # Shares ~/.lmstudio/models/ with LM Studio. Auto-starts via brew service.
+      # Model entries use requestParams for per-role thinking control:
+      #   explain/draft: chat_template_kwargs.enable_thinking=false (skip CoT)
+      #   vision: thinking_budget=1024 (capped thinking for image descriptions)
+      omlx = {
+        baseUrl = "http://127.0.0.1:8124/v1";
+        api = "openai-completions";
+        apiKey = "not-needed";
+        models = [
+          {
+            id = "Qwen3.6-35B-A3B-UD-MLX-4bit";
+            name = "Qwen 3.6 35B A3B UD (oMLX)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 8192;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "Qwen3.5-9B-4bit";
+            name = "Qwen 3.5 9B (oMLX)";
             reasoning = true;
             input = [ "text" "image" ];
             contextWindow = 262144;
@@ -183,12 +215,15 @@ in
   # Model roles config for sidecar LLM calls (used by permission gate explain, draft suggestion, etc.)
   # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high),
   # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
-  # GLM-4.7-Flash first: free on z.ai coding plan, fast, 30B-class. Fallback: Haiku,
-  # then OpenRouter DeepSeek V3.2 (cheap, ZDR).
+  # requestParams: per-model extra API params injected via pi's onPayload hook.
+  #   Used for provider-specific options (e.g. oMLX thinking control).
+  #   chat_template_kwargs.enable_thinking=false: skip CoT for fast responses
+  #   thinking_budget=N: cap thinking tokens (max_tokens includes thinking)
   ".pi/agent/roles.json".text = builtins.toJSON {
     explain = {
       maxTokens = 256;
       models = [
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
@@ -199,6 +234,7 @@ in
     draft = {
       maxTokens = 128;
       models = [
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
@@ -207,8 +243,9 @@ in
       ];
     };
     vision = {
-      maxTokens = 2048;
+      maxTokens = 3072;
       models = [
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; }; }
         { ref = "zai/glm-4.6v-flash"; thinking = "off"; }
       ];
     };

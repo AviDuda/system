@@ -33,6 +33,7 @@ import {
   type Message,
   type Model,
   type ThinkingLevel as PiThinkingLevel,
+  type SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
 import { getAgentDir, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 
@@ -47,6 +48,12 @@ export interface ModelEntry {
   thinking?: ThinkingLevel;
   /** Max attempts per call (for retry with filtering). Default: 1 */
   maxAttempts?: number;
+  /**
+   * Extra params merged into the API request body via onPayload.
+   * Used for provider-specific options like thinking_budget, chat_template_kwargs, etc.
+   * Example: { "chat_template_kwargs": { "enable_thinking": false } }
+   */
+  requestParams?: Record<string, unknown>;
 }
 
 export interface RoleConfig {
@@ -210,13 +217,27 @@ export async function sidecarComplete(
       // Only pass reasoning if it's not "off".
       const reasoning = thinking === "off" ? undefined : thinking;
 
-      const message = await completeSimple(model, context, {
+      const streamOptions: SimpleStreamOptions = {
         apiKey: auth.apiKey,
         headers: auth.headers,
         reasoning: reasoning as PiThinkingLevel | undefined,
         signal: options?.signal,
         maxTokens: role.maxTokens,
-      });
+      };
+
+      // Inject per-model request params (e.g. thinking_budget, chat_template_kwargs)
+      // via onPayload so they reach the provider without pi needing native support.
+      if (entry.requestParams && Object.keys(entry.requestParams).length > 0) {
+        const extraParams = entry.requestParams;
+        streamOptions.onPayload = (payload: unknown) => {
+          if (typeof payload === "object" && payload !== null) {
+            return { ...(payload as Record<string, unknown>), ...extraParams };
+          }
+          return undefined;
+        };
+      }
+
+      const message = await completeSimple(model, context, streamOptions);
 
       const cost = message.usage.cost.total;
       cumulativeCost += cost;
