@@ -205,7 +205,7 @@ export function resolvePart(parts: JournalParts, name: string): string {
   if (name === "instructions") return parts.instructions;
   if (name === "metadata") return parts.metadata;
   if (name.startsWith("journal:")) {
-    const idx = parseInt(name.split(":")[1]);
+    const idx = parseInt(name.split(":")[1], 10);
     return parts.journals[idx] ?? "";
   }
   return "";
