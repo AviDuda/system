@@ -425,7 +425,7 @@ on run argv
         -- virtio-ramfb-gl renders UEFI firmware output (unlike virtio-gpu-gl-pci).
         -- NVMe disk, TPM device, and Secure Boot UEFI are required by Windows 11.
         -- Drive order: Windows ISO (bootindex 0), unattended ISO, NVMe disk.
-        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:winISO, removable:true}, {source:unattendedISO, removable:true}, {source:diskImg}}, displays:{{hardware:"virtio-ramfb-gl"}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
+        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:winISO, removable:true}, {source:unattendedISO, removable:true}, {source:diskImg}}, displays:{{hardware:"virtio-ramfb-gl", native resolution:true}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
     end tell
 end run
 APPLESCRIPT
@@ -433,7 +433,7 @@ APPLESCRIPT
     # Clean up temp disk (UTM already imported it)
     rm -f "$tmp_disk"
 
-    echo ""
+
     echo "VM '$VM_NAME' created in UTM."
     echo ""
     echo "To install Windows:"

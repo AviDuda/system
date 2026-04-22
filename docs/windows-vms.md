@@ -85,6 +85,7 @@ Runs automatically on first login:
 - Enables OpenSSH server with PS7 as default shell
 - Enables Remote Desktop
 - Enables dark mode (system + apps)
+- Sets High Performance power plan
 - Enables clipboard history (`Win+V`)
 - Disables lock screen and screen timeout
 - Reduces telemetry
@@ -100,6 +101,25 @@ ssh avi@192.168.64.x
 ```
 
 Note: on macOS Sequoia+, the terminal app needs **Local Network** access (System Settings → Privacy & Security → Local Network) to reach vmnet interfaces. Without this, SSH will fail with "No route to host" even though the guest can reach the host.
+
+## Running Scripts on the VM
+
+`mise wr` (`scripts/winrun`) runs PowerShell scripts on the VM with reliable output:
+
+```bash
+# Run a local PS1 file
+mise wr -- config/windows/personalize.ps1
+
+# Pipe a script via stdin
+mise wr -- - << 'EOF'
+Write-Host "Hello from winrun"
+EOF
+
+# Read the firstlogin transcript log
+mise wr -- --log
+```
+
+It copies the script to the VM via scp, executes it, and prints all output. This avoids the output-swallowing issue with `ssh ... powershell -File - << heredoc`. Environment variables `WINRUN_HOST` and `WINRUN_KEY` override the default SSH target.
 
 ## Disposable Test Clones
 
@@ -139,6 +159,22 @@ The clone gets a randomized MAC and new DHCP IP (printed by `mise nwt`).
 ## Known Issues
 
 - **"Press any key to boot from CD/DVD"** -- UEFI prompts for a keypress before booting the Windows ISO. Not yet bypassed automatically.
+- **Retina mode is enabled by default** (`native resolution: true`). This passes the full Retina resolution to the guest for sharper text. Set display scaling manually in Windows Settings → System → Display → Scale (175% works well on 2x Retina). To disable for testing (e.g. checking OCR quality inside the VM):
+  1. UTM: Edit VM → Display → uncheck HiDPI (Retina)
+  2. Windows: Settings → System → Display → Scale → 100%
+  Or via SSH: set `DpiValue` to `0` under `HKCU:\Control Panel\Desktop\PerMonitorSettings\<monitor-guid>`.
+
+## Windows Updates
+
+The ISO installs a point-in-time Windows build. To update the template (or any running VM):
+
+```bash
+ssh -i ~/.ssh/vm avi@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
+```
+
+The script uses the Windows Update COM API to search, download, and install pending updates. If a reboot is required, it restarts automatically and prints a reminder to re-run the script. Updates are not baked into `firstlogin.ps1` because they add 10-30+ minutes to first boot and are only needed when refreshing the template.
+
+For disposable test clones, updates usually aren't worth running -- the clone is short-lived.
 
 ## Personalization
 
@@ -165,7 +201,9 @@ For project-specific setup (e.g. forepaw test apps), write a per-project script 
 | File | Purpose |
 |------|---------|
 | `scripts/windows-utm.sh` | Main automation script |
+| `scripts/winrun.sh` | Run PS1 scripts on VM via SSH |
 | `scripts/windows-test.sh` | Clone/delete disposable test VMs |
 | `config/windows/autounattend.xml` | Unattended answer file |
 | `config/windows/firstlogin.ps1` | Post-install setup script |
 | `config/windows/personalize.ps1` | Personal tools (browsers, CLI, Terminal config) |
+| `config/windows/update-windows.ps1` | Windows Update installer (run via SSH) |

@@ -138,6 +138,12 @@ description = "Stop and delete all Windows test clones"
 raw = true
 run = "./scripts/windows-test.sh cleanup"
 
+[tasks.winrun]
+alias = "wr"
+description = "Run a PS1 script on Windows VM (usage: mise wr -- script.ps1, mise wr -- --log, mise wr -- -)"
+raw = true
+run = "./scripts/winrun.sh"
+
 [tasks.nixos-builder-start]
 alias = "nbs"
 description = "Start the linux-builder VM"

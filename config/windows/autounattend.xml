@@ -294,8 +294,6 @@
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
 
-
-
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">

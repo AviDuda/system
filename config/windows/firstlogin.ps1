@@ -4,7 +4,7 @@
 # Goals:
 # - Install remaining VirtIO drivers (network, balloon, etc.)
 # - Install SPICE guest tools (clipboard sharing, dynamic resolution)
-# - Install PowerShell 7 via winget (AppX on ARM64)
+# - Install PowerShell 7 via winget (retries if not yet provisioned)
 # - Set Windows Terminal as default terminal with PS7 profile
 # - Enable Remote Desktop
 # - Reduce telemetry, disable widgets, dark mode
@@ -13,12 +13,14 @@
 
 $ErrorActionPreference = "Continue"
 
+# Timestamp helper for log output
+function ts { Get-Date -Format "HH:mm:ss" }
+
 # Log everything
 $logFile = "$env:USERPROFILE\Desktop\firstlogin.log"
 Start-Transcript -Path $logFile -Append
 
-Write-Host "=== Windows VM post-install setup ==="
-Write-Host "Time: $(Get-Date)"
+Write-Host "[$(ts)] === Windows VM post-install setup ==="
 
 # --- Find the VirtIO/unattended drive ---
 # The unattended ISO is mounted as a USB CD-ROM; find it by looking for autounattend.xml
@@ -37,7 +39,7 @@ if (-not $virtioDir) {
     Write-Host "Found unattended drive at: $virtioDir"
 
     # --- Install remaining VirtIO drivers via pnputil ---
-    Write-Host "`n=== Installing VirtIO drivers ==="
+    Write-Host "[$(ts)] === Installing VirtIO drivers ==="
     $driverDirs = Get-ChildItem -Path $virtioDir -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^(Balloon|vioinput|vioser|NetKVM|viostor|viofs)$' }
     # Note: viogpudo (VirtIO GPU DOD) is intentionally excluded.
@@ -66,14 +68,14 @@ if (-not $virtioDir) {
     # on first reboot. If that happens, reboot again and it should recover.
     $utmInstaller = Join-Path $virtioDir "utm-guest-tools.exe"
     if (Test-Path $utmInstaller) {
-        Write-Host "`n=== Installing UTM guest tools ==="
+        Write-Host "[$(ts)] === Installing UTM guest tools ==="
         Start-Process -FilePath $utmInstaller -ArgumentList "/S" -Wait
         Write-Host "UTM guest tools installed."
     }
 
     # --- Start SPICE VDAgent service (clipboard + dynamic resolution) ---
     if (Get-Service vdservice -ErrorAction SilentlyContinue) {
-        Write-Host "`n=== Starting SPICE VDAgent ==="
+        Write-Host "[$(ts)] === Starting SPICE VDAgent ==="
         Set-Service vdservice -StartupType Automatic
         Start-Service vdservice -ErrorAction SilentlyContinue
         Write-Host "SPICE VDAgent started."
@@ -82,14 +84,14 @@ if (-not $virtioDir) {
     # --- Install QEMU Guest Agent if present ---
     $qemuGA = Join-Path $virtioDir "guest-agent\qemu-ga-x86_64.msi"
     if (Test-Path $qemuGA) {
-        Write-Host "`n=== Installing QEMU Guest Agent ==="
+        Write-Host "[$(ts)] === Installing QEMU Guest Agent ==="
         Start-Process msiexec.exe -ArgumentList "/i `"$qemuGA`" /quiet /norestart" -Wait
         Write-Host "QEMU Guest Agent installed."
     }
 }
 
 # --- Enable Remote Desktop ---
-Write-Host "`n=== Enabling Remote Desktop ==="
+Write-Host "[$(ts)] === Enabling Remote Desktop ==="
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Type DWord
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
 
@@ -97,7 +99,7 @@ Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyConti
 New-NetFirewallRule -Name 'Allow ICMPv4' -DisplayName 'Allow ICMPv4' -Enabled True -Direction Inbound -Protocol ICMPv4 -Action Allow -Profile Any -ErrorAction SilentlyContinue
 
 # --- Reduce telemetry ---
-Write-Host "`n=== Reducing telemetry ==="
+Write-Host "[$(ts)] === Reducing telemetry ==="
 # Set telemetry to Security level (minimum)
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name "AllowTelemetry" -Value 0 -Type DWord -Force
 # Disable Cortana
@@ -105,7 +107,7 @@ New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Force
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name "AllowCortana" -Value 0 -Type DWord
 
 # --- Disable lock screen ---
-Write-Host "`n=== Disabling lock screen ==="
+Write-Host "[$(ts)] === Disabling lock screen ==="
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization' -Name "NoLockScreen" -Value 1 -Type DWord
 # Disable screen timeout on AC power
@@ -113,21 +115,21 @@ powercfg /change monitor-timeout-ac 0
 powercfg /change standby-timeout-ac 0
 
 # --- Set power plan to High Performance ---
-Write-Host "`n=== Setting High Performance power plan ==="
+Write-Host "[$(ts)] === Setting High Performance power plan ==="
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
 
 # --- Disable Windows Update auto-restart ---
-Write-Host "`n=== Disabling auto-restart for updates ==="
+Write-Host "[$(ts)] === Disabling auto-restart for updates ==="
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord
 
 # --- Disable AutoLogon after first use ---
-Write-Host "`n=== Disabling AutoLogon ==="
+Write-Host "[$(ts)] === Disabling AutoLogon ==="
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -Value "0"
 
 # --- Explorer settings ---
-Write-Host "`n=== Configuring Explorer ==="
+Write-Host "[$(ts)] === Configuring Explorer ==="
 $advPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 # Show file extensions
 Set-ItemProperty -Path $advPath -Name "HideFileExt" -Value 0 -Type DWord
@@ -139,13 +141,13 @@ Set-ItemProperty -Path $advPath -Name "ShowFullPathInTitleBar" -Value 1 -Type DW
 Set-ItemProperty -Path $advPath -Name "LaunchTo" -Value 1 -Type DWord
 
 # --- Dark mode ---
-Write-Host "`n=== Enabling dark mode ==="
+Write-Host "[$(ts)] === Enabling dark mode ==="
 $themePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 Set-ItemProperty -Path $themePath -Name "AppsUseLightTheme" -Value 0 -Type DWord
 Set-ItemProperty -Path $themePath -Name "SystemUsesLightTheme" -Value 0 -Type DWord
 
 # --- Quality of life settings ---
-Write-Host "`n=== Applying quality of life settings ==="
+Write-Host "[$(ts)] === Applying quality of life settings ==="
 # Enable clipboard history (Win+V)
 New-Item -Path 'HKCU:\Software\Microsoft\Clipboard' -Force | Out-Null
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Clipboard' -Name "EnableClipboardHistory" -Value 1 -Type DWord
@@ -159,13 +161,29 @@ Set-ItemProperty -Path $advPath -Name "SearchboxTaskbarMode" -Value 1 -Type DWor
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name "OneDrive" -ErrorAction SilentlyContinue
 
 # --- Install PowerShell 7 ---
-# On ARM64 Windows 11, winget installs PS7 as an AppX package (not MSI).
-# The install path includes version numbers so we discover it dynamically.
-Write-Host "`n=== Installing PowerShell 7 ==="
+# winget on ARM64 installs PS7 as an AppX package.
+# It may not be available during FirstLogonCommands (App Installer not
+# provisioned yet) or network may not be ready. Retry with backoff.
+Write-Host "[$(ts)] === Installing PowerShell 7 ==="
 $pwshPath = $null
 try {
-    winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
-    # Find pwsh.exe -- check MSI path first, then AppX
+    $installed = $false
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+        if ($null -ne $wingetCmd) {
+            Write-Host "  [$(ts)] Installing via winget (attempt $attempt)..."
+            winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
+            $installed = $true
+            break
+        }
+        Write-Host "  [$(ts)] winget not available yet, waiting ($attempt/5)..."
+        Start-Sleep -Seconds (10 * $attempt)
+    }
+    if (-not $installed) {
+        Write-Host "  [$(ts)] WARNING: winget never became available."
+    }
+
+    # Find pwsh.exe -- check MSI path first, then AppX (winget on ARM64 uses AppX)
     if (Test-Path "C:\Program Files\PowerShell\7\pwsh.exe") {
         $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
     } else {
@@ -176,16 +194,16 @@ try {
         }
     }
     if ($pwshPath) {
-        Write-Host "PowerShell 7 installed at: $pwshPath"
+        Write-Host "  [$(ts)] PowerShell 7 installed at: $pwshPath"
     } else {
-        Write-Host "WARNING: PowerShell 7 installed but pwsh.exe not found."
+        Write-Host "  [$(ts)] WARNING: pwsh.exe not found."
     }
 } catch {
-    Write-Host "WARNING: Failed to install PowerShell 7: $($_.Exception.Message)"
+    Write-Host "  [$(ts)] WARNING: Failed to install PowerShell 7: $($_.Exception.Message)"
 }
 
 # --- Set Windows Terminal as default terminal ---
-Write-Host "`n=== Setting Windows Terminal as default terminal ==="
+Write-Host "[$(ts)] === Setting Windows Terminal as default terminal ==="
 # Registry keys in HKCU:\Console\%%Startup control the default terminal app.
 # These CLSIDs are from Windows Terminal's AppxManifest.xml and are stable across versions:
 #   DelegationConsole (OpenConsole): {2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}
@@ -204,7 +222,7 @@ if (-not (Test-Path $wtSettingsFile) -and (Test-Path $wtSettingsDir)) {
 }
 
 # --- Enable OpenSSH Server (done last -- Add-WindowsCapability takes several minutes) ---
-Write-Host "`n=== Installing OpenSSH Server (this may take several minutes) ==="
+Write-Host "[$(ts)] === Installing OpenSSH Server (this may take several minutes) ==="
 # Add-WindowsCapability contacts Windows Update even for locally-available
 # capabilities. Retry up to 3 times with 10s delay in case of network issues.
 $sshInstalled = $false
@@ -247,7 +265,7 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $defau
 if ($virtioDir) {
     $pubKey = Join-Path $virtioDir "vm.pub"
     if (Test-Path $pubKey) {
-        Write-Host "`n=== Deploying SSH authorized key ==="
+        Write-Host "[$(ts)] === Deploying SSH authorized key ==="
         $key = (Get-Content $pubKey -Raw).Trim()
         $sshDir = Join-Path $env:USERPROFILE ".ssh"
         New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
@@ -267,7 +285,7 @@ if ($virtioDir) {
 
 Restart-Service sshd -ErrorAction SilentlyContinue
 
-Write-Host "`n=== Post-install setup complete ==="
+Write-Host "[$(ts)] === Post-install setup complete ==="
 Write-Host "Log saved to: $logFile"
 
 Stop-Transcript
