@@ -1,7 +1,7 @@
 # personalize.ps1 -- Personal tools and apps for Windows VM
 # Run after firstlogin.ps1 (which handles system defaults).
 # Not baked into the unattended ISO -- run via SSH:
-#   ssh avi@windows-vm 'powershell -File -' < config/windows/personalize.ps1
+#   ssh user@windows-vm 'powershell -File -' < config/windows/personalize.ps1
 
 $ErrorActionPreference = "Continue"
 
@@ -15,11 +15,15 @@ Install-Winget "Mozilla.Firefox"
 Install-Winget "ZedIndustries.Zed"
 Install-Winget "DEVCOM.JetBrainsMonoNerdFont"
 
+# --- Git (needed by gh, lazygit, delta, and most CLI tools) ---
+Write-Host "`n=== Installing Git ==="
+Install-Winget "Git.Git"
+
 # --- mise (CLI tool manager) ---
 Write-Host "`n=== Installing mise ==="
 Install-Winget "jdx.mise"
 
-# Refresh PATH so mise is available in this session
+# Refresh PATH so git and mise are available in this session
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
 # --- CLI tools via mise ---
@@ -60,6 +64,22 @@ foreach ($tool in $tools) {
     Write-Host "  mise use -g $tool@latest"
     mise use -g "$tool@latest" 2>&1 | Write-Host
 }
+
+# Refresh PATH again so delta is available for git config
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# --- Git config ---
+Write-Host "`n=== Configuring git ==="
+git config --global core.autocrlf input
+git config --global init.defaultBranch main
+git config --global core.longpaths true
+git config --global core.pager delta
+git config --global interactive.diffFilter "delta --color-only"
+git config --global delta.navigate true
+git config --global delta.side-by-side true
+git config --global merge.conflictstyle diff3
+git config --global diff.colorMoved default
+Write-Host "Git configured."
 
 # --- Windows Terminal settings ---
 Write-Host "`n=== Configuring Windows Terminal ==="

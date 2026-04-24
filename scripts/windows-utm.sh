@@ -49,6 +49,62 @@ usage() {
     exit "${1:-0}"
 }
 
+# Convert IANA timezone to Windows timezone name.
+# Windows uses its own timezone IDs (e.g., "Central European Standard Time").
+# Source: https://github.com/unicode-org/cldr/blob/master/common/supplemental/windowsZones.xml
+# Build IANA → Windows timezone mapping from CLDR data.
+# Caches parsed TSV at ~/.cache/windows-utm/tz-map.tsv for 30 days.
+# Source: https://github.com/unicode-org/cldr/blob/main/common/supplemental/windowsZones.xml
+CLDR_TZ_URL="https://raw.githubusercontent.com/unicode-org/cldr/refs/heads/main/common/supplemental/windowsZones.xml"
+TZ_CACHE_DIR="$HOME/.cache/windows-utm"
+TZ_CACHE_FILE="$TZ_CACHE_DIR/tz-map.tsv"
+TZ_CACHE_MAX_AGE=$((30 * 86400))  # 30 days
+
+build_tz_map() {
+    mkdir -p "$TZ_CACHE_DIR"
+
+    # Check cache freshness (GNU stat from Nix)
+    if [[ -f "$TZ_CACHE_FILE" ]]; then
+        local cache_mtime now age
+        cache_mtime=$(stat -c %Y "$TZ_CACHE_FILE")
+        now=$(date +%s)
+        age=$(( now - cache_mtime ))
+        if (( age < TZ_CACHE_MAX_AGE )); then
+            return 0  # Cache is fresh
+        fi
+    fi
+
+    # Download CLDR XML
+    echo "  Refreshing timezone mapping from CLDR..."
+    local xml
+    xml=$(curl -fsSL "$CLDR_TZ_URL") || {
+        if [[ -f "$TZ_CACHE_FILE" ]]; then
+            echo "  WARNING: Failed to download CLDR timezone data, using cached mapping"
+            return 0
+        fi
+        echo "  WARNING: Failed to download CLDR timezone data and no cache available"
+        return 1
+    }
+
+    # Parse: each <mapZone other="Windows Name" ... type="iana1 iana2 ..."/>
+    # produces one line per IANA name:  iana_name<TAB>windows_name
+    echo "$xml" | grep 'mapZone other=' \
+        | sed -n 's/.*other="\([^"]*\)".*type="\([^"]*\)".*/\1\t\2/p' \
+        | while IFS=$'\t' read -r win_tz iana_list; do
+            # type attribute is space-separated IANA names
+            for iana in $iana_list; do
+                printf '%s\t%s\n' "$iana" "$win_tz"
+            done
+        done > "$TZ_CACHE_FILE"
+}
+
+lookup_tz() {
+    local iana_tz="$1"
+    if [[ -f "$TZ_CACHE_FILE" ]]; then
+        awk -F'\t' -v tz="$iana_tz" '$1 == tz { print $2; exit }' "$TZ_CACHE_FILE"
+    fi
+}
+
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -324,10 +380,30 @@ build_unattended_iso() {
     # with hyphens, strip anything else. E.g. "windows-11" -> "WINDOWS-11"
     local computer_name
     computer_name=$(echo "$VM_NAME" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Za-z0-9]/-/g' | tr -cd 'A-Z0-9-')
+
+    # Detect host timezone and convert to Windows timezone name
+    local host_tz win_tz
+    host_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||') || true
+    if [[ -n "$host_tz" ]]; then
+        if build_tz_map; then
+            win_tz=$(lookup_tz "$host_tz") || true
+        fi
+        if [[ -n "$win_tz" ]]; then
+            echo "  Timezone: $host_tz → $win_tz"
+        else
+            echo "  WARNING: No Windows timezone mapping for '$host_tz', defaulting to UTC"
+            win_tz="UTC"
+        fi
+    else
+        win_tz="UTC"
+        echo "  WARNING: Could not detect host timezone, defaulting to UTC"
+    fi
+
     sed \
         -e "s/__USERNAME__/$USERNAME/g" \
         -e "s/__PASSWORD__/$PASSWORD/g" \
         -e "s/__COMPUTERNAME__/$computer_name/g" \
+        -e "s/__TIMEZONE__/$win_tz/g" \
         "$SCRIPT_DIR/config/windows/autounattend.xml" > "$staging/autounattend.xml"
 
     # Copy firstlogin script
@@ -422,10 +498,16 @@ on run argv
 
     tell application "UTM"
         -- Configuration matches UTM's Windows 11 wizard template.
-        -- virtio-ramfb-gl renders UEFI firmware output (unlike virtio-gpu-gl-pci).
+        -- virtio-ramfb renders UEFI firmware output (unlike virtio-gpu-gl-pci).
+        -- Using non-GL variant to allow VM suspend (GL blocks suspend with
+        -- "Suspend is not supported when GPU acceleration is enabled").
+        -- The GL variant uses a host-side OpenGL compositor for slightly smoother
+        -- rendering, but neither variant has guest-side 3D acceleration (viogpu3d
+        -- is experimental, not shipped in stable VirtIO ISOs, and targets
+        -- virtio-gpu-pci not virtio-ramfb). Suspend is more valuable.
         -- NVMe disk, TPM device, and Secure Boot UEFI are required by Windows 11.
         -- Drive order: Windows ISO (bootindex 0), unattended ISO, NVMe disk.
-        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:winISO, removable:true}, {source:unattendedISO, removable:true}, {source:diskImg}}, displays:{{hardware:"virtio-ramfb-gl", native resolution:true}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
+        set vm to make new virtual machine with properties {backend:qemu, configuration:{name:vmName, architecture:"aarch64", hypervisor:useHypervisor, uefi:true, memory:vmMemory, cpu cores:vmCores, drives:{{source:winISO, removable:true}, {source:unattendedISO, removable:true}, {source:diskImg}}, displays:{{hardware:"virtio-ramfb", native resolution:true}}, network interfaces:{{hardware:"virtio-net-pci"}}}}
     end tell
 end run
 APPLESCRIPT

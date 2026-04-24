@@ -98,6 +98,15 @@ Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyConti
 # Allow ICMP (ping) for diagnostics
 New-NetFirewallRule -Name 'Allow ICMPv4' -DisplayName 'Allow ICMPv4' -Enabled True -Direction Inbound -Protocol ICMPv4 -Action Allow -Profile Any -ErrorAction SilentlyContinue
 
+# --- Enable Developer Mode ---
+Write-Host "[$(ts)] === Enabling Developer Mode ==="
+# Allows symlinks without admin, device portal, and other dev features
+New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord
+# Also enable via the newer "For developers" settings path
+$devPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeveloperSetting'
+New-Item -Path $devPath -Force | Out-Null
+
 # --- Reduce telemetry ---
 Write-Host "[$(ts)] === Reducing telemetry ==="
 # Set telemetry to Security level (minimum)
@@ -105,6 +114,46 @@ Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection
 # Disable Cortana
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search' -Name "AllowCortana" -Value 0 -Type DWord
+
+# --- Enable persistent auto-logon ---
+Write-Host "[$(ts)] === Enabling persistent auto-logon ==="
+# autounattend.xml AutoLogon only fires LogonCount times (set to 1).
+# For disposable VMs, set AutoAdminLogon=1 permanently so reboots go straight to desktop.
+$winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "1" -Type String
+Set-ItemProperty -Path $winlogon -Name "DefaultUserName" -Value $env:USERNAME -Type String
+# Read password from the AutoLogon entry that autounattend.xml already populated.
+# AutoLogon with plaintext=true stores it in DefaultPassword.
+$autoPwd = (Get-ItemProperty -Path $winlogon -Name "DefaultPassword" -ErrorAction SilentlyContinue).DefaultPassword
+if ($autoPwd) {
+    Set-ItemProperty -Path $winlogon -Name "DefaultPassword" -Value $autoPwd -Type String
+    Write-Host "  Persistent auto-logon enabled for $env:USERNAME"
+} else {
+    Write-Host "  WARNING: Could not read AutoLogon password, persistent auto-logon not fully configured"
+}
+
+# --- Windows Defender exclusions for dev directories ---
+Write-Host "[$(ts)] === Configuring Windows Defender exclusions ==="
+# Real-time scanning slows down git, npm, cargo, mise significantly.
+# Exclude common dev paths. Acceptable tradeoff for isolated VMs.
+$exclusions = @(
+    $env:USERPROFILE                    # Home dir (mise, git repos, etc.)
+    "$env:USERPROFILE\.local"
+    "$env:USERPROFILE\AppData\Local\mise"
+    'C:\tmp'
+    'C:\temp'
+)
+foreach ($path in $exclusions) {
+    if (Test-Path $path) {
+        Add-MpPreference -ExclusionPath $path -ErrorAction SilentlyContinue
+        Write-Host "  Excluded: $path"
+    }
+}
+# Also exclude process-level scanning for common dev tools
+$processExclusions = @('git.exe', 'node.exe', 'cargo.exe', 'rustc.exe', 'go.exe')
+foreach ($proc in $processExclusions) {
+    Add-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue
+}
 
 # --- Disable lock screen ---
 Write-Host "[$(ts)] === Disabling lock screen ==="
@@ -118,15 +167,21 @@ powercfg /change standby-timeout-ac 0
 Write-Host "[$(ts)] === Setting High Performance power plan ==="
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
 
+# --- Enable Windows Time service (NTP) ---
+Write-Host "[$(ts)] === Enabling NTP time sync ==="
+# qemu-ga handles initial sync with host, but NTP provides reliable ongoing sync
+# and recovers from clock drift after host sleep/wake cycles.
+# time.windows.com is reachable from vmnet (verified).
+Set-Service -Name w32time -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service w32time -ErrorAction SilentlyContinue
+# Force sync now rather than waiting for the default poll interval
+w32tm /resync /force 2>&1 | Write-Host
+Write-Host "NTP time sync enabled."
+
 # --- Disable Windows Update auto-restart ---
 Write-Host "[$(ts)] === Disabling auto-restart for updates ==="
 New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord
-
-# --- Disable AutoLogon after first use ---
-Write-Host "[$(ts)] === Disabling AutoLogon ==="
-Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "DefaultPassword" -ErrorAction SilentlyContinue
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -Value "0"
 
 # --- Explorer settings ---
 Write-Host "[$(ts)] === Configuring Explorer ==="
@@ -148,6 +203,10 @@ Set-ItemProperty -Path $themePath -Name "SystemUsesLightTheme" -Value 0 -Type DW
 
 # --- Quality of life settings ---
 Write-Host "[$(ts)] === Applying quality of life settings ==="
+# Enable long paths (remove 260-char limit)
+New-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name "LongPathsEnabled" -Value 1 -Type DWord
+Write-Host "  Long paths enabled"
 # Enable clipboard history (Win+V)
 New-Item -Path 'HKCU:\Software\Microsoft\Clipboard' -Force | Out-Null
 Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Clipboard' -Name "EnableClipboardHistory" -Value 1 -Type DWord
@@ -256,9 +315,12 @@ if (Test-Path $sshdConfig) {
 # Allow SSH through Windows Firewall
 New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH SSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -ErrorAction SilentlyContinue
 
-# Set PowerShell 7 as default shell for SSH (fall back to PS5.1 if PS7 not found)
+# Set PowerShell as default shell for SSH.
+# Always use PS5.1 at its stable full path. PS7 via AppX install puts pwsh.exe
+# in the user PATH but NOT the system PATH -- sshd runs as SYSTEM and can't see it.
+# A bare "pwsh.exe" or version-specific AppX path will break when PS7 updates
+# or after service restarts. PS5.1 is always available at a known location.
 $defaultShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-if ($pwshPath) { $defaultShell = $pwshPath }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $defaultShell -PropertyType String -Force -ErrorAction SilentlyContinue
 
 # --- Deploy SSH authorized key from unattended ISO ---

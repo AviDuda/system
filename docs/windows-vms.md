@@ -21,10 +21,10 @@ mise nwu -- --username avi --password hunter2
 #    Windows installs unattended (~10 min), then reboots into desktop
 
 # 3. Verify SSH works (firstlogin.ps1 sets it up automatically)
-ssh avi@windows-11.local
+ssh user@windows-11.local
 
 # 4. (Optional) Install personal tools
-ssh avi@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+ssh user@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
 
 # 5. Shut down the VM -- this is now your pristine template
 ```
@@ -74,33 +74,62 @@ The unattended ISO is a data payload only -- no bootloader. UEFI boots from the 
 
 **Note:** The VirtIO GPU DOD driver (viogpudo) is intentionally not installed. On ARM64 it causes a phantom second monitor and breaks resolution changes ([virtio-win#969](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/969)). The ramfb framebuffer alone handles display correctly, including dynamic resizing and clipboard sharing via SPICE.
 
+**Display card:** VMs use `virtio-ramfb` (not `virtio-ramfb-gl`). The GL variant enables a host-side OpenGL compositor for slightly smoother rendering, but blocks VM suspend ("Suspend is not supported when GPU acceleration is enabled"). There are no guest-side 3D acceleration drivers for Windows on this display adapter anyway. Suspend is more valuable.
+
 ### Post-Install (firstlogin.ps1)
 
 Runs automatically on first login:
 - Installs remaining VirtIO drivers via `pnputil`
 - Installs UTM guest tools (SPICE agent + display driver)
+- Installs QEMU Guest Agent (for time sync and host communication)
+- Enables persistent auto-logon (reboots go straight to desktop)
+- Configures Windows Defender exclusions for dev paths and processes
 - Installs PowerShell 7 via winget
 - Sets Windows Terminal as default terminal (via `HKCU\Console\%%Startup` delegation CLSIDs)
 - Configures Windows Terminal to use PS7 as default profile
-- Enables OpenSSH server with PS7 as default shell
-- Enables Remote Desktop
+- Enables OpenSSH server with PS5.1 as default shell (PS7 AppX not on SYSTEM PATH)
+- Enables NTP time sync (`w32time` service, supplements qemu-ga)
+- Enables Remote Desktop, allows ICMP ping
+- Enables Developer Mode
 - Enables dark mode (system + apps)
 - Sets High Performance power plan
 - Enables clipboard history (`Win+V`)
 - Disables lock screen and screen timeout
+- Enables long paths (removes 260-char limit)
 - Reduces telemetry
 - Explorer: shows file extensions, hidden files, full path in title bar, launches to This PC
 - Disables taskbar widgets, search icon-only, OneDrive autostart disabled
+
+### Timezone
+
+The VM's timezone is automatically set to match the host's. `windows-utm.sh` detects the host's IANA timezone from `/etc/localtime`, converts it to a Windows timezone name using the CLDR `windowsZones.xml` mapping (cached for 30 days at `~/.cache/windows-utm/tz-map.tsv`), and injects it into `autounattend.xml`.
 
 ## SSH Access
 
 The VM is accessible via the vmnet shared network (192.168.64.x). SSH key is automatically deployed from `~/.ssh/vm.pub` during first login via `firstlogin.ps1`. The SSH config in nix matches `192.168.64.*` so you can connect with:
 
 ```bash
-ssh avi@192.168.64.x
+ssh user@192.168.64.x
 ```
 
 Note: on macOS Sequoia+, the terminal app needs **Local Network** access (System Settings → Privacy & Security → Local Network) to reach vmnet interfaces. Without this, SSH will fail with "No route to host" even though the guest can reach the host.
+
+### Interactive Session
+
+SSH runs in session 0 (no desktop). UI Automation, screen capture, and OCR require the interactive desktop session (session 1). Use `winrun -i` to execute scripts there:
+
+```bash
+# Run a script in the interactive session
+WINRUN_HOST=user@IP mise wr -- -i -- myscript.ps1
+# or directly:
+WINRUN_HOST=user@IP ~/system/scripts/winrun.sh -i myscript.ps1
+# stdin also works:
+WINRUN_HOST=user@IP ~/system/scripts/winrun.sh -i - << 'PS1'
+Write-Host "hello from the desktop"
+PS1
+```
+
+The `-i` flag wraps the script in a scheduled task that runs in the user's interactive session. Output is captured via temp file polling (60s timeout). Note: this briefly spawns a visible window on the desktop.
 
 ## Running Scripts on the VM
 
@@ -117,44 +146,92 @@ EOF
 
 # Read the firstlogin transcript log
 mise wr -- --log
+
+# Verbose mode (full SSH debug output, useful for connection issues)
+mise wr -v -- config/windows/personalize.ps1
+
+# Interactive + verbose
+mise wr -iv -- myscript.ps1
 ```
 
 It copies the script to the VM via scp, executes it, and prints all output. This avoids the output-swallowing issue with `ssh ... powershell -File - << heredoc`. Environment variables `WINRUN_HOST` and `WINRUN_KEY` override the default SSH target.
 
+Flags:
+- `-v` / `--verbose` -- full SSH debug output (connection negotiation, auth, etc.)
+- `-i` / `--interactive` -- run in the interactive desktop session (see below)
+- Both combinable: `-iv`
+
+Connection failures fail fast (~5s timeout) with a clear error message suggesting `-v` for diagnostics.
+
 ## Disposable Test Clones
 
 UTM cloning uses APFS copy-on-write, so cloning the template is instant (~0.25s)
-regardless of disk image size. This gives a snapshot-like workflow without Parallels:
+regardless of disk image size. This gives a snapshot-like workflow without Parallels.
 
-```bash
-# Clone the template, boot, wait for SSH
-mise nwt
-# ... run your tests ... (template stays pristine)
-
-# Clean up when done
-mise nwtc
-```
-
-The clone gets a randomized MAC address (UTM copies the template's MAC verbatim,
-so the script randomizes it via PlistBuddy post-clone) and a new IP via DHCP.
 The template VM must be stopped before cloning.
 
-### Workflow
-
-The template stays pristine. Each test session gets a fresh clone:
+### Basic usage
 
 ```bash
-# Clone the template (instant, APFS copy-on-write)
-mise nwt
-# Wait for SSH to come up, then do whatever you need
-ssh avi@192.168.64.x 'powershell -File -' < my-setup.ps1
-# ... run your tests ...
-# Clean up
-mise nwtc
+# Clone the template, boot, wait for SSH (random hostname, ~60s for rename reboot)
+windows-test.sh
+
+# Named clone (hostname = FOREPAW)
+windows-test.sh --name forepaw
+
+# Clean up when done
+windows-test.sh cleanup
+windows-test.sh cleanup --dry-run      # preview what would be deleted
+windows-test.sh cleanup forepaw         # only delete windows-forepaw*
 ```
 
-SSH key is deployed automatically from `~/.ssh/vm.pub` during first login.
-The clone gets a randomized MAC and new DHCP IP (printed by `mise nwt`).
+### Project base templates
+
+You can create persistent base VMs with project-specific tooling, then
+clone from those instead of the default `windows-11` template:
+
+```bash
+# 1. Create a base VM from the default template
+windows-test.sh --name forepaw-base --no-stamp
+
+# 2. Install project tools on it (SSH in, run setup scripts, etc.)
+WINRUN_HOST=user@IP ~/system/scripts/winrun.sh scripts/windows/setup-dev.ps1
+
+# 3. Stop the base VM (it becomes a template)
+utmctl stop windows-forepaw-base
+
+# 4. Clone from it for disposable testing
+windows-test.sh --source forepaw-base --name test-1
+windows-test.sh --source forepaw-base --name test-2
+
+# 5. Clean up test clones (base stays intact)
+windows-test.sh cleanup test-
+```
+
+Each `--source` clone gets the base VM's tools pre-installed. The base
+stays pristine -- never boot it for testing, only clone from it.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--name NAME` | Clone name prefix + Windows hostname (uppercase, no hyphens) |
+| `--no-stamp` | Omit timestamp from clone name (for base templates) |
+| `--source VM` | Clone from a different VM instead of default `windows-11` |
+| `--no-rename` | Skip hostname setting (no reboot, faster startup) |
+| `cleanup [FILTER]` | Stop + delete clones (`--dry-run` to preview) |
+
+### Hostnames
+
+Every clone gets a unique hostname by default (prevents mDNS/SMB conflicts
+when running multiple VMs). With `--name`, the hostname is derived from it.
+Without `--name`, a random word pair is chosen from `/usr/share/dict/words`
+(e.g. `swift-fox`, `bold-arch`). Hostname setting adds ~60s for a reboot.
+
+Use `--no-rename` to skip the reboot if you don't need mDNS resolution.
+
+The UTM clone name includes the `--source` (if set) and hostname for
+traceability in `utmctl list`.
 
 ## Known Issues
 
@@ -169,7 +246,7 @@ The clone gets a randomized MAC and new DHCP IP (printed by `mise nwt`).
 The ISO installs a point-in-time Windows build. To update the template (or any running VM):
 
 ```bash
-ssh -i ~/.ssh/vm avi@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
+ssh -i ~/.ssh/vm user@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
 ```
 
 The script uses the Windows Update COM API to search, download, and install pending updates. If a reboot is required, it restarts automatically and prints a reminder to re-run the script. Updates are not baked into `firstlogin.ps1` because they add 10-30+ minutes to first boot and are only needed when refreshing the template.
@@ -181,7 +258,7 @@ For disposable test clones, updates usually aren't worth running -- the clone is
 `config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO. Run via SSH:
 
 ```bash
-ssh avi@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+ssh user@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
 ```
 
 Or copy it to the VM and run locally (e.g. from Windows Terminal):
@@ -190,7 +267,7 @@ Or copy it to the VM and run locally (e.g. from Windows Terminal):
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\personalize.ps1"
 ```
 
-Installs Firefox, Zed, JetBrainsMono Nerd Font (winget), mise, and 25 CLI tools via `mise use -g` (ripgrep, fd, bat, delta, jq, neovim, pandoc, etc.). Tool selection mirrors `modules/home-manager/default.nix`.
+Installs Git for Windows (winget), Firefox, Zed, JetBrainsMono Nerd Font (winget), mise, and 25 CLI tools via `mise use -g` (ripgrep, fd, bat, delta, jq, neovim, pandoc, etc.). Tool selection mirrors `modules/home-manager/default.nix`. Git is configured with autocrlf=input, defaultBranch=main, delta as pager with side-by-side, and conflictstyle=diff3.
 
 After the initial run, add more tools with `mise use -g <tool>@latest` over SSH.
 
@@ -205,5 +282,6 @@ For project-specific setup (e.g. forepaw test apps), write a per-project script 
 | `scripts/windows-test.sh` | Clone/delete disposable test VMs |
 | `config/windows/autounattend.xml` | Unattended answer file |
 | `config/windows/firstlogin.ps1` | Post-install setup script |
+| `config/windows/fix-ssh-auth.ps1` | SSH auth diagnostics and fixes |
 | `config/windows/personalize.ps1` | Personal tools (browsers, CLI, Terminal config) |
 | `config/windows/update-windows.ps1` | Windows Update installer (run via SSH) |

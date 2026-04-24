@@ -1,7 +1,7 @@
 # update-windows.ps1 -- Install all pending Windows Updates with automatic reboots
 #
 # Usage (from host):
-#   ssh -i ~/.ssh/vm avi@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
+#   ssh -i ~/.ssh/vm user@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
 #
 # Uses the Windows Update COM API directly (no PSWindowsUpdate module needed).
 # Loops: search → download → install → reboot → repeat until no pending updates.
