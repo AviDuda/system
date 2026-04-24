@@ -103,9 +103,22 @@ Write-Host "[$(ts)] === Enabling Developer Mode ==="
 # Allows symlinks without admin, device portal, and other dev features
 New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Force | Out-Null
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord
-# Also enable via the newer "For developers" settings path
-$devPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeveloperSetting'
-New-Item -Path $devPath -Force | Out-Null
+
+# --- Enable Windows sudo (inline mode) ---
+Write-Host "[$(ts)] === Enabling sudo ==="
+# Windows 11 24H2+ has built-in sudo.
+# Values: 0=disabled, 1=forceNewWindow, 2=disableInput, 3=normal (inline).
+# Note: sudo requires an interactive desktop -- it does NOT work from SSH.
+New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo' -Name "Enabled" -Value 3 -Type DWord
+
+# --- Disable UAC consent prompt for disposable VMs ---
+Write-Host "[$(ts)] === Disabling UAC consent ==="
+# Disables the UAC consent prompt for admin operations. Safe for disposable VMs.
+# Note: this does NOT fix Windows Update COM API E_ACCESSDENIED over SSH --
+# that's a separate issue where recent Windows builds block remote logon sessions
+# from using the Update COM API regardless of token elevation. See PSWindowsUpdate#60.
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name "ConsentPromptBehaviorAdmin" -Value 0 -Type DWord
 
 # --- Reduce telemetry ---
 Write-Host "[$(ts)] === Reducing telemetry ==="
