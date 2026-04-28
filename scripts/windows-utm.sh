@@ -512,6 +512,16 @@ on run argv
 end run
 APPLESCRIPT
 
+    # Add sound device (AppleScript qemu configuration doesn't expose Sound property)
+    local vm_config
+    vm_config="$(dirname "$(find ~/Library/Containers/com.utmapp.UTM/Data/Documents -maxdepth 2 -name "config.plist" -path "*/${VM_NAME}.utm/*" 2>/dev/null | head -1)")"
+    if [[ -n "$vm_config" && -f "$vm_config/config.plist" ]]; then
+        /usr/libexec/PlistBuddy -c "Add :Sound:0 dict" "$vm_config/config.plist"
+        /usr/libexec/PlistBuddy -c "Add :Sound:0:Hardware string intel-hda" "$vm_config/config.plist"
+    else
+        echo "Warning: could not find VM config.plist to add sound device. Add it manually in UTM settings."
+    fi
+
     # Clean up temp disk (UTM already imported it)
     rm -f "$tmp_disk"
 
@@ -519,11 +529,11 @@ APPLESCRIPT
     echo "VM '$VM_NAME' created in UTM."
     echo ""
     echo "To install Windows:"
-    echo "  1. Open UTM and start the VM"
-    echo "  2. When prompted, press any key to boot from CD"
-    echo "     (startup.nsh should handle this automatically)"
-    echo "  3. Windows will install (~20-30 min)"
-    echo "  4. After install completes, eject ISOs in UTM settings"
+    echo "  1. Restart UTM (sound device requires config reload)"
+    echo "  2. Start the VM"
+    echo "  3. When prompted, press any key to boot from CD"
+    echo "  4. Windows will install (~20-30 min)"
+    echo "  5. After install completes, eject ISOs in UTM settings"
     echo ""
     echo "Login: $USERNAME / $PASSWORD"
 }

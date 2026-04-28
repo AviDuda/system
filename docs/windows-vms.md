@@ -76,6 +76,8 @@ The unattended ISO is a data payload only -- no bootloader. UEFI boots from the 
 
 **Display card:** VMs use `virtio-ramfb` (not `virtio-ramfb-gl`). The GL variant enables a host-side OpenGL compositor for slightly smoother rendering, but blocks VM suspend ("Suspend is not supported when GPU acceleration is enabled"). There are no guest-side 3D acceleration drivers for Windows on this display adapter anyway. Suspend is more valuable.
 
+**Sound:** VMs are configured with an `intel-hda` audio device (Intel HD Audio). UTM's AppleScript dictionary doesn't expose the Sound configuration property, so the script adds it to the VM's `config.plist` via PlistBuddy after creation. UTM must be restarted to pick up the change (it caches config in memory at launch). After restart, the sound device appears in UTM's settings UI. Audio is routed through the SPICE backend to the host.
+
 ### Post-Install (firstlogin.ps1)
 
 Runs automatically on first login:
