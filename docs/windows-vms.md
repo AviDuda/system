@@ -24,7 +24,7 @@ mise nwu -- --username avi --password hunter2
 ssh user@windows-11.local
 
 # 4. (Optional) Install personal tools
-ssh user@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+mise wr -- config/windows/personalize.ps1
 
 # 5. Shut down the VM -- this is now your pristine template
 ```
@@ -248,7 +248,7 @@ traceability in `utmctl list`.
 The ISO installs a point-in-time Windows build. To update the template (or any running VM):
 
 ```bash
-ssh -i ~/.ssh/vm user@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
+mise wr -- config/windows/update-windows.ps1
 ```
 
 The script uses the Windows Update COM API to search, download, and install pending updates. If a reboot is required, it restarts automatically and prints a reminder to re-run the script. Updates are not baked into `firstlogin.ps1` because they add 10-30+ minutes to first boot and are only needed when refreshing the template.
@@ -257,13 +257,13 @@ For disposable test clones, updates usually aren't worth running -- the clone is
 
 ## Personalization
 
-`config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO. Run via SSH:
+`config/windows/personalize.ps1` installs personal tools on top of the base system. Not baked into the ISO:
 
 ```bash
-ssh user@windows-11.local 'powershell -File -' < config/windows/personalize.ps1
+mise wr -- config/windows/personalize.ps1
 ```
 
-Or copy it to the VM and run locally (e.g. from Windows Terminal):
+Or run it locally on the VM (e.g. from Windows Terminal):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\personalize.ps1"
@@ -271,9 +271,13 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\personalize.p
 
 Installs Git for Windows (winget), Firefox, Zed, JetBrainsMono Nerd Font (winget), mise, and 25 CLI tools via `mise use -g` (ripgrep, fd, bat, delta, jq, neovim, pandoc, etc.). Tool selection mirrors `modules/home-manager/default.nix`. Git is configured with autocrlf=input, defaultBranch=main, delta as pager with side-by-side, and conflictstyle=diff3.
 
-After the initial run, add more tools with `mise use -g <tool>@latest` over SSH.
+After the initial run, add more tools via `mise wr`:
 
-For project-specific setup (e.g. forepaw test apps), write a per-project script and pipe it the same way. The template gives you SSH + PS7 + drivers + RDP -- enough to bootstrap anything in seconds.
+```bash
+mise wr -- - <<< 'mise use -g <tool>@latest'
+```
+
+For project-specific setup (e.g. forepaw test apps), write a per-project script and run it via `mise wr`. The template gives you SSH + PS7 + drivers + RDP -- enough to bootstrap anything in seconds.
 
 ## Files
 

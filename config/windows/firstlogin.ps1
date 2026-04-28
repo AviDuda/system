@@ -11,6 +11,10 @@
 # - Explorer: file extensions, hidden files, This PC view
 # - Set up for forepaw accessibility testing
 
+param(
+    [string]$Password  # Optional. Auto-detected from autounattend.xml on the unattended drive.
+)
+
 $ErrorActionPreference = "Continue"
 
 # Timestamp helper for log output
@@ -134,27 +138,54 @@ Write-Host "[$(ts)] === Enabling persistent auto-logon ==="
 # For disposable VMs, set AutoAdminLogon=1 permanently so reboots go straight to desktop.
 $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "1" -Type String
+Set-ItemProperty -Path $winlogon -Name "ForceAutoLogon" -Value "1" -Type String
 Set-ItemProperty -Path $winlogon -Name "DefaultUserName" -Value $env:USERNAME -Type String
-# Read password from the AutoLogon entry that autounattend.xml already populated.
-# AutoLogon with plaintext=true stores it in DefaultPassword.
-$autoPwd = (Get-ItemProperty -Path $winlogon -Name "DefaultPassword" -ErrorAction SilentlyContinue).DefaultPassword
-if ($autoPwd) {
-    Set-ItemProperty -Path $winlogon -Name "DefaultPassword" -Value $autoPwd -Type String
-    Write-Host "  Persistent auto-logon enabled for $env:USERNAME"
-} else {
-    Write-Host "  WARNING: Could not read AutoLogon password, persistent auto-logon not fully configured"
+
+# Get the password. Try in order:
+# 1. -Password parameter (passed from autounattend.xml CommandLine)
+# 2. Parse autounattend.xml on the unattended ISO drive
+# 3. Registry DefaultPassword (set by Windows AutoLogon, but may be cleared)
+if (-not $Password) {
+    foreach ($d in 'D','E','F','G') {
+        $answerFile = "${d}:\autounattend.xml"
+        if (Test-Path $answerFile) {
+            try {
+                [xml]$xml = Get-Content $answerFile
+                $autoPwdNode = $xml.SelectSingleNode(
+                    '//*[local-name()="AutoLogon"]/*[local-name()="Password"]/*[local-name()="Value"]'
+                )
+                if ($autoPwdNode) { $Password = $autoPwdNode.'#text' }
+            } catch {
+                Write-Host "  WARNING: Could not parse $answerFile"
+            }
+            break
+        }
+    }
+}
+if (-not $Password) {
+    $Password = (Get-ItemProperty -Path $winlogon -Name "DefaultPassword" -ErrorAction SilentlyContinue).DefaultPassword
 }
 
-# --- Windows Defender exclusions for dev directories ---
+if ($Password) {
+    Set-ItemProperty -Path $winlogon -Name "DefaultPassword" -Value $Password -Type String
+    Write-Host "  Persistent auto-logon enabled for $env:USERNAME"
+} else {
+    Write-Host "  WARNING: Could not determine password. Auto-logon not fully configured."
+}
+
+# --- Windows Defender exclusions ---
 Write-Host "[$(ts)] === Configuring Windows Defender exclusions ==="
 # Real-time scanning slows down git, npm, cargo, mise significantly.
-# Exclude common dev paths. Acceptable tradeoff for isolated VMs.
+# Exclude common dev paths and processes. Acceptable tradeoff for isolated VMs.
+# (Can't fully disable Defender -- tamper protection blocks it from any scripted context.)
 $exclusions = @(
     $env:USERPROFILE                    # Home dir (mise, git repos, etc.)
     "$env:USERPROFILE\.local"
     "$env:USERPROFILE\AppData\Local\mise"
+    "$env:USERPROFILE\AppData\Local\Temp"
     'C:\tmp'
     'C:\temp'
+    'C:\dev'
 )
 foreach ($path in $exclusions) {
     if (Test-Path $path) {
@@ -162,11 +193,11 @@ foreach ($path in $exclusions) {
         Write-Host "  Excluded: $path"
     }
 }
-# Also exclude process-level scanning for common dev tools
-$processExclusions = @('git.exe', 'node.exe', 'cargo.exe', 'rustc.exe', 'go.exe')
+$processExclusions = @('git.exe', 'node.exe', 'cargo.exe', 'rustc.exe', 'go.exe', 'java.exe', 'python.exe', 'uv.exe')
 foreach ($proc in $processExclusions) {
     Add-MpPreference -ExclusionProcess $proc -ErrorAction SilentlyContinue
 }
+Write-Host "  Process exclusions: $($processExclusions -join ', ')"
 
 # --- Disable lock screen ---
 Write-Host "[$(ts)] === Disabling lock screen ==="

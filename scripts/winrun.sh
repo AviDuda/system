@@ -41,16 +41,13 @@ while [[ ${1:-} =~ ^-[iv]+$ || ${1:-} == --interactive || ${1:-} == --verbose ]]
 done
 
 # Extract hostname (strip user@ prefix if present)
-VM_NAME="${VM_HOST##*@}"
 VM_USER="${VM_HOST%%@*}"
 
-# Remove stale host key (VM rebuilds change it every time)
-ssh-keygen -R "$VM_NAME" 2>/dev/null || true
-# Also try the .local variant or bare hostname
-ssh-keygen -R "$VM_NAME.local" 2>/dev/null || true
-
-ssh_opts=(-o IdentitiesOnly=yes -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5)
-scp_opts=(-o IdentitiesOnly=yes -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5)
+# Skip host key checking entirely. VMs rebuild frequently and change keys each time,
+# so strict checking just causes noise. UserKnownHostsFile=/dev/null avoids both
+# writing to known_hosts and the "Host X found" / "known_hosts updated" messages.
+ssh_opts=(-o IdentitiesOnly=yes -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5)
+scp_opts=(-o IdentitiesOnly=yes -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5)
 
 if $VERBOSE; then
     ssh_opts+=(-v)
