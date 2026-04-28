@@ -121,7 +121,7 @@ Write-Host "[$(ts)] === Disabling UAC consent ==="
 # Disables the UAC consent prompt for admin operations. Safe for disposable VMs.
 # Note: this does NOT fix Windows Update COM API E_ACCESSDENIED over SSH --
 # that's a separate issue where recent Windows builds block remote logon sessions
-# from using the Update COM API regardless of token elevation. See PSWindowsUpdate#60.
+# from using the Update COM API regardless of token elevation. See mgajda83/PSWindowsUpdate#60.
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name "ConsentPromptBehaviorAdmin" -Value 0 -Type DWord
 
 # --- Reduce telemetry ---

@@ -6,11 +6,26 @@
 # Uses the Windows Update COM API directly (no PSWindowsUpdate module needed).
 # Loops: search → download → install → reboot → repeat until no pending updates.
 # Based on the approach used by packer-plugin-windows-update.
+#
+# NOTE: Windows 11 24H2+ blocks the Update COM API from remote logon sessions
+# (SSH, WinRM). CreateUpdateDownloader returns E_ACCESSDENIED regardless of elevation.
+# This script only works when run from the VM desktop (RDP, console, or qemu-ga transport).
+# See mgajda83/PSWindowsUpdate#60 for details.
 
 $ErrorActionPreference = "Stop"
 
 # Timestamp helper
 function ts { Get-Date -Format "HH:mm:ss" }
+
+# Check for remote session (SSH/WinRM) -- Update COM API won't work
+if ($env:SESSIONNAME -match "^RDP" -or [Environment]::UserInteractive) {
+    # Likely interactive -- OK
+} elseif ($env:SSH_CONNECTION -or $env:SSH_CLIENT) {
+    Write-Host "[$(ts)] ERROR: Windows Update COM API does not work over SSH (E_ACCESSDENIED)."
+    Write-Host "[$(ts)] Run this script from the VM desktop (RDP/console) instead."
+    Write-Host "[$(ts)] See PSWindowsUpdate#60 for details."
+    exit 1
+}
 
 function Install-PendingUpdates {
     $session = New-Object -ComObject Microsoft.Update.Session

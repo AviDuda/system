@@ -265,6 +265,8 @@ mise wr -- config/windows/update-windows.ps1
 
 The script uses the Windows Update COM API to search, download, and install pending updates. If a reboot is required, it restarts automatically and prints a reminder to re-run the script. Updates are not baked into `firstlogin.ps1` because they add 10-30+ minutes to first boot and are only needed when refreshing the template.
 
+**Windows 11 24H2+ blocks the Update COM API from remote logon sessions** (SSH, WinRM). `CreateUpdateDownloader` returns `E_ACCESSDENIED` regardless of elevation -- see [mgajda83/PSWindowsUpdate#60](https://github.com/mgajda83/PSWindowsUpdate/issues/60). The script detects SSH and exits early with an error. Run it from the VM desktop (RDP, console) instead.
+
 For disposable test clones, updates usually aren't worth running -- the clone is short-lived.
 
 ## Personalization
