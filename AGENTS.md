@@ -26,6 +26,7 @@ mise cpu              # Check custom packages for upstream updates
 | Machine-specific config | `machines/<hostname>/default.nix` |
 | LLM instructions/skills | `config/llm/` |
 | Secrets (encrypted) | `secrets/` (see @docs/secrets.md) |
+| Windows VM scripts | `config/windows/`, `scripts/win*.sh` |
 
 ## @-mentions
 
@@ -51,3 +52,4 @@ mise cpu              # Check custom packages for upstream updates
 - Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
 - Do NOT run `mise nix-switch` or `mise fast-switch` yourself. Use `mise nix-diff` to verify changes build, then tell the user to run the switch. This is their live system - they control when changes are applied.
 - When doing Nix upgrades (`mise nix-upgrade` or `nix flake update`), run `mise cpu` to check if custom packages in `packages/` have newer upstream releases. Offer to update any that are outdated. See `scripts/check-pkg-updates.sh` for the registry of tracked packages.
+- Windows VM scripts run via `mise wr` (not raw SSH). See docs/windows-vms.md for full reference.

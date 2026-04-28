@@ -1,8 +1,27 @@
-# Nix System Configuration
+# system
 
-Personal Nix flake for macOS (nix-darwin) and NixOS.
+Raccoons are generalists. They eat anything, live anywhere, and figure out how to open every trash can on the block. This repo does the same thing for computers -- one flake that configures macOS machines, NixOS VMs, and Windows VMs, plus all the tooling to make LLM agents useful along the way.
 
-## Get started (macOS)
+## What's in here
+
+```
+config/
+  llm/             Pi extensions (LSP, permission gate, sidecar, vision...), MCP servers,
+                   benchmarks, skills -- the brain infrastructure for AI agents
+  windows/         Windows 11 ARM64 VM scripts (unattended install, firstlogin, debloat)
+docs/              Architecture, commands, secrets, Windows VMs, Quake mapping...
+machines/          Per-host config (procyonid-trailblazer = macOS, phantom-tanuki = NixOS)
+modules/
+  darwin/          macOS system config (Homebrew, preferences, core settings)
+  home-manager/    User-level config (shell, git, editors, LLM tools, 1Password)
+  nixos/           NixOS system config (graphical, core, SPICE clipboard)
+packages/          Custom derivations (forepaw, Godot, TrenchBroom, Quake tools)
+scripts/           Build helpers, VM scripts, winrun, package update checker
+secrets/           sops-nix encrypted secrets (GitHub, Kagi, Tailscale, LLM keys)
+tailscale/         Tailscale ACL policy + push script
+```
+
+## Getting started (macOS)
 
 1. **Set hostname** (must match a `darwinConfigurations` entry in `flake.nix`):
     ```bash
@@ -32,65 +51,51 @@ Personal Nix flake for macOS (nix-darwin) and NixOS.
     nix run nix-darwin -- switch --flake .
     ```
 
-## Rebuilding
-
-After initial setup:
-```bash
-mise nix-switch      # from ~/system directory
-nix-switch           # from anywhere (shell alias)
-```
-
-## Upgrading
-
-Update flake inputs and rebuild:
-```bash
-mise nix-upgrade     # from ~/system directory
-nix-upgrade          # from anywhere (shell alias)
-```
-
-
-### Homebrew
-
-Managed via [`modules/darwin/brew.nix`](modules/darwin/brew.nix). See [docs/homebrew-vs-nixpkgs.md](docs/homebrew-vs-nixpkgs.md) for when to use Homebrew vs nixpkgs.
+## Daily commands
 
 ```bash
-brew bundle check -v   # list missing dependencies
-brew bundle cleanup    # list unexpected dependencies (--force to remove)
+mise nix-switch       # Format, build, and apply (or: nix-switch from anywhere)
+mise fast-switch      # Build/apply without formatting
+mise nix-diff         # Preview changes before applying
+mise nix-upgrade      # Update flake inputs and rebuild
+mise fmt              # Format .nix files
+mise cpu              # Check custom packages for upstream updates
 ```
 
-## Get started (NixOS)
+Homebrew is managed via nix and [`modules/darwin/brew.nix`](modules/darwin/brew.nix). See [docs/homebrew-vs-nixpkgs.md](docs/homebrew-vs-nixpkgs.md) for when to use which.
 
-1. [Download and install NixOS](https://nixos.org/download/)
+## Windows VMs
 
-2. Move generated config:
-    ```bash
-    sudo mv /etc/nixos ~/system && sudo chown -R $USER ~/system
-    cd ~/system
-    ```
+Build Windows 11 ARM64 VMs in UTM with unattended installation, auto-logon, SSH, RDP, and a full dev environment. Clone disposable test VMs in 0.25s via APFS copy-on-write.
 
-3. Clone this repo, preserving hardware config:
-    ```bash
-    mv hardware-configuration.nix ..
-    git init && git remote add origin https://github.com/aviraccoon/system && git fetch origin
-    git reset --hard origin/main
-    mv ../hardware-configuration.nix ./machines/$(hostname)/hardware.nix
-    ```
+```bash
+mise nwu -- --username avi --password hunter2   # Download ISO + create VM
+mise wr -- config/windows/personalize.ps1        # Install tools (git, mise, browsers...)
+mise wr -- config/windows/debloat.ps1            # Kill ads/suggestions/Copilot
+```
 
-4. Add `nixosConfigurations` entry in `flake.nix` for your hostname
+See [docs/windows-vms.md](docs/windows-vms.md) for the full guide.
 
-5. Build:
-    ```bash
-    sudo nixos-rebuild switch --flake .
-    ```
+## NixOS
+
+The repo includes NixOS config for UTM VMs (and potentially bare metal). See [docs/nixos-vms.md](docs/nixos-vms.md) for setup instructions.
+
+## LLM agents
+
+`config/llm/` holds pi extensions (LSP integration, permission gate, sidecar model routing, vision, web search, draft suggestions, journaling), an MCP web-search server with Kagi, local LLM benchmarks, and skills. See `config/llm/README.md` and `config/llm/pi/README.md` for details.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - Module structure, flake inputs
-- [Commands](docs/commands.md) - Build, inspect, maintain
-- [Custom packages](docs/custom-packages.md) - Creating derivations
-- [Homebrew vs nixpkgs](docs/homebrew-vs-nixpkgs.md) - Package placement
-- [Secrets](docs/secrets.md) - sops/age management
-- [Upgrading](docs/upgrading.md) - Version upgrades
+| Doc | Contents |
+|-----|----------|
+| [Architecture](docs/architecture.md) | Module structure, flake inputs, directory layout |
+| [Commands](docs/commands.md) | Build, inspect, maintain |
+| [Custom packages](docs/custom-packages.md) | Creating package derivations |
+| [Homebrew vs nixpkgs](docs/homebrew-vs-nixpkgs.md) | Package placement |
+| [Secrets](docs/secrets.md) | sops/age management |
+| [Upgrading](docs/upgrading.md) | Version upgrades |
+| [Windows VMs](docs/windows-vms.md) | Windows 11 ARM64 VM creation |
+| [NixOS VMs](docs/nixos-vms.md) | NixOS VM setup |
 
 ## Resources
 
