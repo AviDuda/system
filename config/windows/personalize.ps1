@@ -12,6 +12,14 @@ function Install-Winget($id) {
     winget install --id $id --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
 }
 
+# --- Verify Developer Mode (required for mise symlinks) ---
+Write-Host "[$(ts)] === Checking Developer Mode ==="
+$devMode = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense
+if ($devMode -ne 1) {
+    Write-Host "[$(ts)] WARNING: Developer Mode not enabled. mise (symlinks) and some tools may fail."
+    Write-Host "[$(ts)] Enable it in Settings > Privacy & Security > For developers, then re-run."
+}
+
 # --- Upgrade existing apps before installing new ones ---
 Write-Host "[$(ts)] === Upgrading installed apps (winget) ==="
 winget upgrade --all --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
@@ -32,6 +40,19 @@ Install-Winget "jdx.mise"
 
 # Refresh PATH so git and mise are available in this session
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Resolve mise to its real path (winget installs a symlink shim at WinGet\Links\ that
+# SSH sessions can't follow due to Windows symlink execution policy).
+$miseExe = (Get-Command mise -ErrorAction SilentlyContinue).Source
+if ($miseExe) {
+    $miseItem = Get-Item $miseExe
+    if ($miseItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        $miseExe = $miseItem.Target
+        Write-Host "[$(ts)] Resolved mise symlink -> $miseExe"
+    }
+} else {
+    Write-Host "[$(ts)] ERROR: mise not found in PATH"
+}
 
 # --- CLI tools via mise ---
 Write-Host "[$(ts)] === Installing CLI tools via mise ==="
@@ -69,7 +90,7 @@ $tools = @(
 # Install Rust via `mise use -g rust@latest` if you need any of these.
 foreach ($tool in $tools) {
     Write-Host "  mise use -g $tool@latest"
-    mise use -g "$tool@latest" 2>&1 | Write-Host
+    & $miseExe use -g "$tool@latest" 2>&1 | Write-Host
 }
 
 # Refresh PATH again so delta is available for git config
