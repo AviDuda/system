@@ -12,6 +12,10 @@ function Install-Winget($id) {
     winget install --id $id --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
 }
 
+# --- Upgrade existing apps before installing new ones ---
+Write-Host "[$(ts)] === Upgrading installed apps (winget) ==="
+winget upgrade --all --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
+
 # --- GUI apps (winget is better for these) ---
 Write-Host "[$(ts)] === Installing GUI apps ==="
 Install-Winget "Mozilla.Firefox"
