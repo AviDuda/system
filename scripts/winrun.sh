@@ -39,6 +39,8 @@ while [[ ${1:-} =~ ^-[iv]+$ || ${1:-} == --interactive || ${1:-} == --verbose ]]
     [[ "$1" == *v* || "$1" == --verbose ]] && VERBOSE=true
     shift
 done
+# Skip -- separator after flags
+[[ "${1:-}" == "--" ]] && shift
 
 # Extract hostname (strip user@ prefix if present)
 VM_USER="${VM_HOST%%@*}"

@@ -32,6 +32,17 @@ SOURCE=""
 HOSTNAME=""
 RENAME=true
 VM_USER="${WINRUN_USER:-user}"
+VM_SUBNET="${VM_SUBNET:-192.168.64}"
+
+# SSH options matching winrun.sh -- VM rebuilds cause host key churn,
+# so accept changed keys and don't pollute known_hosts.
+ssh_common_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o IdentitiesOnly=yes -i "$HOME/.ssh/vm")
+
+ssh_probe() {
+    # SSH probe with short timeout and batch mode (for IP discovery / readiness checks)
+    ssh "${ssh_common_opts[@]}" -o BatchMode=yes -o ConnectTimeout="${1:-3}" "${2:-}" "${3:-echo ok}" 2>/dev/null
+}
 
 # Parse flags before the original arg parsing
 TEMP_ARGS=()
@@ -57,15 +68,27 @@ get_vm_status() {
 }
 
 get_vm_ip() {
-    # Use guest agent (most reliable) -- returns IPv4 first
     local name="$1"
     utmctl ip-address "$name" 2>/dev/null | head -1 || true
 }
 
+scan_vm_ip() {
+    # Parallel SSH scan of vmnet subnet.
+    # utmctl needs qemu-ga which is often not running on clones.
+    # Only call this once -- it spawns ~250 SSH connections.
+    local found
+    found=$(for i in $(seq 2 254); do
+        ssh "${ssh_common_opts[@]}" -o BatchMode=yes -o ConnectTimeout=1 \
+            -o ControlMaster=no -S none \
+            "${VM_USER}@${VM_SUBNET}.$i" "echo ${VM_SUBNET}.$i" 2>/dev/null &
+    done | head -1 | tr -d '\r')
+    wait 2>/dev/null
+    echo "$found"
+}
+
 ssh_ready() {
     local ip="$1"
-    ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new \
-        -o BatchMode=yes -i "$HOME/.ssh/vm" "${VM_USER}@${ip}" "echo ok" &>/dev/null
+    ssh_probe 3 "${VM_USER}@${ip}" &>/dev/null
 }
 
 pick_random_hostname() {
@@ -85,32 +108,47 @@ set_hostname() {
     local hostname="$3"
 
     echo "Setting hostname to '$hostname' (requires reboot)..."
-    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-        -o BatchMode=yes -i "$HOME/.ssh/vm" "${VM_USER}@${ip}" \
+    ssh "${ssh_common_opts[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
+        "${VM_USER}@${ip}" \
         "powershell -Command \"Rename-Computer -NewName $hostname -Force; Restart-Computer -Force\"" 2>/dev/null || true
 
     echo "Waiting for VM to reboot..."
-    sleep 15
+    sleep 10
     local attempts=0
     local max_attempts=30  # 2.5 minutes
+    local new_ip_from_scan=""
     while [[ $attempts -lt $max_attempts ]]; do
-        sleep 5
         attempts=$((attempts + 1))
+        if [[ $attempts -le 15 ]]; then
+            sleep 2
+        else
+            sleep 5
+        fi
         local new_ip
         new_ip=$(get_vm_ip "$vm_name") || true
+        if [[ -z "$new_ip" || "$new_ip" == "0.0.0.0" ]]; then
+            # No guest agent -- scan once, reuse result
+            if [[ -z "$new_ip_from_scan" ]]; then
+                printf "  [%d/%d] no guest agent, scanning subnet...\n" "$attempts" "$max_attempts"
+                new_ip_from_scan=$(scan_vm_ip) || true
+            fi
+            new_ip="$new_ip_from_scan"
+        fi
         if [[ -n "$new_ip" && "$new_ip" != "0.0.0.0" ]]; then
+            printf "  [%d/%d] trying %s\n" "$attempts" "$max_attempts" "$new_ip"
             if ssh_ready "$new_ip"; then
                 echo "Rebooted. Hostname: $hostname.local, IP: $new_ip"
                 echo "  SSH: ssh ${VM_USER}@${hostname}.local"
                 echo "  winrun: WINRUN_HOST=${VM_USER}@${new_ip} winrun -i <script>"
                 return 0
             fi
+        else
+            printf "  [%d/%d] no IP yet\n" "$attempts" "$max_attempts"
         fi
-        printf "  [%d/%d] waiting for reboot...\r" "$attempts" "$max_attempts"
     done
     echo ""
     echo "WARNING: Hostname set but SSH not reachable after reboot."
-    echo "  Try manually: utmctl ip-address '$vm_name'"
+    echo "  Try manually: ssh -i ~/.ssh/vm ${VM_USER}@${ip}"
 }
 
 clone() {
@@ -194,32 +232,53 @@ clone() {
     echo "Waiting for VM to boot and get an IP..."
     echo "  (Windows takes ~30-60s to boot, then SSH needs another ~10s to start)"
     local ip=""
+    local ip_from_scan=""
     local attempts=0
     local max_attempts=60  # 5 minutes
     while [[ $attempts -lt $max_attempts ]]; do
-        sleep 5
         attempts=$((attempts + 1))
+        # Fast poll (2s) for first 15 attempts, then 5s
+        if [[ $attempts -le 15 ]]; then
+            sleep 2
+        else
+            sleep 5
+        fi
+        # Try guest agent first
         ip=$(get_vm_ip "$clone_name") || true
         if [[ -n "$ip" && "$ip" != "0.0.0.0" ]]; then
-            if ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-                -i "$HOME/.ssh/vm" "${VM_USER}@${ip}" "echo ok" &>/dev/null; then
-                echo ""
-                echo "VM '$clone_name' is ready."
-                echo "  IP:  $ip"
-                echo "  SSH: WINRUN_HOST=${VM_USER}@${ip} winrun -i <script>"
-
-                # Set hostname (requires reboot, ~60s)
-                if $RENAME && [[ -n "$HOSTNAME" ]]; then
-                    set_hostname "$ip" "$clone_name" "$HOSTNAME"
+            printf "  [%d/%d] guest agent: %s\n" "$attempts" "$max_attempts" "$ip"
+        else
+            # No guest agent -- scan subnet once, then reuse the result
+            if [[ -z "$ip_from_scan" ]]; then
+                printf "  [%d/%d] no guest agent, scanning subnet...\n" "$attempts" "$max_attempts"
+                ip_from_scan=$(scan_vm_ip) || true
+                if [[ -n "$ip_from_scan" ]]; then
+                    printf "  [%d/%d] scan found: %s\n" "$attempts" "$max_attempts" "$ip_from_scan"
                 else
-                    echo ""
-                    echo "When done, clean up: $0 cleanup"
+                    printf "  [%d/%d] scan: no VMs responding yet\n" "$attempts" "$max_attempts"
+                    continue
                 fi
-
-                return 0
             fi
+            ip="$ip_from_scan"
+            printf "  [%d/%d] trying scan result: %s\n" "$attempts" "$max_attempts" "$ip"
         fi
-        printf "  [%d/%d] waiting...\r" "$attempts" "$max_attempts"
+        printf "  [%d/%d] connecting to %s...\n" "$attempts" "$max_attempts" "$ip"
+        if ssh_probe 3 "${VM_USER}@${ip}" &>/dev/null; then
+            echo ""
+            echo "VM '$clone_name' is ready."
+            echo "  IP:  $ip"
+            echo "  SSH: WINRUN_HOST=${VM_USER}@${ip} winrun -i <script>"
+
+            # Set hostname (requires reboot, ~60s)
+            if $RENAME && [[ -n "$HOSTNAME" ]]; then
+                set_hostname "$ip" "$clone_name" "$HOSTNAME"
+            else
+                echo ""
+                echo "When done, clean up: $0 cleanup"
+            fi
+
+            return 0
+        fi
     done
 
     echo ""
@@ -241,13 +300,36 @@ cleanup() {
         esac
     done
 
-    local pattern='windows-(test|session)-'
+    # Build list of VMs to delete. Exclude the template and any --source base VMs.
+    # Default: all windows-* VMs except the template ($TEMPLATE).
+    # With filter: windows-*FILTER* (still excludes template).
+    local pattern
     if [[ -n "$filter" ]]; then
-        pattern="windows-(${filter}|.*-${filter})"
+        pattern="windows-.*${filter}"
+    else
+        pattern='windows-'
     fi
 
-    local found=0
+    local candidates=()
     while IFS= read -r line; do
+        local name
+        name=$(echo "$line" | awk '{print $3}')
+        # Skip the template
+        [[ "$name" == "$TEMPLATE" ]] && continue
+        # Match pattern
+        [[ "$name" =~ $pattern ]] || continue
+        candidates+=("$line")
+    done < <(utmctl list)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        echo "No clones found to clean up."
+        echo ""
+        echo "All VMs:"
+        utmctl list | awk '{printf "  %-40s %s\n", $3, $2}'
+        return 0
+    fi
+
+    for line in "${candidates[@]}"; do
         local uuid name
         uuid=$(echo "$line" | awk '{print $1}')
         name=$(echo "$line" | awk '{print $3}')
@@ -260,29 +342,10 @@ cleanup() {
             echo "Deleting '$name'..."
             utmctl delete "$uuid"
         fi
-        found=$((found + 1))
-    done < <(utmctl list | grep -E "$pattern")
+    done
 
-    # Also clean up "windows-11 2" if present (UTM's default clone name)
-    while IFS= read -r line; do
-        local uuid name
-        uuid=$(echo "$line" | awk '{print $1}')
-        name=$(echo "$line" | awk '{print $3}')
-        if $dry_run; then
-            echo "Would delete: $name ($uuid)"
-        else
-            echo "Stopping '$name' ($uuid)..."
-            utmctl stop "$uuid" 2>/dev/null || true
-            sleep 1
-            echo "Deleting '$name'..."
-            utmctl delete "$uuid"
-        fi
-        found=$((found + 1))
-    done < <(utmctl list | grep -E '^.*windows-11 2$')
-
-    if [[ $found -eq 0 ]]; then
-        echo "No test clones found to clean up."
-    elif $dry_run; then
+    local found=${#candidates[@]}
+    if $dry_run; then
         echo "Would delete $found clone(s). Run without --dry-run to confirm."
     else
         echo "Cleaned up $found clone(s)."
