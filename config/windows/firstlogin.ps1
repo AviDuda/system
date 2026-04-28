@@ -141,6 +141,10 @@ Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "1" -Type String
 Set-ItemProperty -Path $winlogon -Name "ForceAutoLogon" -Value "1" -Type String
 Set-ItemProperty -Path $winlogon -Name "DefaultUserName" -Value $env:USERNAME -Type String
 
+# Disable ARSO (Automatic Restart Sign-On). Without this, LogonUI.exe clears
+# AutoAdminLogon and DefaultPassword after a reboot, breaking persistent auto-logon.
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name "DisableAutomaticRestartSignOn" -Value 1 -Type DWord
+
 # Get the password. Try in order:
 # 1. -Password parameter (passed from autounattend.xml CommandLine)
 # 2. Parse autounattend.xml on the unattended ISO drive
