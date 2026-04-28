@@ -22,11 +22,14 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-Write-Host "=== SSH Auth Diagnosis ==="
+# Timestamp helper
+function ts { Get-Date -Format "HH:mm:ss" }
+
+Write-Host "[$(ts)] === SSH Auth Diagnosis ==="
 Write-Host ""
 
 # 1. Check sshd service
-Write-Host "--- sshd service ---"
+Write-Host "[$(ts)] --- sshd service ---"
 $sshd = Get-Service sshd -ErrorAction SilentlyContinue
 if ($sshd) {
     Write-Host "Status: $($sshd.Status)"
@@ -37,7 +40,7 @@ if ($sshd) {
 
 # 2. Check default shell
 Write-Host ""
-Write-Host "--- Default shell ---"
+Write-Host "[$(ts)] --- Default shell ---"
 $shell = (Get-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -ErrorAction SilentlyContinue).DefaultShell
 Write-Host "DefaultShell: $shell"
 if ($shell -and $shell -match '_\d+\.\d+\.\d+\.\d+_') {
@@ -50,7 +53,7 @@ if ($shell -and -not (Test-Path $shell) -and $shell -notmatch '\.exe$' -and -not
 
 # 3. Check sshd_config for Match Group block
 Write-Host ""
-Write-Host "--- sshd_config Match block ---"
+Write-Host "[$(ts)] --- sshd_config Match block ---"
 $config = "C:\ProgramData\ssh\sshd_config"
 if (Test-Path $config) {
     $lines = Get-Content $config
@@ -68,7 +71,7 @@ if (Test-Path $config) {
 
 # 4. Check authorized_keys locations
 Write-Host ""
-Write-Host "--- ~/.ssh/authorized_keys ---"
+Write-Host "[$(ts)] --- ~/.ssh/authorized_keys ---"
 $userAuthKeys = Join-Path $env:USERPROFILE ".ssh\authorized_keys"
 if (Test-Path $userAuthKeys) {
     Write-Host "Path: $userAuthKeys"
@@ -116,7 +119,7 @@ if (Test-Path $userAuthKeys) {
 
 # 5. Check administrators_authorized_keys (used when Match Group is active)
 Write-Host ""
-Write-Host "--- administrators_authorized_keys ---"
+Write-Host "[$(ts)] --- administrators_authorized_keys ---"
 $adminAuthKeys = "C:\ProgramData\ssh\administrators_authorized_keys"
 if (Test-Path $adminAuthKeys) {
     Write-Host "Path: $adminAuthKeys"
@@ -127,14 +130,14 @@ if (Test-Path $adminAuthKeys) {
 
 # 6. Check if user is in Administrators
 Write-Host ""
-Write-Host "--- User groups ---"
+Write-Host "[$(ts)] --- User groups ---"
 $groups = net user $env:USERNAME 2>$null | Select-String "Local Group"
 Write-Host $groups
 
 # 7. Deploy key and fix everything if -PublicKey was provided
 if ($PublicKey -ne "") {
     Write-Host ""
-    Write-Host "=== Fixing SSH auth ==="
+    Write-Host "[$(ts)] === Fixing SSH auth ==="
 
     # Write authorized_keys with no BOM, LF line endings
     $sshDir = Join-Path $env:USERPROFILE ".ssh"
@@ -184,7 +187,7 @@ if ($PublicKey -ne "") {
 # -FixOwner: fix file ownership on authorized_keys and .ssh dir
 if ($FixOwner) {
     Write-Host ""
-    Write-Host "=== Fixing file ownership ==="
+    Write-Host "[$(ts)] === Fixing file ownership ==="
     $authKeys = Join-Path $env:USERPROFILE ".ssh\authorized_keys"
     $sshDir = Join-Path $env:USERPROFILE ".ssh"
     if (Test-Path $authKeys) {
@@ -200,7 +203,7 @@ if ($FixOwner) {
 # -EnableDebugLog: set LogLevel DEBUG3 in sshd_config and restart
 if ($EnableDebugLog) {
     Write-Host ""
-    Write-Host "=== Enabling DEBUG3 logging ==="
+    Write-Host "[$(ts)] === Enabling DEBUG3 logging ==="
     $config = "C:\ProgramData\ssh\sshd_config"
     if (Test-Path $config) {
         $content = Get-Content $config -Raw
@@ -222,7 +225,7 @@ if ($EnableDebugLog) {
 # -ShowLog: display recent sshd log entries
 if ($ShowLog) {
     Write-Host ""
-    Write-Host "=== sshd log ==="
+    Write-Host "[$(ts)] === sshd log ==="
     $logPath = "C:\ProgramData\ssh\logs\sshd.log"
     $since = (Get-Date).AddMinutes(-5)
     if (Test-Path $logPath) {

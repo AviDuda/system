@@ -98,9 +98,21 @@ Runs automatically on first login:
 - Enables clipboard history (`Win+V`)
 - Disables lock screen and screen timeout
 - Enables long paths (removes 260-char limit)
+- Enables End Task on taskbar right-click
+- Disables fast startup (hibernate-on-shutdown breaks after host sleep)
 - Reduces telemetry
 - Explorer: shows file extensions, hidden files, full path in title bar, launches to This PC
 - Disables taskbar widgets, search icon-only, OneDrive autostart disabled
+
+### Debloat (optional)
+
+`config/windows/debloat.ps1` disables Windows annoyances that aren't needed on a dev/testing VM:
+
+```bash
+mise wr -- config/windows/debloat.ps1
+```
+
+Disables: SCOOBE ("finish setting up"), tips/suggestions/ads in Start and Settings, Copilot, Bing web search, search highlights, Desktop Spotlight, widgets service, Chat on taskbar, Game Bar, Storage Sense. Not baked into the ISO -- run it when you want a quieter VM.
 
 ### Timezone
 
@@ -288,6 +300,7 @@ For project-specific setup (e.g. forepaw test apps), write a per-project script 
 | `scripts/windows-test.sh` | Clone/delete disposable test VMs |
 | `config/windows/autounattend.xml` | Unattended answer file |
 | `config/windows/firstlogin.ps1` | Post-install setup script |
+| `config/windows/debloat.ps1` | Disable Windows annoyances (optional) |
 | `config/windows/fix-ssh-auth.ps1` | SSH auth diagnostics and fixes |
 | `config/windows/personalize.ps1` | Personal tools (browsers, CLI, Terminal config) |
 | `config/windows/update-windows.ps1` | Windows Update installer (run via SSH) |

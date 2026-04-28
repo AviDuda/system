@@ -391,6 +391,16 @@ if ($virtioDir) {
 
 Restart-Service sshd -ErrorAction SilentlyContinue
 
+# --- Disable fast startup (hibernate-on-shutdown causes issues after host sleep) ---
+Write-Host "[$(ts)] === Disabling fast startup ==="
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name "HiberbootEnabled" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+
+# --- Enable End Task on taskbar right-click ---
+Write-Host "[$(ts)] === Enabling End Task on taskbar ==="
+$taskbarDev = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings'
+New-Item -Path $taskbarDev -Force | Out-Null
+Set-ItemProperty -Path $taskbarDev -Name "TaskbarEndTask" -Value 1 -Type DWord
+
 Write-Host "[$(ts)] === Post-install setup complete ==="
 Write-Host "Log saved to: $logFile"
 

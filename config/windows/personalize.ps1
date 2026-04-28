@@ -1,33 +1,36 @@
 # personalize.ps1 -- Personal tools and apps for Windows VM
 # Run after firstlogin.ps1 (which handles system defaults).
-# Not baked into the unattended ISO -- run via SSH:
-#   ssh user@windows-vm 'powershell -File -' < config/windows/personalize.ps1
+# Not baked into the unattended ISO -- run via winrun:
+#   mise wr -- config/windows/personalize.ps1
 
 $ErrorActionPreference = "Continue"
+
+# Timestamp helper
+function ts { Get-Date -Format "HH:mm:ss" }
 
 function Install-Winget($id) {
     winget install --id $id --source winget --accept-package-agreements --accept-source-agreements --silent 2>&1 | Write-Host
 }
 
 # --- GUI apps (winget is better for these) ---
-Write-Host "=== Installing GUI apps ==="
+Write-Host "[$(ts)] === Installing GUI apps ==="
 Install-Winget "Mozilla.Firefox"
 Install-Winget "ZedIndustries.Zed"
 Install-Winget "DEVCOM.JetBrainsMonoNerdFont"
 
 # --- Git (needed by gh, lazygit, delta, and most CLI tools) ---
-Write-Host "`n=== Installing Git ==="
+Write-Host "[$(ts)] === Installing Git ==="
 Install-Winget "Git.Git"
 
 # --- mise (CLI tool manager) ---
-Write-Host "`n=== Installing mise ==="
+Write-Host "[$(ts)] === Installing mise ==="
 Install-Winget "jdx.mise"
 
 # Refresh PATH so git and mise are available in this session
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
 # --- CLI tools via mise ---
-Write-Host "`n=== Installing CLI tools via mise ==="
+Write-Host "[$(ts)] === Installing CLI tools via mise ==="
 # Mimics the tool selection from modules/home-manager/default.nix.
 # mise downloads x86_64 binaries which work on ARM64 via Windows emulation.
 $tools = @(
@@ -69,7 +72,7 @@ foreach ($tool in $tools) {
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
 # --- Git config ---
-Write-Host "`n=== Configuring git ==="
+Write-Host "[$(ts)] === Configuring git ==="
 git config --global core.autocrlf input
 git config --global init.defaultBranch main
 git config --global core.longpaths true
@@ -79,10 +82,10 @@ git config --global delta.navigate true
 git config --global delta.side-by-side true
 git config --global merge.conflictstyle diff3
 git config --global diff.colorMoved default
-Write-Host "Git configured."
+Write-Host "[$(ts)] Git configured."
 
 # --- Windows Terminal settings ---
-Write-Host "`n=== Configuring Windows Terminal ==="
+Write-Host "[$(ts)] === Configuring Windows Terminal ==="
 $wtSettingsDir = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState"
 $wtSettingsFile = Join-Path $wtSettingsDir "settings.json"
 if (Test-Path $wtSettingsFile) {
@@ -105,7 +108,7 @@ if (Test-Path $wtSettingsFile) {
         $json = $json -replace '"profiles"\s*:\s*\{', ("`"profiles`" : {`n" + $defaultsBlock)
     }
     $json | Set-Content $wtSettingsFile -Encoding UTF8
-    Write-Host "Terminal settings updated."
+    Write-Host "[$(ts)] Terminal settings updated."
 }
 
-Write-Host "`n=== Personalization complete ==="
+Write-Host "[$(ts)] === Personalization complete ==="

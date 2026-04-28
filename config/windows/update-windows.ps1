@@ -1,7 +1,7 @@
 # update-windows.ps1 -- Install all pending Windows Updates with automatic reboots
 #
 # Usage (from host):
-#   ssh -i ~/.ssh/vm user@windows-11.local 'powershell -ExecutionPolicy Bypass -File -' < config/windows/update-windows.ps1
+#   mise wr -- config/windows/update-windows.ps1
 #
 # Uses the Windows Update COM API directly (no PSWindowsUpdate module needed).
 # Loops: search → download → install → reboot → repeat until no pending updates.
@@ -9,19 +9,22 @@
 
 $ErrorActionPreference = "Stop"
 
+# Timestamp helper
+function ts { Get-Date -Format "HH:mm:ss" }
+
 function Install-PendingUpdates {
     $session = New-Object -ComObject Microsoft.Update.Session
     $searcher = $session.CreateUpdateSearcher()
 
-    Write-Host "Searching for pending updates..."
+    Write-Host "[$(ts)] Searching for pending updates..."
     $result = $searcher.Search("IsInstalled=0 and Type='Software'")
 
     if ($result.Updates.Count -eq 0) {
-        Write-Host "No pending updates found."
+        Write-Host "[$(ts)] No pending updates found."
         return $false
     }
 
-    Write-Host "Found $($result.Updates.Count) pending update(s):"
+    Write-Host "[$(ts)] Found $($result.Updates.Count) pending update(s):"
     foreach ($u in $result.Updates) {
         Write-Host "  - $($u.Title)"
     }
@@ -45,27 +48,27 @@ function Install-PendingUpdates {
     }
 
     if ($downloadedCount -eq 0) {
-        Write-Host "All updates are hidden, nothing to install."
+        Write-Host "[$(ts)] All updates are hidden, nothing to install."
         return $false
     }
 
     if ($skippedCount -gt 0) {
-        Write-Host "Skipping $skippedCount hidden update(s)."
+        Write-Host "[$(ts)] Skipping $skippedCount hidden update(s)."
     }
 
     # Download
-    Write-Host "Downloading $($updatesToInstall.Count) update(s)..."
+    Write-Host "[$(ts)] Downloading $($updatesToInstall.Count) update(s)..."
     $downloader = $session.CreateUpdateDownloader()
     $downloader.Updates = $updatesToInstall
     $downloadResult = $downloader.Download()
 
     if ($downloadResult.ResultCode -ne 2) {  # 2 = succeeded
-        Write-Host "ERROR: Download failed with result code $($downloadResult.ResultCode)"
+        Write-Host "[$(ts)] ERROR: Download failed with result code $($downloadResult.ResultCode)"
         return $false
     }
 
     # Install
-    Write-Host "Installing $($updatesToInstall.Count) update(s)..."
+    Write-Host "[$(ts)] Installing $($updatesToInstall.Count) update(s)..."
     $installer = $session.CreateUpdateInstaller()
     $installer.Updates = $updatesToInstall
     $installResult = $installer.Install()
@@ -75,16 +78,16 @@ function Install-PendingUpdates {
     if ($installResult.ResultCode -eq 2 -or $installResult.ResultCode -eq 3) {
         $succeeded = ($installResult.GetUpdateResult(0).ResultCode -eq 2)
         if ($installResult.ResultCode -eq 3) {
-            Write-Host "WARNING: Some updates completed with errors."
+            Write-Host "[$(ts)] WARNING: Some updates completed with errors."
         }
         if ($installResult.RebootRequired) {
-            Write-Host "Reboot required. Restarting in 5 seconds..."
+            Write-Host "[$(ts)] Reboot required. Restarting in 5 seconds..."
             return $true  # signal: reboot needed
         }
-        Write-Host "Updates installed. No reboot required."
+        Write-Host "[$(ts)] Updates installed. No reboot required."
         return $false
     } else {
-        Write-Host "ERROR: Install failed with result code $($installResult.ResultCode)"
+        Write-Host "[$(ts)] ERROR: Install failed with result code $($installResult.ResultCode)"
         return $false
     }
 }
@@ -95,25 +98,25 @@ $maxIterations = 10  # safety limit
 
 while ($iteration -lt $maxIterations) {
     $iteration++
-    Write-Host "`n=== Update pass $iteration ==="
+    Write-Host "[$(ts)] === Update pass $iteration ==="
 
     try {
         $needsReboot = Install-PendingUpdates
     } catch {
-        Write-Host "ERROR: $($_.Exception.Message)"
-        Write-Host "Windows Update API sometimes fails on first try. Retries may help."
+        Write-Host "[$(ts)] ERROR: $($_.Exception.Message)"
+        Write-Host "[$(ts)] Windows Update API sometimes fails on first try. Retries may help."
         break
     }
 
     if ($needsReboot) {
-        Write-Host "Rebooting to apply updates..."
+        Write-Host "[$(ts)] Rebooting to apply updates..."
         # Schedule reboot and exit -- re-run this script after reboot
         shutdown /r /t 5 /c "Rebooting for Windows Updates"
-        Write-Host "Run this script again after reboot to check for more updates."
+        Write-Host "[$(ts)] Run this script again after reboot to check for more updates."
         return
     } else {
         break  # no more updates or no reboot needed
     }
 }
 
-Write-Host "`n=== Update complete ==="
+Write-Host "[$(ts)] === Update complete ==="
