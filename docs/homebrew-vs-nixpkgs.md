@@ -56,7 +56,6 @@ Some packages have different names in nixpkgs:
 |----------|---------|
 | `ykman` | `yubikey-manager` |
 | `poppler` | `poppler_utils` |
-| `mysql-client@8.0` | `mysql80` |
 | `stripe` | `stripe-cli` |
 
 Use `nix search nixpkgs <name>` to find the correct package name.

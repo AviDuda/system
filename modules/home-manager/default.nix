@@ -235,7 +235,6 @@ in
         lynx # Text-based web browser
         # mise - in Homebrew (updates frequently, avoid recompiling Rust)
         mtr # Network diagnostic tool
-        mysql80 # MySQL client
         ncdu # Disk usage analyzer
         neovim # Vim fork
         nmap # Network scanner
@@ -275,8 +274,7 @@ in
     # forepaw dev build -- symlink so agents and shells both find it.
     # forepaw-stable (Nix package) is the release binary fallback.
     ".local/bin/forepaw".source =
-      config.lib.file.mkOutOfStoreSymlink
-        "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
+      config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
   }
   // customAppLinks;
 
