@@ -24,8 +24,38 @@ let
       ''
         (cd ${systemFlakeDir} && mise ${cmd})
       '';
+
+  # Shell function to check nixpkgs (stable + unstable) and homebrew versions
+  # Usage: nixpkgs-check-version <package> [package2] ...
+  nixpkgsCheckVersion = lib.optionalString pkgs.stdenvNoCC.isDarwin ''
+    nixpkgs-check-version() {
+      for pkg in "$@"; do
+        echo "$pkg:"
+        echo "  stable:   $(nix eval --json nixpkgs#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
+        echo "  unstable: $(nix eval --json github:NixOS/nixpkgs/nixpkgs-unstable#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
+        brew_ver=$(brew info --json=v2 "$pkg" 2>/dev/null | jq -r '.formulae[0].versions.stable // empty')
+        echo "  homebrew: ''${brew_ver:-not found}"
+        echo "  history:  https://repology.org/project/$pkg/history"
+      done
+    }
+  '';
+  # Shared shell profile: aliases and functions available in all contexts
+  # (zsh, bash, and non-interactive shells like pi's bash -c)
+  sharedShellProfile = pkgs.writeShellScriptBin "shared-shell-profile" ''
+    # Shared shell aliases (zsh-only aliases like nix-switch stay in shellAliases)
+    alias vault='cd "$VAULT_PATH"'
+    alias nix-build='(cd ${systemFlakeDir} && mise nix-build)'
+    alias nix-diff='(cd ${systemFlakeDir} && mise nix-diff)'
+    alias claude-fresh='LLM_VANILLA=1 claude'
+
+    ${nixpkgsCheckVersion}
+  '';
+
 in
 {
+  # Shared shell profile (sourced by zsh, bash, and pi)
+  home.file.".shared-shell-profile.sh".source = "${sharedShellProfile}/bin/shared-shell-profile";
+
   # atuin: shell history in SQLite with fuzzy search
   # Usage: Ctrl+R for interactive search, `atuin search <query>` for CLI
   # Docs: https://docs.atuin.sh/cli/configuration/config/
@@ -57,16 +87,8 @@ in
     enable = true;
 
     shellAliases = {
-      vault = "cd \"$VAULT_PATH\""; # Jump to Obsidian vault
       nix-switch = nixCommand "nix-switch"; # Build and activate system config
       nix-upgrade = nixCommand "nix-upgrade"; # Update flake inputs and switch
-      nix-build = "(cd ${systemFlakeDir} && mise nix-build)"; # Build without activating
-      nix-diff = "(cd ${systemFlakeDir} && mise nix-diff)"; # Show pending changes
-
-      # Vanilla Claude Code: skip all custom context (instructions + journal)
-      claude-fresh = "LLM_VANILLA=1 claude";
-
-
     };
 
     history = {
@@ -105,25 +127,20 @@ in
       [[ -n "''${key[Left]}" ]] && bindkey "''${key[Left]}" backward-char
       [[ -n "''${key[Right]}" ]] && bindkey "''${key[Right]}" forward-char
 
+      # Shared aliases and functions (also available in bash and pi)
+      source ~/.shared-shell-profile.sh
+
+      # iTerm2 shell integration (imgcat, it2api, etc.)
+      ${lib.optionalString pkgs.stdenvNoCC.isDarwin ''
+        source ~/.iterm2_shell_integration.zsh
+      ''}
+
       # mise activation (Homebrew path for faster updates)
       eval "$(/opt/homebrew/bin/mise activate zsh)"
 
       ${lib.optionalString pkgs.stdenvNoCC.isDarwin ''
         # OrbStack CLI and completions
         source ~/.orbstack/shell/init.zsh 2>/dev/null || :
-
-        # Check nixpkgs (stable + unstable) and homebrew versions
-        # Usage: nixpkgs-check-version <package> [package2] ...
-        nixpkgs-check-version() {
-          for pkg in "$@"; do
-            echo "$pkg:"
-            echo "  stable:   $(nix eval --json nixpkgs#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
-            echo "  unstable: $(nix eval --json github:NixOS/nixpkgs/nixpkgs-unstable#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
-            brew_ver=$(brew info --json=v2 "$pkg" 2>/dev/null | jq -r '.formulae[0].versions.stable // empty')
-            echo "  homebrew: ''${brew_ver:-not found}"
-            echo "  history:  https://repology.org/project/$pkg/history"
-          done
-        }
       ''}
 
       # Fix PATH order: nix paths should come before system paths
@@ -154,6 +171,9 @@ in
   programs.bash = {
     enable = true;
     initExtra = ''
+      # Shared aliases and functions (also available in zsh and pi)
+      source ~/.shared-shell-profile.sh
+
       # mise activation (Homebrew path for faster updates)
       eval "$(/opt/homebrew/bin/mise activate bash)"
     '';

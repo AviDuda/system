@@ -6,6 +6,9 @@
 #
 # Volatile keys (NS*, SU*, NoSync*) are excluded from sync by iTerm2 itself.
 # See iTermRemotePreferences.m in the iTerm2 source for the full filter logic.
+#
+# Preference key names are defined in iTermPreferences.m:
+# https://github.com/gnachman/iTerm2/blob/master/sources/Settings/iTermPreferences.m
 {
   config,
   lib,

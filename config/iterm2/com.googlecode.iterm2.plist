@@ -40,6 +40,12 @@
 	<true/>
 	<key>AutoHideTmuxClientSession</key>
 	<true/>
+	<key>TmuxSyncClipboard</key>
+	<true/>
+	<key>TmuxVariableWindowSizesSupported</key>
+	<true/>
+	<key>TmuxUsesDedicatedProfile</key>
+	<false/>
 	<key>Default Bookmark Guid</key>
 	<string>51F2102F-D1AF-49F9-A7CD-099B56403B44</string>
 	<key>FocusFollowsMouse</key>

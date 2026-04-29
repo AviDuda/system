@@ -97,6 +97,7 @@ in
     ./llm.nix
     ./pi.nix
     ./shell.nix
+    ./tmux.nix
     ./zed.nix
   ];
 
@@ -201,6 +202,7 @@ in
         tealdeer # Tldr pages (simplified man)
         tig # Git TUI (history, blame)
         timidity # MIDI player
+        tmux # Terminal multiplexer
         tokei # Code statistics
         tree-sitter # Parser generator / AST tool
         vhs # Record terminal to GIF
