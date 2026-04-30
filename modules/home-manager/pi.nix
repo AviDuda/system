@@ -111,9 +111,10 @@ in
       };
       # oMLX: MLX inference server with tiered KV cache, continuous batching.
       # Shares ~/.lmstudio/models/ with LM Studio. Auto-starts via brew service.
-      # Model entries use requestParams for per-role thinking control:
-      #   explain/draft: chat_template_kwargs.enable_thinking=false (skip CoT)
-      #   vision: thinking_budget=1024 (capped thinking for image descriptions)
+      # Qwen 3.6 27B dense (UD MLX 4-bit) -- 27B active params, better quality than MoE.
+      # requestParams per-role in roles.json override oMLX global sampling defaults.
+      # Global defaults (for direct oMLX chat): temp=0.6, top_p=0.95, top_k=20 (precise coding).
+      # Sidecar roles override to: temp=0.7, top_p=0.8, top_k=20 (concise non-thinking).
       omlx = {
         baseUrl = "http://127.0.0.1:8124/v1";
         api = "openai-completions";
@@ -129,8 +130,17 @@ in
             cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
           }
           {
-            id = "Qwen3.5-9B-4bit";
-            name = "Qwen 3.5 9B (oMLX)";
+            id = "Qwen3.6-27B-6bit";
+            name = "Qwen 3.6 27B 6-bit (oMLX)";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 8192;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "Qwen3.6-27B-4bit";
+            name = "Qwen 3.6 27B 4-bit (oMLX)";
             reasoning = true;
             input = [ "text" "image" ];
             contextWindow = 262144;
@@ -223,7 +233,9 @@ in
     explain = {
       maxTokens = 256;
       models = [
-        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
@@ -234,7 +246,9 @@ in
     draft = {
       maxTokens = 128;
       models = [
-        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
@@ -245,7 +259,9 @@ in
     vision = {
       maxTokens = 3072;
       models = [
-        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; }; }
+        { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.6v-flash"; thinking = "off"; }
       ];
     };

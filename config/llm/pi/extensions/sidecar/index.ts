@@ -25,6 +25,26 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { getAgentDir, type ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@mariozechner/pi-tui";
+import { reloadConfig } from "../shared/model-roles";
+
+// ── Settings helpers ──
+
+function readSettings(): Record<string, unknown> {
+  const settingsPath = join(getAgentDir(), "settings.json");
+  if (!existsSync(settingsPath)) return {};
+  try {
+    return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function getDefaultModel(): string | null {
+  const settings = readSettings();
+  const model = settings.defaultModel;
+  if (typeof model !== "string") return null;
+  return model;
+}
 
 // ── Types ──
 
@@ -161,6 +181,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         // ── Roles screen state ──
         let roleSelectedIndex = 0;
+        const defaultModel = getDefaultModel();
+        const hasDefaultModel = defaultModel !== null;
 
         // ── Header ──
 
@@ -181,7 +203,10 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         function updateFooter() {
           if (screen === "roles") {
-            footerText.setText(theme.fg("dim", "  Enter select  ·  r reset all  ·  Esc cancel"));
+            const syncText = hasDefaultModel ? "  ·  d sync to main" : "";
+            footerText.setText(
+              theme.fg("dim", `  Enter select  ·  r reset all${syncText}  ·  Esc cancel`.trim()),
+            );
             return;
           }
 
@@ -366,6 +391,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           local[selectedRole] = { ...base[selectedRole], models: chain };
           writeLocal(local);
           isDirty = false;
+          // Invalidate model-roles cache so permission-gate / draft pick up the new config
+          reloadConfig();
           setSidecarStatus(ctx);
           updateFooter();
           tui.requestRender();
@@ -383,6 +410,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
           isDirty = false;
+          reloadConfig();
           setSidecarStatus(ctx);
           buildFilteredItems();
           updateHeader();
@@ -395,6 +423,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
           isDirty = false;
+          reloadConfig();
           setSidecarStatus(ctx);
           if (screen === "models") {
             buildFilteredItems();
@@ -429,6 +458,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
         }
 
         // ── Initial state ──
+        allModels = getAvailableModels(ctx.modelRegistry);
         updateHeader();
         updateFooter();
 
@@ -471,6 +501,35 @@ export default function sidecarCommand(pi: ExtensionAPI) {
               }
               if (matchesKey(data, "r")) {
                 resetAllRoles();
+                return;
+              }
+              // d: set all roles to use the default/main model
+              if (hasDefaultModel && matchesKey(data, "d")) {
+                // Find the default model in available models to get its provider
+                const match = allModels.find((m) => m.modelId === defaultModel);
+                if (!match) {
+                  ctx.ui.notify(`Default model "${defaultModel}" not found in available models`, "warning");
+                  tui.requestRender();
+                  return;
+                }
+                const mainRef = match.ref;
+                // Set all roles: replace first model with default, keep rest of chain
+                const base = mergedRoles();
+                const local: RolesFile = {};
+                for (const roleName of roleNames) {
+                  const current = base[roleName];
+                  const chain = current?.models ?? [];
+                  const newChain = [{ ref: mainRef, thinking: "off" }, ...chain.slice(1)];
+                  local[roleName] = { ...current, models: newChain };
+                }
+                writeLocal(local);
+                reloadConfig();
+                setSidecarStatus(ctx);
+                ctx.ui.notify(`All roles synced to ${mainRef}`, "info");
+                buildFilteredItems();
+                updateHeader();
+                updateFooter();
+                tui.requestRender();
                 return;
               }
               if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {

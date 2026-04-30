@@ -79,14 +79,15 @@ Both share `~/.lmstudio/models/` -- LM Studio can load both GGUF and MLX models,
 
 ### Models (M4 Pro 48 GB)
 
-| Model | Format | Server | Size | Generation |
-|-------|--------|--------|------|------------|
-| Qwen 3.6 35B A3B | GGUF Q4_K_M | LM Studio :1234 | ~17.5 GB | ~41 tok/s |
-| Qwen 3.6 35B A3B UD | MLX 4-bit | oMLX :8124 | ~20.4 GB | ~65 tok/s |
-| Qwen 3.5 9B | GGUF | LM Studio :1234 | ~5 GB | -- |
+| Model | Format | Server | Size | Type |
+|-------|--------|--------|------|------|
+| Qwen 3.6 35B A3B UD | MLX 4-bit (Unsloth) | oMLX :8124 | ~25.6 GB | MoE 3B active |
+| Qwen 3.6 27B 6-bit | MLX 6-bit | oMLX :8124 | ~21.2 GB | Dense 27B |
+| Qwen 3.6 27B 4-bit | MLX 4-bit | oMLX :8124 | ~15.0 GB | Dense 27B |
+| Qwen 3.5 9B | GGUF | LM Studio :1234 | ~5 GB | Dense 9B |
 | GLM-4.7 Flash | MLX 6-bit | oMLX :8124 | ~23.8 GB | -- |
 
-Qwen 3.6 35B A3B is MoE (3B active params per token) -- fast enough for sidecar tasks.
+The sidecar role fallback chains prioritize: 35B-A3B-UD (~35 tok/s, fastest MoE) → 27B-6bit → 27B-4bit. The 35B-A3B-UD is the only local model fast enough for sidecar latency. The 27B models are kept in the chain for experimentation despite being slower (~8 tok/s or lower). The 27B-4-bit listed is the standard `mlx-community` quant (not the bloated UD variant), which is 10.6 GB lighter than the UD and fits with KV cache headroom.
 
 ### Why both GGUF and MLX
 
@@ -98,9 +99,12 @@ Prefill speed: llama.cpp is faster at batch prompt processing (3+ years of optim
 
 `modules/home-manager/pi.nix` defines providers and sidecar role fallback chains. Roles (explain, draft, vision) try cloud models first, then local oMLX, then local LM Studio as last resort. The `omlx` provider at `:8124` serves MLX models; `lmstudio` at `:1234` serves GGUF models.
 
-Per-model `requestParams` in roles.json controls thinking behavior per role (implemented via pi's `onPayload` hook):
+Per-model `requestParams` in roles.json controls thinking behavior and sampling per role (implemented via pi's `onPayload` hook):
 - `explain`/`draft`: `chat_template_kwargs: { enable_thinking: false }` -- skip chain-of-thought for fast sidecar responses
 - `vision`: `thinking_budget: 1024` -- capped thinking for better image descriptions
+- All three roles also set `temperature: 0.7, top_p: 0.8, top_k: 20` for concise non-thinking output (vs global defaults of temp=0.6, top_p=0.95, top_k=20 for precise coding)
+
+The sidecar's `/sidecar-models` command has a `d` keybinding that syncs all role chains to use the same model as the main conversation (read from `settings.json` `defaultModel`). Config mutations call `reloadConfig()` to invalidate the model-roles cache so permission-gate picks up changes immediately.
 
 ### oMLX model management
 
@@ -130,8 +134,26 @@ Enabled per-model in the admin panel under Experimental Features.
 - **Start**: `omlx serve --model-dir ~/.lmstudio/models --port 8124`
 - **Admin**: `http://127.0.0.1:8124/admin` (HF downloader, benchmark, model management)
 - **GUI app**: Optional DMG from releases with in-app auto-update and menu bar control. Not in brew.nix (no cask available, auto-update conflicts with cask management). The admin dashboard via CLI is sufficient for most use.
-- **Config**: `~/.omlx/settings.json`
+- **Config**: `~/.omlx/settings.json` (global), `~/.omlx/model_settings.json` (per-model)
 - **Benchmarks**: [omlx.ai/benchmarks](https://omlx.ai/benchmarks) (filter by chip/model/quant)
+
+### oMLX admin API
+
+Base URL: `http://127.0.0.1:8124/admin/api/`
+
+| Endpoint | Purpose |
+|----------|----------|
+| `GET /models` | List all discovered models with status, size, settings |
+| `GET /models/{id}/profiles` | Per-model named sampling profiles (currently empty) |
+| `GET /profile-templates` | Available profile templates (currently empty) |
+| `GET /grammar/parsers` | Available grammar parsers for structured output |
+| `GET /hf/search?q=...&sort=downloads|trending&limit=N&mlx_only=true` | Search HuggingFace for models |
+| `GET /hf/model-info?repo_id=...` | Full model card, files, tags, size for a HF repo |
+| `GET /hf/recommended?mlx_only=true` | Trending + popular MLX models |
+| `GET /stats` | Server stats (tokens served, cache efficiency, avg TPS) |
+| `PATCH /models/{id}/settings` | Update per-model settings (sampling, experimental features) |
+
+Per-model settings fields: `temperature`, `top_p`, `top_k`, `repetition_penalty`, `min_p`, `presence_penalty`, `force_sampling`, `max_context_window`, `max_tokens`, `enable_thinking`, `thinking_budget_enabled`, `thinking_budget_tokens`, `reasoning_parser`, `chat_template_kwargs`, `forced_ct_kwargs`, `ttl_seconds`, `turboquant_kv_enabled`, `turboquant_kv_bits`, `specprefill_enabled`, `dflash_enabled`, `is_pinned`, `is_default`, `model_alias`, `display_name`, `active_profile_name`.
 
 ### Key references
 
