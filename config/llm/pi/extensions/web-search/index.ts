@@ -12,9 +12,9 @@
  * Commands: /search <query>, /fetch <url>, /fetch-headed
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { ClaudeSearchError, formatClaudeResults, searchViaClaude } from "./providers/claude-search";
 import { formatResults, KagiApiError, search as kagiSearch, loadApiKey } from "./providers/kagi";
 import { closeSession, FetchError, fetchPage, sessionName, truncateContent } from "./web-fetch";

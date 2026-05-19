@@ -2,7 +2,7 @@
  * Shared benchmark infrastructure — role/model resolution, runner, output.
  *
  * Reads model config from ~/.pi/agent/roles.json + models.json (custom providers),
- * and @mariozechner/pi-ai (built-in providers/models). This matches pi's own
+ * and @earendil-works/pi-ai (built-in providers/models). This matches pi's own
  * ModelRegistry merging: built-in models are available without models.json entries,
  * and custom providers override or extend them.
  *
@@ -25,8 +25,8 @@ import {
   getProviders as getBuiltinProviders,
   getEnvApiKey,
   type KnownProvider,
-} from "@mariozechner/pi-ai";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // ── Config types ──
 
@@ -105,7 +105,7 @@ export interface ResolvedModel {
 
 /**
  * Resolve models for a role from roles.json, using pi's model merging:
- * 1. Built-in models from @mariozechner/pi-ai (baseUrl, model definitions)
+ * 1. Built-in models from @earendil-works/pi-ai (baseUrl, model definitions)
  * 2. Custom provider configs from models.json (baseUrl, apiKey overrides, custom models)
  *
  * Optionally filter to specific refs via --model CLI args.

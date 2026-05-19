@@ -22,9 +22,9 @@
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { getAgentDir, type ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@earendil-works/pi-tui";
 import { reloadConfig } from "../shared/model-roles";
 
 // ── Settings helpers ──
@@ -204,9 +204,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
         function updateFooter() {
           if (screen === "roles") {
             const syncText = hasDefaultModel ? "  ·  d sync to main" : "";
-            footerText.setText(
-              theme.fg("dim", `  Enter select  ·  r reset all${syncText}  ·  Esc cancel`.trim()),
-            );
+            footerText.setText(theme.fg("dim", `  Enter select  ·  r reset all${syncText}  ·  Esc cancel`.trim()));
             return;
           }
 

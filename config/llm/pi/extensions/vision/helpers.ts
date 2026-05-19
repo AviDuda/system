@@ -3,7 +3,7 @@
  * No pi imports — testable independently.
  */
 
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 // ── Image detection ──
 

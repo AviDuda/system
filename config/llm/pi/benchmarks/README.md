@@ -17,7 +17,7 @@ No `--model` flag runs the first model in the role config — fast iteration by 
 
 Models come from three sources (same as pi's `ModelRegistry`):
 
-1. **Built-in providers** from `@mariozechner/pi-ai` — zai, anthropic, openrouter, etc. Available without any config.
+1. **Built-in providers** from `@earendil-works/pi-ai` — zai, anthropic, openrouter, etc. Available without any config.
 2. **Custom providers** from `~/.pi/agent/models.json` — omlx, lmstudio, etc. Provides baseUrl + apiKey.
 3. **Role config** from `~/.pi/agent/roles.json` — which models to use per role, with `requestParams`, `maxTokens`, etc.
 

@@ -34,8 +34,8 @@ import {
   type Model,
   type ThinkingLevel as PiThinkingLevel,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import { getAgentDir, type ModelRegistry } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 // ── Types ──
 

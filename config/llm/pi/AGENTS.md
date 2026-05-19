@@ -14,10 +14,10 @@ mise nix-diff    # verify Nix build after changes
 
 | What | Where |
 |------|-------|
-| Pi extension docs | `/opt/homebrew/Cellar/pi-coding-agent/*/libexec/lib/node_modules/@mariozechner/pi-coding-agent/docs/extensions.md` |
+| Pi extension docs | `/opt/homebrew/Cellar/pi-coding-agent/*/libexec/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md` |
 | Pi TUI component docs | Same path but `docs/tui.md` |
 | Pi extension examples | Same path but `examples/extensions/` |
-| Pi TUI type declarations | Same path but `node_modules/@mariozechner/pi-tui/dist/components/*.d.ts` |
+| Pi TUI type declarations | Same path but `node_modules/@earendil-works/pi-tui/dist/components/*.d.ts` |
 | Nix module that deploys these | `modules/home-manager/pi.nix` |
 | Shared LLM constants | `modules/home-manager/llm-shared.nix` |
 | Global instructions | `config/llm/instructions.md` |
@@ -29,7 +29,7 @@ When you need to understand how pi resolves models, loads extensions, or handles
 ### Package layout
 
 ```
-/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@mariozechner/pi-coding-agent/
+/opt/homebrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/
 ├── dist/                          # pi core (compiled JS + .d.ts)
 │   ├── core/
 │   │   ├── model-registry.js      # model resolution: built-in + models.json merge
@@ -38,7 +38,7 @@ When you need to understand how pi resolves models, loads extensions, or handles
 │   │   ├── sdk.js                 # ExtensionAPI, ExtensionContext types
 │   │   └── ...                    # session-manager, keybindings, exec, etc.
 │   └── docs/                      # extension docs, tui docs
-├── node_modules/@mariozechner/
+├── node_modules/@earendil-works/
 │   ├── pi-ai/                     # LLM provider abstraction
 │   │   └── dist/
 │   │       ├── models.js          # getProviders(), getModels() — built-in model catalog
@@ -103,9 +103,9 @@ Pi extensions run in **Node.js**, not Bun. Tests run under `bun test`. This mism
 
 ## TUI API notes
 
-Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go-to-definition, hover) on imports from `@mariozechner/pi-tui` and `@mariozechner/pi-coding-agent` to explore available types and methods.
+Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go-to-definition, hover) on imports from `@earendil-works/pi-tui` and `@earendil-works/pi-coding-agent` to explore available types and methods.
 
-### Key types (from `@mariozechner/pi-coding-agent`)
+### Key types (from `@earendil-works/pi-coding-agent`)
 
 - `ExtensionAPI` — the `pi` parameter passed to the extension factory. Has `registerCommand`, `registerTool`, `on`, `registerProvider`, etc.
 - `ExtensionContext` — the `ctx` parameter in event handlers and command handlers. Has `ui`, `modelRegistry`, `sessionManager`, `model`, `cwd`, etc.
@@ -119,14 +119,14 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - `ctx.ui.notify(message, type)` — show a toast notification. Types: `"info"`, `"warning"`, `"error"`.
 - `ctx.ui.select(title, options)`, `ctx.ui.confirm(title, message)`, `ctx.ui.input(title, placeholder)` — simple dialog methods for non-complex interactions.
 
-### pi-tui components (from `@mariozechner/pi-tui`)
+### pi-tui components (from `@earendil-works/pi-tui`)
 
 - `Input` — single-line text input. Full Component with `render(width)` and `handleInput(data)`. Methods: `getValue()`, `setValue()`. Use directly inside `ctx.ui.custom()` for search boxes instead of hand-rolling filter state.
 - `SelectList` — scrollable selection list. `getSelectedItem()`, `onSelect`, `onCancel`, `setSelectedIndex()`. Note: `setFilter` only matches `value` with `startsWith` — for fuzzy search, use `fuzzyFilter` instead.
 - `Text` — static text display. `setText()`. Constructor: `(text?, paddingLeft?, paddingTop?)`.
 - `Container` — vertical layout container. `addChild()`, `removeChild()`, `clear()`.
 - `Spacer` — vertical spacer. Constructor: `(lines?)`.
-- `DynamicBorder` — from `@mariozechner/pi-coding-agent` (not pi-tui). Horizontal border that adjusts to viewport width.
+- `DynamicBorder` — from `@earendil-works/pi-coding-agent` (not pi-tui). Horizontal border that adjusts to viewport width.
 
 ### Keyboard handling
 
@@ -140,6 +140,6 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
 - **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
 - **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
-- **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@mariozechner/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
+- **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@earendil-works/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
 - **Footer status is cheap** — use `ctx.ui.setStatus(key, text)` to show extension state. Update on `session_start` and after any config changes.
 - **Check `extensions/shared/` before building new UI components or utility logic.** It has reusable modules that multiple extensions share. When two extensions need the same logic, extract it here (no `index.ts` = not discovered as an extension). Keep shared code generic and reusable.

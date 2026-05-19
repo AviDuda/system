@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   buildVisionMessages,
   extractImageParts,

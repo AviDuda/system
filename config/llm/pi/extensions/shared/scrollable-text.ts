@@ -11,7 +11,7 @@
  *   // In render: scroll.render(width) returns string[]
  */
 
-import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface ScrollableTextTheme {
   scrollHint: (text: string) => string;

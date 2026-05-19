@@ -18,7 +18,7 @@
  * don't cause double-loading. Each file loaded at most once per session.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractAtMentions } from "../shared/at-mentions";
 import { discoverAgentsFiles, discoverStartupLocalFiles, extractPath } from "./loader.js";
 

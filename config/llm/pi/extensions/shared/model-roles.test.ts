@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { extractText, getSidecarStats, parseRef, resetSidecarStats } from "./model-roles";
 
 // ── extractText ──

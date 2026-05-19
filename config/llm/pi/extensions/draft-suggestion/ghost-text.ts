@@ -6,7 +6,7 @@
  * Ghost text is inserted after the cursor reset, replacing padding spaces.
  */
 
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
  * Inject ghost text into rendered editor lines.

@@ -18,8 +18,8 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
-} from "@mariozechner/pi-coding-agent";
-import { type EditorTheme, Key, matchesKey, type TUI } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { type EditorTheme, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
 import {
   assistantMsg,
   extractText,
