@@ -11,9 +11,9 @@
  * - Streams in while the user is reading/deciding (zero added latency)
  */
 
-import { DynamicBorder, type Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, KeybindingsManager } from "@mariozechner/pi-tui";
-import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@mariozechner/pi-tui";
+import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
+import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
 
 export interface ConfirmResult {
@@ -57,6 +57,14 @@ export interface DiffBody {
   firstChangedLine?: number;
 }
 
+/** Formatted tool input for display when there's no diff (e.g., subagent, web_search). */
+export interface DetailsBody {
+  /** Lines to display (pre-formatted, no ANSI needed). */
+  lines: string[];
+  /** Whether to show the header line "── Tool Input ──". */
+  showHeader?: boolean;
+}
+
 export function createConfirmUI(
   tui: TUI,
   theme: Theme,
@@ -67,6 +75,7 @@ export function createConfirmUI(
   explanation?: ExplanationProvider,
   uiOptions?: ConfirmUIOptions,
   diffBody?: DiffBody,
+  detailsBody?: DetailsBody,
 ): Component {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
@@ -119,7 +128,25 @@ export function createConfirmUI(
     }
   }
 
-  // Explanation text (shown between diff and select list)
+  // Details text (shown below explanation, for non-diff tools like subagent/web_search)
+  const DETAILS_LINES = 8;
+  const detailsScrollable = detailsBody
+    ? new ScrollableText(detailsBody.lines, DETAILS_LINES, {
+        scrollHint: (t) => theme.fg("dim", t),
+        border: (t) => theme.fg("borderMuted", t),
+      })
+    : null;
+  const detailsHeader =
+    detailsBody && detailsBody.showHeader !== false ? new Text(theme.fg("dim", "── Tool Input ──"), 0, 0) : null;
+  if (detailsScrollable) {
+    if (detailsHeader) container.addChild(detailsHeader);
+    container.addChild({
+      render: (w: number) => detailsScrollable.render(w),
+      invalidate: () => detailsScrollable.invalidate(),
+    });
+  }
+
+  // Explanation text (shown between diff/details and select list)
   const explanationText = new Text("", 1, 0);
   container.addChild(explanationText);
 

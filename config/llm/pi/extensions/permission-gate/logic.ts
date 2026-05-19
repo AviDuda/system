@@ -72,7 +72,7 @@ export const MODE_SHORT: Record<Mode, string> = {
 
 export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
 
-export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find"];
+export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find", "web_search"];
 
 export const SENSITIVE_PATTERNS: RegExp[] = [
   /^\.env$/,

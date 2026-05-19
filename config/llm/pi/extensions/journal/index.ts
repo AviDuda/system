@@ -4,6 +4,7 @@
  * Injects global instructions and journal notes at session start,
  * nudges the agent to journal when context gets high, and supports
  * env var overrides:
+ *   PI_SUBAGENT=1  - skip all journal behavior (set by subagent extension)
  *   LLM_VANILLA=1 - skip all custom context
  *   NO_JOURNAL=1  - skip journal reading (fresh session)
  *
@@ -13,19 +14,21 @@
  */
 
 import { basename } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildJournalContext, getRecentNotes, loadJournalConfig } from "../shared/journal-context";
 
 /** Context usage fraction (0-1) above which the agent gets a journal nudge. */
 const CONTEXT_NUDGE_THRESHOLD = 0.7;
 
 export default function journalExtension(pi: ExtensionAPI) {
+  const isSubagent = process.env.PI_SUBAGENT === "1";
   const config = loadJournalConfig();
   let cachedContext = "";
   let firstPrompt = true;
   let nudged = false;
 
   async function loadContext(cwd: string, ctx: ExtensionContext) {
+    if (isSubagent) return; // subagents have no journal context
     cachedContext = await buildJournalContext(config, cwd);
 
     if (process.env.LLM_VANILLA !== "1" && process.env.NO_JOURNAL !== "1") {
@@ -65,7 +68,7 @@ export default function journalExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async () => {
-    if (!firstPrompt || !cachedContext) return;
+    if (isSubagent || !firstPrompt || !cachedContext) return;
     firstPrompt = false;
 
     return {
@@ -79,7 +82,7 @@ export default function journalExtension(pi: ExtensionAPI) {
 
   // Nudge the agent to journal when context is getting high
   pi.on("agent_end", async (_event, ctx) => {
-    if (process.env.LLM_VANILLA === "1" || nudged) return;
+    if (isSubagent || process.env.LLM_VANILLA === "1" || nudged) return;
 
     const usage = ctx.getContextUsage();
     if (!usage?.tokens) return;
@@ -96,7 +99,7 @@ export default function journalExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async (_event, ctx) => {
-    if (process.env.LLM_VANILLA === "1") return;
+    if (isSubagent || process.env.LLM_VANILLA === "1") return;
     ctx.ui.notify("Context compacting - journal your progress!", "warning");
     return undefined;
   });

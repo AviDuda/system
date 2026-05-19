@@ -13,11 +13,11 @@ import {
   type ExtensionUIContext,
   renderDiff,
   type Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 // Deep import: pi doesn't export edit-diff from its package exports map.
 // Use import.meta.resolve to find the package entry, then derive the internal path.
-const piEntry = fileURLToPath(import.meta.resolve("@mariozechner/pi-coding-agent"));
+const piEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 const piRoot = dirname(dirname(piEntry)); // dist/index.js -> dist -> package root
 const editDiffPath = join(piRoot, "dist", "core", "tools", "edit-diff.js");
 
@@ -29,12 +29,13 @@ type ComputeEditsDiffFn = (
 
 let _computeEditsDiff: ComputeEditsDiffFn | undefined;
 
-import type { Component, KeybindingsManager, TUI } from "@mariozechner/pi-tui";
+import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
   type ConfirmResult,
   type ConfirmUIOptions,
   createConfirmUI,
+  type DetailsBody,
   type DiffBody,
   type ExplanationProvider,
   type ExplanationResult,
@@ -154,13 +155,14 @@ export default function permissionGate(pi: ExtensionAPI) {
     options: string[],
     explanation?: ExplanationProvider,
     diffBody?: DiffBody,
+    detailsBody?: DetailsBody,
   ): Promise<ConfirmResult> {
     const uiOptions: ConfirmUIOptions = {
       autoClassify: state.autoClassify === "on",
       hasExplainRole: hasRole("explain"),
     };
     return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
-      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody),
+      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody, detailsBody),
     );
   }
 
@@ -366,6 +368,14 @@ export default function permissionGate(pi: ExtensionAPI) {
     },
   });
 
+  /** Build a DetailsBody from tool input for display when there's no diff. */
+  function computeDetailsBody(toolName: string, input: Record<string, unknown>): DetailsBody | undefined {
+    const desc = describeToolCall(toolName, input);
+    const lines = desc.split("\n");
+    if (lines.length <= 1 && lines[0]?.length === 0) return undefined;
+    return { lines };
+  }
+
   /** Compute a styled diff for the confirm dialog. */
   async function computeDiffBody(
     toolName: string,
@@ -420,6 +430,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     decision: import("./logic").GateDecision,
     explanation?: ExplanationProvider,
     diffBody?: DiffBody,
+    detailsBody?: DetailsBody,
   ): Promise<{ block: true; reason: string } | undefined> {
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
@@ -487,6 +498,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       ["Allow once", `Allow "${path}" for this session`, "Block"],
       explanation,
       diffBody,
+      detailsBody,
     );
     handleDialogAutoToggle(result, ctx);
     const { choice, note, explanation: explResult } = result;
@@ -512,7 +524,9 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
 
     // action === "confirm"
-    if (!ctx.hasUI) {
+    // RPC mode (subagents) reports hasUI=true but ctx.ui.custom() returns undefined.
+    // Block with reason — no dialog possible.
+    if (!ctx.hasUI || process.env.PI_SUBAGENT === "1") {
       return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
     }
 
@@ -521,6 +535,9 @@ export default function permissionGate(pi: ExtensionAPI) {
     // Compute diff early -- used by both classify (sidecar description) and the dialog (visual preview)
     const diffBody = await computeDiffBody(event.toolName, input, ctx.cwd);
     const rawDiff = diffBody?.rawDiff;
+
+    // Compute details for non-diff tools (subagent, web_search, etc.)
+    const detailsBody = diffBody ? undefined : computeDetailsBody(event.toolName, input);
 
     // Auto-classify: call sidecar before showing dialog
     if (state.autoClassify === "on" && hasRole("explain")) {
@@ -568,20 +585,27 @@ export default function permissionGate(pi: ExtensionAPI) {
           }
 
           // Not auto-allowed -- fall through to dialog with pre-loaded explanation
-          return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(explResult), diffBody);
+          return await showConfirmDialog(
+            ctx,
+            event,
+            decision,
+            makePreloadedExplanation(explResult),
+            diffBody,
+            detailsBody,
+          );
         }
         // Sidecar failed or parse failure -- fall through to normal dialog
       }
       // Cached but not auto-allowable (e.g. DANGEROUS cached) -- fall through with pre-loaded if available
       if (cached) {
         // Cached but not auto-allowable -- show dialog with cached explanation
-        return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(cached), diffBody);
+        return await showConfirmDialog(ctx, event, decision, makePreloadedExplanation(cached), diffBody, detailsBody);
       }
     }
 
     // Normal path: build explanation provider (fires concurrently with dialog)
     const explanation = makeExplanation(event.toolName, input, ctx, rawDiff);
-    return await showConfirmDialog(ctx, event, decision, explanation, diffBody);
+    return await showConfirmDialog(ctx, event, decision, explanation, diffBody, detailsBody);
   });
 
   // Clear widget when agent turn ends
