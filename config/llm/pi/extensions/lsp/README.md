@@ -106,9 +106,20 @@ Servers send progress via `window/workDoneProgress/create` + `$/progress` notifi
 - Expires stale entries after 30s (servers that sent `begin` but never `end`)
 - Uses accent color for active progress, muted color for idle status
 
-## Rename error recovery
+## Failure context
 
-When `lsp rename` fails (no renameable symbol at the given position), the error includes a few lines of context around the target line. This helps the model see where the symbol actually is and retry with the correct line number and `symbol` parameter.
+When an LSP action returns no results (no definition found, no hover info, no references, etc.), the response includes:
+- **Column info**: the resolved column position and the symbol that was searched for (e.g., `(symbol "foo" at col 0)`)
+- **Context lines**: 2 lines around the target line so the model can see what's actually there and retry with the correct parameters
+
+For `rename` failures, 3 lines of context are shown. For `codeAction`, 5 lines.
+
+## Tool call rendering
+
+The collapsed tool call display shows the action, file, line, symbol, and rename target:
+- `lsp definition index.ts:46 readLocationContext`
+- `lsp rename index.ts:42 oldName → newName`
+- `lsp codeAction index.ts:42 [3]`
 
 ## Known limitations
 

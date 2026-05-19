@@ -43,6 +43,7 @@ import {
   formatLocationWithContext,
   formatSymbolInformation,
   normalizeLocations,
+  readLocationContext,
   resolveSymbolColumn,
   sortDiagnostics,
 } from "./format";
@@ -590,6 +591,7 @@ export default function (pi: ExtensionAPI) {
         const resolvedLine = line ?? 1;
         const col = resolveSymbolColumn(abs, resolvedLine, symbol, occurrence);
         const position = { line: resolvedLine - 1, character: col };
+        const colInfo = symbol ? ` (symbol "${symbol}" at col ${col})` : ` (col ${col})`;
 
         switch (action) {
           case "diagnostics": {
@@ -605,7 +607,10 @@ export default function (pi: ExtensionAPI) {
               position,
             });
             const locs = normalizeLocations(raw);
-            if (locs.length === 0) return text("No definition found");
+            if (locs.length === 0) {
+              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
+              return text(`No definition found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+            }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} definition(s):\n${lines.join("\n")}`);
           }
@@ -616,7 +621,10 @@ export default function (pi: ExtensionAPI) {
               position,
             });
             const locs = normalizeLocations(raw);
-            if (locs.length === 0) return text("No type definition found");
+            if (locs.length === 0) {
+              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
+              return text(`No type definition found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+            }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} type definition(s):\n${lines.join("\n")}`);
           }
@@ -627,7 +635,10 @@ export default function (pi: ExtensionAPI) {
               position,
             });
             const locs = normalizeLocations(raw);
-            if (locs.length === 0) return text("No implementation found");
+            if (locs.length === 0) {
+              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
+              return text(`No implementation found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+            }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} implementation(s):\n${lines.join("\n")}`);
           }
@@ -639,7 +650,10 @@ export default function (pi: ExtensionAPI) {
               context: { includeDeclaration: true },
             });
             const locs = normalizeLocations(raw);
-            if (locs.length === 0) return text("No references found");
+            if (locs.length === 0) {
+              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
+              return text(`No references found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+            }
             const contextLimit = 30;
             const withContext = locs.slice(0, contextLimit);
             const rest = locs.slice(contextLimit);
@@ -656,7 +670,10 @@ export default function (pi: ExtensionAPI) {
               textDocument: { uri },
               position,
             })) as Hover | null;
-            if (!raw?.contents) return text("No hover information");
+            if (!raw?.contents) {
+              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
+              return text(`No hover information${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+            }
             return text(extractHoverText(raw.contents));
           }
 
@@ -687,22 +704,7 @@ export default function (pi: ExtensionAPI) {
             })) as { changes?: Record<string, TextEdit[]> } | null;
 
             if (!raw?.changes) {
-              // Show context around the target line so the model can see where
-              // the symbol actually is and retry with the correct line/symbol.
-              const content = fs.readFileSync(abs, "utf-8");
-              const fileLines = content.split("\n");
-              const contextRadius = 3;
-              const start = Math.max(0, resolvedLine - 1 - contextRadius);
-              const end = Math.min(fileLines.length, resolvedLine - 1 + contextRadius + 1);
-              const context = fileLines
-                .slice(start, end)
-                .map((l, i) => {
-                  const num = start + i + 1;
-                  const marker = num === resolvedLine ? ">>>" : "   ";
-                  return `${marker} ${num}: ${l}`;
-                })
-                .join("\n");
-
+              const context = readLocationContext(abs, resolvedLine, 3).join("\n");
               return text(
                 `Rename failed — no renameable symbol found at line ${resolvedLine}${symbol ? `, symbol "${symbol}"` : ""}.\n\nContext around line ${resolvedLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
               );
@@ -756,20 +758,7 @@ export default function (pi: ExtensionAPI) {
             if (!raw || raw.length === 0) return text("No code actions available at this position");
 
             // Show available actions with context lines around cursor
-            const content = fs.readFileSync(abs, "utf-8");
-            const fileLines = content.split("\n");
-            const contextRadius = 5;
-            const start = Math.max(0, resolvedLine - 1 - contextRadius);
-            const end = Math.min(fileLines.length, resolvedLine + contextRadius);
-            const gutterWidth = String(end).length;
-            const context = fileLines
-              .slice(start, end)
-              .map((l, i) => {
-                const num = start + i + 1;
-                const marker = num === resolvedLine ? ">>>" : "   ";
-                return `${marker} ${String(num).padStart(gutterWidth)} | ${l}`;
-              })
-              .join("\n");
+            const context = readLocationContext(abs, resolvedLine, 5).join("\n");
 
             const lines: string[] = [`Available code actions (${raw.length}):`];
             for (let i = 0; i < raw.length; i++) {
@@ -847,8 +836,10 @@ export default function (pi: ExtensionAPI) {
       const label = theme.fg("toolTitle", theme.bold("lsp "));
       const file = args.file ? ` ${theme.fg("muted", String(args.file))}` : "";
       const line = args.line ? theme.fg("muted", `:${args.line}`) : "";
+      const sym = args.symbol ? ` ${theme.fg("dim", String(args.symbol))}` : "";
+      const rename = args.new_name ? ` ${theme.fg("muted", "→")} ${theme.fg("accent", String(args.new_name))}` : "";
       const idx = args.index !== undefined ? ` [${args.index}]` : "";
-      return new Text(`${label}${action}${file}${line}${idx}`, 0, 0);
+      return new Text(`${label}${action}${file}${line}${sym}${rename}${idx}`, 0, 0);
     },
 
     renderResult(result, { expanded }, theme) {
