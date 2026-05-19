@@ -16,7 +16,7 @@
     config = {
       virtualisation = {
         darwin-builder = {
-          diskSize = 100 * 1024; # 100 GB -- image build needs store (~28GB) + raw (~30GB) + qcow2 conversion
+          diskSize = 150 * 1024; # 150 GB -- image build needs store (~28GB) + raw (~34GB) + qcow2 conversion (~30GB)
           memorySize = 8 * 1024; # 8 GB
         };
         cores = 6;

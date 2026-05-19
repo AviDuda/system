@@ -18,7 +18,6 @@
     "virtio_pci"
     "usbhid"
   ];
-
   # Filesystems -- mkDefault so disk-image.nix can override during image builds
   fileSystems."/" = lib.mkDefault {
     device = "/dev/disk/by-uuid/f222513b-ded1-49fa-b591-20ce86a2fe7f";
@@ -28,10 +27,13 @@
     device = "/dev/disk/by-uuid/12CE-A600";
     fsType = "vfat";
     options = [
-      "fmask=0022"
-      "dmask=0022"
-    ];
+      "fmask=0077"
+      "dmask=0077"
+    ]; # root-only access -- ESP contains random seed
   };
+
+  # Disk image size (default is 1 GB, too small for GNOME + KDE + dev tools)
+  virtualisation.diskSize = 32 * 1024; # 32 GB
 
   # VM resources
   hardware.graphics.enable = true;

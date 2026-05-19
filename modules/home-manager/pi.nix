@@ -269,6 +269,11 @@ in
 
   }
 
+  # Agent definitions: symlinked to live source.
+  { ".pi/agent/agents".source = config.lib.file.mkOutOfStoreSymlink
+    "${config.home.homeDirectory}/system/config/llm/pi/agents";
+  }
+
   # Skills: whole-directory symlinks to live sources (shared list defined in llm-shared.nix).
   (lib.listToAttrs (
     map (s: {
