@@ -18,6 +18,22 @@ export interface RegisteredWatcher {
   kind: number;
 }
 
+/** Progress state for a work done token */
+export interface WorkDoneProgress {
+  /** Token identifying this progress */
+  token: string | number;
+  /** Current state */
+  state: "started" | "reporting" | "done";
+  /** Progress title (from 'begin') */
+  title: string;
+  /** Optional status message */
+  message?: string;
+  /** Optional percentage 0-100 */
+  percentage?: number;
+  /** Timestamp of last update (ms since epoch) */
+  lastUpdated: number;
+}
+
 export interface LspClient {
   /** Server process */
   proc: ChildProcess;
@@ -33,6 +49,10 @@ export interface LspClient {
   diagnosticsVersion: number;
   /** Glob patterns registered by the server via client/registerCapability */
   registeredWatchers: RegisteredWatcher[];
+  /** Active work done progress tokens */
+  progress: Map<string | number, WorkDoneProgress>;
+  /** Callback invoked when progress state changes */
+  onProgress: ((progress: WorkDoneProgress) => void) | undefined;
   /** Send a JSON-RPC request and wait for response */
   request: (method: string, params?: unknown) => Promise<unknown>;
   /** Send a JSON-RPC notification (no response expected) */
@@ -103,6 +123,18 @@ export interface WorkspaceEdit {
 export interface Hover {
   contents: string | { kind: string; value: string } | Array<string | { kind: string; value: string }>;
   range?: Range;
+}
+
+export interface CodeAction {
+  title: string;
+  kind?: string;
+  diagnostics?: Diagnostic[];
+  isPreferred?: boolean;
+  disabled?: { reason: string; reasonCode?: string };
+  command?: { title: string; command: string; arguments?: unknown[] };
+  edit?: WorkspaceEdit;
+  editRange?: { range: Range; replacementText: string };
+  data?: unknown;
 }
 
 export interface DocumentSymbol {
@@ -284,6 +316,9 @@ const CLIENT_CAPABILITIES = {
     formatting: { dynamicRegistration: false },
     rename: { dynamicRegistration: false, prepareSupport: true },
     publishDiagnostics: { relatedInformation: true },
+  },
+  window: {
+    workDoneProgress: true,
   },
   workspace: {
     workspaceFolders: true,
@@ -482,6 +517,51 @@ export async function createClient(
   }
 
   const openFiles = new Map<string, number>();
+  const progressMap = new Map<string | number, WorkDoneProgress>();
+
+  // Handle work done progress notifications
+  // window/workDoneProgress/create is a server-to-client request
+  transport.onRequest("window/workDoneProgress/create", (_params: unknown) => {
+    // Just acknowledge -- the actual progress comes via $/progress
+    return null;
+  });
+
+  transport.onNotification("$/progress", (params: unknown) => {
+    const p = params as { token: string | number; value: Record<string, unknown> };
+    const token = p.token;
+    const kind = p.value.kind;
+
+    if (kind === "begin") {
+      const wp: WorkDoneProgress = {
+        token,
+        state: "started",
+        title: (p.value.title as string) ?? "",
+        message: p.value.message as string | undefined,
+        percentage: p.value.percentage as number | undefined,
+        lastUpdated: Date.now(),
+      };
+      progressMap.set(token, wp);
+      client.onProgress?.(wp);
+    } else if (kind === "report") {
+      const existing = progressMap.get(token);
+      if (existing) {
+        existing.state = "reporting";
+        existing.message = (p.value.message as string) ?? existing.message;
+        existing.percentage = (p.value.percentage as number) ?? existing.percentage;
+        existing.lastUpdated = Date.now();
+        client.onProgress?.(existing);
+      }
+    } else if (kind === "end") {
+      const existing = progressMap.get(token);
+      if (existing) {
+        existing.state = "done";
+        existing.message = (p.value.message as string) ?? existing.message;
+        existing.lastUpdated = Date.now();
+        client.onProgress?.(existing);
+      }
+      progressMap.delete(token);
+    }
+  });
 
   const client: LspClient = {
     createdAt: Date.now(),
@@ -492,6 +572,8 @@ export async function createClient(
     diagnostics,
     diagnosticsVersion,
     registeredWatchers,
+    progress: progressMap,
+    onProgress: undefined,
     request: transport.request,
     notify: transport.notify,
     dead: false,

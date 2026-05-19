@@ -11,12 +11,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isEditToolResult, isWriteToolResult } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isEditToolResult, isWriteToolResult } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import {
+  type CodeAction,
   closeFile,
   createClient,
   type Diagnostic,
@@ -33,6 +34,7 @@ import {
   type TextEdit,
 } from "./client";
 import {
+  applyWorkspaceEdit,
   extractHoverText,
   formatDiagnostic,
   formatDiagnosticsSummary,
@@ -79,6 +81,8 @@ async function getClient(serverName: string): Promise<LspClient | null> {
 
   try {
     const client = await createClient(serverName, server.config, currentCwd);
+    // Wire up progress notifications to status bar (throttled for high-frequency updates)
+    client.onProgress = () => updateStatusBarThrottled();
     clients.set(serverName, client);
     return client;
   } catch (err) {
@@ -114,11 +118,61 @@ async function getClientForFile(filePath: string): Promise<{ client: LspClient; 
   return null;
 }
 
+/** Timeout for progress entries that haven't been updated (ms). */
+const PROGRESS_STALE_MS = 30_000;
+
 function updateStatusBar(): void {
   if (!sessionCtx) return;
   const names = [...detectedServers.map((s) => s.name), ...detectedLinters.map((l) => l.name)];
   if (names.length === 0) return;
-  sessionCtx.ui.setStatus("lsp", sessionCtx.ui.theme.fg("muted", `lsp:${names.join(",")}`));
+
+  // Expire stale progress entries (servers that sent 'begin' but never 'end')
+  const now = Date.now();
+  for (const client of clients.values()) {
+    for (const [token, wp] of client.progress) {
+      if (now - wp.lastUpdated > PROGRESS_STALE_MS) {
+        client.progress.delete(token);
+      }
+    }
+  }
+
+  // Check for active progress from any server
+  const progressParts: string[] = [];
+  for (const client of clients.values()) {
+    if (client.dead) continue;
+    for (const wp of client.progress.values()) {
+      const pct = wp.percentage !== undefined ? ` ${wp.percentage}%` : "";
+      progressParts.push(`${client.name} ${wp.title}${pct}`);
+    }
+  }
+
+  let status: string;
+  if (progressParts.length > 0) {
+    status = sessionCtx.ui.theme.fg("accent", `lsp:${progressParts.join(", ")}`);
+  } else {
+    status = sessionCtx.ui.theme.fg("muted", `lsp:${names.join(",")}`);
+  }
+  sessionCtx.ui.setStatus("lsp", status);
+}
+
+/** Throttled version of updateStatusBar for high-frequency progress updates. */
+let statusThrottleTimer: ReturnType<typeof setTimeout> | undefined;
+let statusThrottlePending = false;
+const STATUS_THROTTLE_MS = 500;
+
+function updateStatusBarThrottled(): void {
+  if (statusThrottleTimer) {
+    statusThrottlePending = true;
+    return;
+  }
+  updateStatusBar();
+  statusThrottleTimer = setTimeout(() => {
+    statusThrottleTimer = undefined;
+    if (statusThrottlePending) {
+      statusThrottlePending = false;
+      updateStatusBar();
+    }
+  }, STATUS_THROTTLE_MS);
 }
 
 async function shutdownAll(): Promise<void> {
@@ -455,6 +509,8 @@ export default function (pi: ExtensionAPI) {
     "hover",
     "symbols",
     "rename",
+    "codeAction",
+    "codeActionApply",
     "status",
   ] as const;
 
@@ -462,14 +518,15 @@ export default function (pi: ExtensionAPI) {
     name: "lsp",
     label: "LSP",
     description: `Language Server Protocol operations. Actions: ${LSP_ACTIONS.join(", ")}. Requires a running language server for the target file's language.`,
-    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, rename, status). Use for type errors, go-to-definition, finding references.`,
+    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, rename, codeAction, codeActionApply, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
     promptGuidelines: [
       "Use `lsp` with action `diagnostics` after making changes to check for type errors.",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
       "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
       "The `hover` action shows type information for a symbol at a given position.",
       "Always provide `file` for all actions except `status`.",
-      "Use `line` and optionally `symbol` to target a specific position in the file.",
+      "Use `line` and optionally `symbol` to target a specific position.",
+      "Use `lsp` with action `codeAction` to list refactorings available at a position. Then use `codeActionApply` with the action index to execute it.",
     ],
     parameters: Type.Object({
       action: StringEnum([...LSP_ACTIONS]),
@@ -480,6 +537,7 @@ export default function (pi: ExtensionAPI) {
         Type.Number({ description: "Which occurrence of symbol on the line (1-indexed, default 1)" }),
       ),
       new_name: Type.Optional(Type.String({ description: "New name for rename action" })),
+      index: Type.Optional(Type.Number({ description: "Index of the code action to apply (from codeAction listing)" })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -687,6 +745,94 @@ export default function (pi: ExtensionAPI) {
             return text(`Renamed to "${new_name}":\n${results.map((r) => `  ${r}`).join("\n")}`);
           }
 
+          case "codeAction": {
+            // Query available code actions at the cursor position
+            const raw = (await client.request("textDocument/codeAction", {
+              textDocument: { uri },
+              range: { start: { line: resolvedLine - 1, character: 0 }, end: { line: resolvedLine - 1, character: 0 } },
+              context: { diagnostics: [] },
+            })) as Array<{ title: string; kind?: string; isPreferred?: boolean; disabled?: { reason: string } }>;
+
+            if (!raw || raw.length === 0) return text("No code actions available at this position");
+
+            // Show available actions with context lines around cursor
+            const content = fs.readFileSync(abs, "utf-8");
+            const fileLines = content.split("\n");
+            const contextRadius = 5;
+            const start = Math.max(0, resolvedLine - 1 - contextRadius);
+            const end = Math.min(fileLines.length, resolvedLine + contextRadius);
+            const gutterWidth = String(end).length;
+            const context = fileLines
+              .slice(start, end)
+              .map((l, i) => {
+                const num = start + i + 1;
+                const marker = num === resolvedLine ? ">>>" : "   ";
+                return `${marker} ${String(num).padStart(gutterWidth)} | ${l}`;
+              })
+              .join("\n");
+
+            const lines: string[] = [`Available code actions (${raw.length}):`];
+            for (let i = 0; i < raw.length; i++) {
+              const a = raw[i];
+              const preferred = a.isPreferred ? " [preferred]" : "";
+              const disabled = a.disabled ? ` (disabled: ${a.disabled.reason})` : "";
+              const kind = a.kind ? ` [${a.kind}]` : "";
+              lines.push(`  [${i}]${kind} ${a.title}${preferred}${disabled}`);
+            }
+            lines.push("");
+            lines.push(`Context around line ${resolvedLine}:`);
+            lines.push(context);
+            lines.push("");
+            lines.push("To apply: use action 'codeActionApply' with the index of the action you want.");
+            return text(lines.join("\n"));
+          }
+
+          case "codeActionApply": {
+            const idx = params.index;
+            if (idx === undefined || idx < 0) {
+              return text("Error: index parameter required. Use 'codeAction' first to see available actions.");
+            }
+
+            // Query available code actions
+            const raw = (await client.request("textDocument/codeAction", {
+              textDocument: { uri },
+              range: { start: { line: resolvedLine - 1, character: 0 }, end: { line: resolvedLine - 1, character: 0 } },
+              context: { diagnostics: [] },
+            })) as CodeAction[];
+
+            if (!raw || raw.length === 0) return text("No code actions available at this position");
+            if (idx >= raw.length) return text(`Invalid index ${idx}. Available actions: 0-${raw.length - 1}`);
+
+            const selected = raw[idx];
+            if (selected.disabled) {
+              return text(`Code action "${selected.title}" is disabled: ${selected.disabled.reason}`);
+            }
+
+            // Resolve the code action to get the edit (servers defer edit for bandwidth)
+            let resolvedAction: CodeAction = selected;
+            if (!selected.edit && selected.data) {
+              try {
+                resolvedAction = (await client.request("codeAction/resolve", {
+                  ...selected,
+                })) as CodeAction;
+              } catch {
+                // Some servers don't support resolve — try applying directly
+              }
+            }
+
+            if (!resolvedAction.edit) {
+              return text(
+                `Code action "${selected.title}" has no edit. It may be a command-only action.\n\nTry running it via the command: ${selected.command?.title ?? selected.title}`,
+              );
+            }
+
+            // Apply the workspace edit
+            const results = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd);
+            return text(
+              `Applied "${selected.title}":\n${results.map((r) => `  ${r.path}: ${r.count} edit(s)`).join("\n")}`,
+            );
+          }
+
           default:
             return text(`Unknown action: ${action}`);
         }
@@ -701,7 +847,8 @@ export default function (pi: ExtensionAPI) {
       const label = theme.fg("toolTitle", theme.bold("lsp "));
       const file = args.file ? ` ${theme.fg("muted", String(args.file))}` : "";
       const line = args.line ? theme.fg("muted", `:${args.line}`) : "";
-      return new Text(`${label}${action}${file}${line}`, 0, 0);
+      const idx = args.index !== undefined ? ` [${args.index}]` : "";
+      return new Text(`${label}${action}${file}${line}${idx}`, 0, 0);
     },
 
     renderResult(result, { expanded }, theme) {
@@ -732,6 +879,15 @@ export default function (pi: ExtensionAPI) {
         const client = clients.get(s.name);
         const status = client && !client.dead ? `running (${formatUptime(client.createdAt)})` : "available";
         lines.push(`${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
+        // Show active progress for this server
+        if (client && !client.dead && client.progress.size > 0) {
+          for (const wp of client.progress.values()) {
+            const pct = wp.percentage !== undefined ? ` ${wp.percentage}%` : "";
+            const msg = wp.message ? `: ${wp.message}` : "";
+            const stale = Date.now() - wp.lastUpdated > PROGRESS_STALE_MS ? " (stale)" : "";
+            lines.push(`  → ${wp.title}${pct}${msg}${stale}`);
+          }
+        }
       }
       for (const l of detectedLinters) {
         lines.push(`${l.name} (${l.config.fileTypes.join(", ")}) — cli`);

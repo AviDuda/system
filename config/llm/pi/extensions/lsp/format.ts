@@ -11,7 +11,15 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Diagnostic, DocumentSymbol, Hover, Location, LocationLink, SymbolInformation } from "./client";
+import type {
+  Diagnostic,
+  DocumentSymbol,
+  Hover,
+  Location,
+  LocationLink,
+  SymbolInformation,
+  WorkspaceEdit,
+} from "./client";
 import { uriToFile } from "./client";
 
 // ── Diagnostics ──
@@ -270,4 +278,63 @@ export function resolveSymbolColumn(filePath: string, line: number, symbol?: str
   } catch {
     return 0;
   }
+}
+
+// ── Workspace edit application ──
+
+/**
+ * Apply a WorkspaceEdit to files on disk.
+ *
+ * Handles both `changes` (per-file TextEdit[]) and `documentChanges`
+ * (structured edits that may create/rename files). For the LSP extension's
+ * current use case, only `changes` is needed.
+ *
+ * Edits within each file are applied in reverse order (end-to-start)
+ * to preserve character positions.
+ *
+ * @param edit - The WorkspaceEdit to apply
+ * @param cwd - Current working directory for relative path reporting
+ * @returns Array of "relativePath: N edit(s)" strings
+ */
+export async function applyWorkspaceEdit(
+  edit: WorkspaceEdit,
+  cwd: string,
+): Promise<Array<{ path: string; count: number }>> {
+  const results: Array<{ path: string; count: number }> = [];
+
+  if (edit.changes) {
+    for (const [editUri, edits] of Object.entries(edit.changes)) {
+      const editPath = uriToFile(editUri);
+      const relPath = path.relative(cwd, editPath);
+      const content = await fs.promises.readFile(editPath, "utf-8");
+      const lines = content.split("\n");
+
+      // Apply edits in reverse order to preserve positions
+      const sorted = [...edits].sort((a, b) => {
+        const lineDiff = b.range.start.line - a.range.start.line;
+        return lineDiff !== 0 ? lineDiff : b.range.start.character - a.range.start.character;
+      });
+
+      for (const textEdit of sorted) {
+        const startLine = textEdit.range.start.line;
+        const endLine = textEdit.range.end.line;
+        const startChar = textEdit.range.start.character;
+        const endChar = textEdit.range.end.character;
+
+        if (startLine === endLine) {
+          const line = lines[startLine];
+          lines[startLine] = line.slice(0, startChar) + textEdit.newText + line.slice(endChar);
+        } else {
+          const firstLine = lines[startLine].slice(0, startChar) + textEdit.newText;
+          const lastLine = lines[endLine].slice(endChar);
+          lines.splice(startLine, endLine - startLine + 1, firstLine + lastLine);
+        }
+      }
+
+      await fs.promises.writeFile(editPath, lines.join("\n"));
+      results.push({ path: relPath, count: edits.length });
+    }
+  }
+
+  return results;
 }
