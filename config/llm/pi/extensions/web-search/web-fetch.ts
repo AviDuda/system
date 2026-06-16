@@ -313,9 +313,45 @@ function htmlToMarkdown(html: string, signal?: AbortSignal): Promise<string> {
       signal.addEventListener("abort", () => child.kill(), { once: true });
     }
 
-    child.stdin.write(html);
+    // Unwrap layout tables before pandoc: pages that use single-row/col <table>s
+    // for layout (GitHub comments, forums, emails) would otherwise render as
+    // single-cell GFM tables or [TABLE] placeholders. Real data tables (>=2
+    // rows AND >=2 cols) pass through untouched.
+    child.stdin.write(unwrapLayoutTables(html));
     child.stdin.end();
   });
+}
+
+/**
+ * Replace single-row and single-column <table>s with their cell text, since
+ * these are layout wrappers (not data) and pandoc has no clean GFM rendering
+ * for them. Tables with >=2 rows AND >=2 columns are left intact.
+ *
+ * Naive tag matching (no DOM parser) — good enough for well-formed HTML from a
+ * browser render, and stays dependency-free. Operates only on <table>...</table>
+ * spans so it can't damage surrounding content.
+ */
+export function unwrapLayoutTables(html: string): string {
+  return html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (table) => {
+    const rows = table.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) ?? [];
+    if (rows.length < 2) return cellsAsText(table);
+    const maxCols = Math.max(...rows.map((r) => (r.match(/<t[dh]\b[^>]*>/gi) ?? []).length));
+    return maxCols < 2 ? cellsAsText(table) : table;
+  });
+}
+
+/** Extract <td>/<th> cell text from a table, joined by newlines. */
+function cellsAsText(table: string): string {
+  const cells = table.match(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi) ?? [];
+  return cells
+    .map((c) =>
+      c
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** Clean up pandoc markdown output: strip data: URI images, collapse blank lines. */

@@ -9,6 +9,7 @@ import {
   stripAnsi,
   truncateContent,
   USER_AGENT,
+  unwrapLayoutTables,
 } from "./web-fetch";
 
 describe("sessionName", () => {
@@ -115,6 +116,52 @@ describe("parseEvalString", () => {
 
   test("strips ANSI codes", () => {
     expect(parseEvalString('\x1b[32m"hello"\x1b[0m')).toBe("hello");
+  });
+});
+
+describe("unwrapLayoutTables", () => {
+  test("unwraps a single-cell layout table to its text", () => {
+    const html = "<table><tr><td>Hello world</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("Hello world");
+  });
+
+  test("unwraps a single-column multi-row layout table", () => {
+    const html = "<table><tr><td>line one</td></tr><tr><td>line two</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("line one\nline two");
+  });
+
+  test("unwraps a single-row multi-cell layout table", () => {
+    const html = "<table><tr><td>a</td><td>b</td><td>c</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("a\nb\nc");
+  });
+
+  test("preserves a real data table (>=2 rows AND >=2 cols)", () => {
+    const html = "<table><tr><th>Model</th><th>Price</th></tr><tr><td>GPT</td><td>$10</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe(html);
+  });
+
+  test("strips nested tags inside unwrapped cells", () => {
+    const html = "<table><tr><td><p>Hello <strong>world</strong></p></td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("Hello world");
+  });
+
+  test("leaves surrounding content intact", () => {
+    const html = "<p>before</p><table><tr><td>cell</td></tr></table><p>after</p>";
+    expect(unwrapLayoutTables(html)).toBe("<p>before</p>cell<p>after</p>");
+  });
+
+  test("handles multiple tables independently", () => {
+    const html =
+      "<table><tr><td>layout</td></tr></table>" +
+      "<table><tr><th>x</th><th>y</th></tr><tr><td>1</td><td>2</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe(
+      "layout<table><tr><th>x</th><th>y</th></tr><tr><td>1</td><td>2</td></tr></table>",
+    );
+  });
+
+  test("empty cells are dropped", () => {
+    const html = "<table><tr><td>  </td></tr><tr><td>kept</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("kept");
   });
 });
 
