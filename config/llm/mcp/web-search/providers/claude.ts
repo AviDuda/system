@@ -1,12 +1,11 @@
 /**
  * Web search via Claude Code CLI's WebSearch tool.
- * Fallback provider when Kagi API isn't available.
- *
- * Shells out to `claude -p` with WebSearch enabled.
+ * Fallback provider that shells out to `claude -p` with WebSearch enabled.
  * Slow (~13-15s) but requires no additional API keys.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import type { SearchProvider } from "./types";
 
 export interface ClaudeSearchSource {
   title: string;
@@ -106,7 +105,8 @@ export function parseMarkdownLinks(text: string): ClaudeSearchSource[] {
   return sources;
 }
 
-/** Format results for LLM consumption, matching kagi.ts format. */
+/** Format results for LLM consumption. Kept for direct CLI use; the
+ *  claudeProvider adapter below maps to SearchHit so hosts use formatHits. */
 export function formatClaudeResults(result: ClaudeSearchResult): string {
   if (result.sources.length === 0) {
     return result.rawText || "No results found.";
@@ -121,3 +121,27 @@ export function formatClaudeResults(result: ClaudeSearchResult): string {
 
   return lines.join("\n").trimEnd();
 }
+
+// ── Adapter ──
+//
+// Wraps the Claude CLI client in the shared SearchProvider interface so hosts
+// can treat it generically. isAvailable checks the CLI binary exists; actual
+// auth is validated at call time (fails gracefully if no subscription).
+export const claudeProvider: SearchProvider = {
+  name: "claude",
+  label: "Claude CLI",
+  isAvailable: () => {
+    try {
+      execFileSync("claude", ["--version"], { stdio: "ignore", timeout: 3_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  search: async (query, opts) => {
+    const result = await searchViaClaude(query, { limit: opts.limit, signal: opts.signal });
+    return {
+      hits: result.sources.map((s) => ({ title: s.title, url: s.url })),
+    };
+  },
+};

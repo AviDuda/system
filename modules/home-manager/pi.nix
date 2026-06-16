@@ -10,6 +10,13 @@ let
   # Source directory for pi extensions
   piExtSrcDir = "${config.home.homeDirectory}/system/config/llm/pi/extensions";
 
+  # Canonical web-search provider clients live in the MCP tree (the multi-host
+  # survivor) and are imported by the pi web-search extension via a bridge
+  # symlink (web-search-core) — same sibling-import pattern as shared/. The repo
+  # symlink at config/llm/pi/extensions/web-search-core covers tsc; this var
+  # backs the runtime symlink created in the activation below.
+  webSearchCoreSrc = "${config.home.homeDirectory}/system/config/llm/mcp/web-search/providers";
+
   # Auto-discover extension directories from source.
   # Dirs with index.ts are extensions; dirs without are shared modules.
   # All are symlinked live — edit + /reload works without nix-switch.
@@ -243,5 +250,18 @@ in
         echo "pi: linked ${name} -> $ext_target"
       fi
     '') allExtDirs}
+
+    # Bridge: expose the canonical (MCP-tree) web-search providers to the pi
+    # web-search extension as a sibling import (../web-search-core/...). Pi
+    # resolves relative imports from the symlink path, so it needs this entry
+    # in the runtime extensions dir; allExtDirs skips it (it's not under
+    # piExtSrcDir), so it's wired explicitly here.
+    core_link="${piConfigDir}/extensions/web-search-core"
+    if [[ -L "$core_link" ]] && [[ "$(readlink "$core_link")" == "${webSearchCoreSrc}" ]]; then
+      : # already correct
+    else
+      $DRY_RUN_CMD ln -sfn "${webSearchCoreSrc}" "$core_link"
+      echo "pi: linked web-search-core -> ${webSearchCoreSrc}"
+    fi
   '';
 }

@@ -8,18 +8,20 @@ Web search and page fetching tools.
 
 Search the web. Returns titles, URLs, and snippets.
 
-Edit `ENABLED_PROVIDERS` in `index.ts` to configure. Tried in order; first available wins.
+Providers are sourced from the MCP provider registry — see the MCP web-search
+README for how to add/swap one. Tried in priority order; first available wins.
 
-Parameters: `query` (required), `limit` (optional, default 10, max 40), `provider` (optional: `'kagi'` or `'claude'`).
+Parameters: `query` (required), `limit` (optional, default 10, max 40), `provider` (any registered provider name), `freshness` (`'day'` | `'week'` | `'month'` | `'year'`), `includeDomains` / `excludeDomains` (string[]), `extractCount` (0-10, inline full page content — provider-dependent).
 
 Results include timing info (elapsed seconds).
 
 | Provider | Speed | Auth | Notes |
 |----------|-------|------|-------|
-| `kagi` | ~1-2s | `/run/secrets/kagi_api_key` (sops-nix) | $0.025/search, prepaid balance |
-| `claude` | ~13-20s | Existing Anthropic auth | Shells out to `claude -p` with WebSearch tool |
+| `kagi` | ~1-2s | `/run/secrets/kagi_api_key` (sops-nix) | $12/1k requests, pay-per-use. Supports all filters + extractCount. |
+| `tavily` | ~1-2s | `/run/secrets/tavily_api_key` (sops-nix) | 1,000 free credits/mo. Supports all filters. |
+| `claude` | ~13-20s | Claude Code CLI (`claude -p`) | Slow last resort. Needs CLI + auth. |
 
-Currently enabled: **kagi** (primary), **claude** (fallback). Kagi auto-falls back to Claude on 401/403.
+Default chain: kagi (primary), tavily (fallback on 401/403), claude (last resort).
 
 ### web_fetch
 
@@ -42,19 +44,18 @@ Session name is `pi-fetch-<project-basename>`, isolated per project.
 
 | Command | Description |
 |---------|-------------|
-| `/search [kagi\|claude] <query>` | Search the web (results injected into conversation via sendUserMessage) |
+| `/search [provider] <query>` | Search the web (results injected into conversation via sendUserMessage) |
 | `/fetch <url>` | Fetch a page (content injected into conversation via sendUserMessage) |
 | `/fetch-headed` | Toggle visible browser mode (for debugging bot detection) |
 
 ## Architecture
 
-- `kagi.ts` -- Kagi API client. No pi imports.
-- `kagi.test.ts` -- Tests for result formatting.
-- `claude-search.ts` -- Claude Code CLI wrapper.
-- `claude-search.test.ts` -- Tests for link parsing and formatting.
+Provider clients + adapters + the registry are **canonical in the MCP tree** (`config/llm/mcp/web-search/providers/`). Pi imports them via the `web-search-core` bridge symlink and sources all providers generically from the registry — no per-provider branching in this file. Only orchestration (fallback, status, commands) is pi-specific.
+
+- `../web-search-core/` (bridge symlink) -- canonical provider clients, registry, types, formatting. Lives in the MCP tree (`config/llm/mcp/web-search/providers/`).
 - `web-fetch.ts` -- agent-browser CLI wrapper. Session management, content extraction.
 - `web-fetch.test.ts` -- Tests for session naming, ANSI stripping, truncation.
-- `index.ts` -- Pi extension. Provider resolution, tool + command registration.
+- `index.ts` -- Pi extension. Generic provider resolution via the registry, tool + command registration.
 
 ## Sandbox compatibility
 

@@ -3,9 +3,13 @@
  *
  * Registers `web_search` and `web_fetch` tools.
  *
- * web_search providers (edit ENABLED_PROVIDERS, tried in order):
- * - kagi: Fast (~1s), requires API access + key at /run/secrets/kagi_api_key
- * - claude: Slow (~13s), uses Claude Code CLI's WebSearch via `claude -p`. No extra keys.
+ * Search providers (kagi, tavily, claude) are sourced entirely from the MCP
+ * provider registry — adding/swapping one is a one-line change in
+ * providers/registry.ts, picked up here automatically. This file only holds
+ * pi-specific orchestration: fallback-on-auth-failure, status pill, commands.
+ *
+ * Provider clients + adapters are canonical in config/llm/mcp/web-search/providers/
+ * and reached via the `web-search-core` bridge symlink.
  *
  * web_fetch: Fetches and extracts page content via agent-browser CLI (headless Chrome daemon).
  *
@@ -15,170 +19,138 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { ClaudeSearchError, formatClaudeResults, searchViaClaude } from "./providers/claude-search";
-import { formatResults, KagiApiError, search as kagiSearch, loadApiKey } from "./providers/kagi";
+import { formatHits } from "../web-search-core/format";
+import { availableProviders, providerLabel, resolveProvider } from "../web-search-core/registry";
+import type { SearchFilters, SearchProvider } from "../web-search-core/types";
 import { closeSession, FetchError, fetchPage, sessionName, truncateContent } from "./web-fetch";
 
 function elapsed(start: number): string {
   return `${((performance.now() - start) / 1000).toFixed(1)}s`;
 }
 
-// ── Provider config ──
-// Edit this array to enable/disable providers. Tried in order; first available wins.
-const ENABLED_PROVIDERS: ProviderId[] = [
-  "kagi",
-  "claude", // fallback if Kagi fails
-];
-
-type ProviderId = "kagi" | "claude";
-
 interface SearchResult {
   text: string;
   details: Record<string, unknown>;
 }
 
-const PROVIDER_NAMES: Record<ProviderId, string> = {
-  kagi: "Kagi",
-  claude: "Claude CLI",
-};
+interface SearchOpts {
+  limit?: number;
+  signal?: AbortSignal;
+  filters?: SearchFilters;
+  extractCount?: number;
+}
 
 export default function (pi: ExtensionAPI) {
-  // Resolve active provider: first enabled one that's actually available
-  let activeProvider: ProviderId | null = null;
-  for (const id of ENABLED_PROVIDERS) {
-    if (id === "kagi") {
-      try {
-        loadApiKey();
-        activeProvider = id;
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (id === "claude") {
-      activeProvider = id;
-      break;
-    }
-  }
+  // Active provider, resolved at session_start. Falls back on auth failure.
+  let activeProvider: SearchProvider | null = null;
 
-  async function searchKagi(
-    query: string,
-    limit: number | undefined,
-    signal: AbortSignal | undefined,
-  ): Promise<SearchResult> {
+  async function runProviderSearch(provider: SearchProvider, query: string, opts: SearchOpts): Promise<SearchResult> {
     const start = performance.now();
     try {
-      const result = await kagiSearch(query, { limit, signal });
+      const res = await provider.search(query, opts);
       return {
-        text: formatResults(result),
+        text: formatHits(res.hits, res.relatedQuestions),
         details: {
-          provider: "kagi",
-          resultCount: result.sources.length,
-          requestId: result.requestId,
-          hasRelated: result.relatedQuestions.length > 0,
+          provider: provider.name,
+          resultCount: res.hits.length,
+          hasRelated: !!res.relatedQuestions?.length,
+          extracted: res.extracted,
           elapsed: elapsed(start),
         },
       };
     } catch (err) {
-      if (err instanceof KagiApiError) {
-        return {
-          text: `Search failed: ${err.message}`,
-          details: { provider: "kagi", error: err.message, elapsed: elapsed(start) },
-        };
-      }
-      throw err;
-    }
-  }
-
-  async function searchClaude(
-    query: string,
-    limit: number | undefined,
-    signal: AbortSignal | undefined,
-  ): Promise<SearchResult> {
-    const start = performance.now();
-    try {
-      const result = await searchViaClaude(query, { limit, signal });
+      const msg = err instanceof Error ? err.message : String(err);
       return {
-        text: formatClaudeResults(result),
-        details: { provider: "claude", resultCount: result.sources.length, elapsed: elapsed(start) },
+        text: `Search failed: ${msg}`,
+        details: { provider: provider.name, error: msg, elapsed: elapsed(start) },
       };
-    } catch (err) {
-      if (err instanceof ClaudeSearchError) {
-        return {
-          text: `Search failed: ${err.message}`,
-          details: { provider: "claude", error: err.message, elapsed: elapsed(start) },
-        };
-      }
-      throw err;
     }
   }
 
-  const providerFn: Record<ProviderId, typeof searchKagi> = {
-    kagi: searchKagi,
-    claude: searchClaude,
-  };
-
-  async function doSearch(
-    query: string,
-    limit: number | undefined,
-    signal: AbortSignal | undefined,
-    forceProvider?: ProviderId,
-  ): Promise<SearchResult> {
-    if (forceProvider) {
-      return providerFn[forceProvider](query, limit, signal);
+  async function doSearch(query: string, opts: SearchOpts, forceName?: string): Promise<SearchResult> {
+    if (forceName) {
+      const forced = resolveProvider(forceName);
+      if (forced) return runProviderSearch(forced, query, opts);
+      return {
+        text: `Provider '${forceName}' not available. Forceable: ${availableProviders()
+          .map((p) => p.name)
+          .join(", ")}`,
+        details: { provider: forceName, error: "unavailable" },
+      };
     }
 
-    if (activeProvider === "kagi") {
-      const result = await searchKagi(query, limit, signal);
-      const details = result.details as { error?: string };
-      // On auth failure, fall through to next provider
-      if (details.error) {
-        const errMsg = details.error;
-        if (errMsg.includes("401") || errMsg.includes("403")) {
-          const fallback = ENABLED_PROVIDERS.find((id) => id !== "kagi");
-          if (fallback) {
-            activeProvider = fallback;
-            return providerFn[fallback](query, limit, signal);
-          }
+    if (activeProvider) {
+      const current = activeProvider;
+      const result = await runProviderSearch(current, query, opts);
+      // On auth failure, switch to the next available provider for the session.
+      const errMsg = (result.details as { error?: string }).error;
+      if (errMsg && (errMsg.includes("401") || errMsg.includes("403"))) {
+        const fallback = availableProviders().find((p) => p.name !== current.name);
+        if (fallback) {
+          activeProvider = fallback;
+          return runProviderSearch(fallback, query, opts);
         }
       }
       return result;
     }
 
-    if (activeProvider) {
-      return providerFn[activeProvider](query, limit, signal);
-    }
-
-    return { text: "No search providers enabled.", details: { error: "no providers" } };
+    return { text: "No search providers available.", details: { error: "no providers" } };
   }
+
+  const providerList = () =>
+    availableProviders()
+      .map((p) => p.name)
+      .join("|");
 
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
     description: "Search the web. Returns titles, URLs, and snippets for each result.",
-    promptSnippet:
-      "web_search: Search the web. Parameters: query (string, required), limit (number, optional, default 10, max 40), provider (string, optional: 'kagi' or 'claude')",
+    promptSnippet: `web_search: Search the web. Parameters: query (required), limit (default 10, max 40), provider (${providerList()}), freshness ('day'|'week'|'month'|'year'), includeDomains/excludeDomains (string[]), extractCount (0-10, inline full page content — provider-dependent).`,
     promptGuidelines: [
       "Use web_search when you need current information, documentation, or facts you're uncertain about.",
       "Prefer specific, focused queries over broad ones.",
+      "freshness/includeDomains narrow results (e.g. recent docs, a specific site). excludeDomains support varies by provider.",
+      "extractCount fetches full page content for the top N results inline — useful when you'd otherwise web_fetch several of them. Not all providers support this.",
       "When search results reference a page that likely has the answer, use web_fetch to read the full page.",
       "For complex browser interactions beyond simple page reading, use bash with agent-browser CLI directly (e.g., agent-browser open <url> && agent-browser snapshot -i).",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       limit: Type.Optional(Type.Number({ description: "Max results (default 10, max 40)" })),
-      provider: Type.Optional(Type.String({ description: "Force a specific provider: 'kagi' or 'claude'" })),
+      provider: Type.Optional(Type.String({ description: `Force a provider: ${providerList()}` })),
+      freshness: Type.Optional(
+        Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")], {
+          description: "Restrict to results published/updated within this window",
+        }),
+      ),
+      includeDomains: Type.Optional(
+        Type.Array(Type.String(), { description: "Restrict to these domains (whitelist)" }),
+      ),
+      excludeDomains: Type.Optional(Type.Array(Type.String(), { description: "Exclude these domains" })),
+      extractCount: Type.Optional(
+        Type.Number({
+          description:
+            "Fetch full page content for the top N results inline (0-10). Incurs extraction cost. Provider-dependent.",
+        }),
+      ),
     }),
 
     async execute(_toolCallId, params, signal) {
-      const forced = params.provider as ProviderId | undefined;
-      if (forced && !ENABLED_PROVIDERS.includes(forced)) {
-        return {
-          content: [{ type: "text", text: `Unknown provider: ${forced}. Available: ${ENABLED_PROVIDERS.join(", ")}` }],
-          details: { error: `unknown provider: ${forced}` },
-        };
-      }
-      const { text, details } = await doSearch(params.query, params.limit, signal, forced);
+      const forced = typeof params.provider === "string" ? params.provider : undefined;
+      const filters: SearchFilters | undefined =
+        params.freshness || params.includeDomains || params.excludeDomains
+          ? {
+              freshness: params.freshness as SearchFilters["freshness"],
+              includeDomains: params.includeDomains,
+              excludeDomains: params.excludeDomains,
+            }
+          : undefined;
+      const { text, details } = await doSearch(
+        params.query,
+        { limit: params.limit, signal, filters, extractCount: params.extractCount },
+        forced,
+      );
       return { content: [{ type: "text", text }], details };
     },
 
@@ -331,43 +303,45 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("search", {
-    description: "Search the web (usage: /search [kagi|claude] <query>)",
+    description: `Search the web (usage: /search [${providerList()}] <query>)`,
     getArgumentCompletions: (prefix) => {
-      const providers = ENABLED_PROVIDERS.filter((id) => id.startsWith(prefix));
-      return providers.length > 0 ? providers.map((id) => ({ value: `${id} `, label: PROVIDER_NAMES[id] })) : null;
+      const names = availableProviders()
+        .map((p) => p.name)
+        .filter((n) => n.startsWith(prefix));
+      return names.length > 0 ? names.map((n) => ({ value: `${n} `, label: n })) : null;
     },
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed) {
-        ctx.ui.notify("Usage: /search [kagi|claude] <query>", "warning");
+        ctx.ui.notify(`Usage: /search [${providerList()}] <query>`, "warning");
         return;
       }
 
       // Check if first word is a provider name
-      let forceProvider: ProviderId | undefined;
+      let forceProvider: string | undefined;
       let query = trimmed;
       const firstSpace = trimmed.indexOf(" ");
       if (firstSpace > 0) {
-        const firstWord = trimmed.slice(0, firstSpace) as ProviderId;
-        if (ENABLED_PROVIDERS.includes(firstWord)) {
+        const firstWord = trimmed.slice(0, firstSpace);
+        if (availableProviders().some((p) => p.name === firstWord)) {
           forceProvider = firstWord;
           query = trimmed.slice(firstSpace + 1).trim();
         }
       }
 
       if (!query) {
-        ctx.ui.notify("Usage: /search [kagi|claude] <query>", "warning");
+        ctx.ui.notify(`Usage: /search [${providerList()}] <query>`, "warning");
         return;
       }
 
       const provLabel = forceProvider
-        ? PROVIDER_NAMES[forceProvider]
+        ? providerLabel(resolveProvider(forceProvider) ?? availableProviders()[0])
         : activeProvider
-          ? (PROVIDER_NAMES[activeProvider] ?? activeProvider)
+          ? providerLabel(activeProvider)
           : "unknown";
       ctx.ui.notify(`Searching (${provLabel}): ${query}`, "info");
       try {
-        const { text, details } = await doSearch(query, 10, undefined, forceProvider);
+        const { text, details } = await doSearch(query, { limit: 10 }, forceProvider);
         const time = (details as { elapsed?: string }).elapsed;
         const timeSuffix = time ? ` (${time})` : "";
         pi.sendUserMessage(`[/search${forceProvider ? ` ${forceProvider}` : ""} ${query}${timeSuffix}]\n\n${text}`);
@@ -379,12 +353,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    activeProvider = availableProviders()[0] ?? null;
+
     if (!activeProvider) {
-      ctx.ui.notify("Web search: no providers available. Check ENABLED_PROVIDERS in web-search/index.ts.", "warning");
-    } else if (activeProvider === "claude") {
-      ctx.ui.notify("Web search: Claude Code fallback (~13s/query)", "info");
+      ctx.ui.notify("Web search: no providers available.", "warning");
     } else {
-      ctx.ui.setStatus("web-search", ctx.ui.theme.fg("muted", `search:${activeProvider}`));
+      ctx.ui.setStatus("web-search", ctx.ui.theme.fg("muted", `search:${activeProvider.name}`));
     }
   });
 

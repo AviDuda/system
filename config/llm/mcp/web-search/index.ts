@@ -66,10 +66,28 @@ registerAppTool(
         .string()
         .optional()
         .describe(`Force a provider (one of: ${available.join(", ") || "none"})`),
+      freshness: z
+        .enum(["day", "week", "month", "year"])
+        .optional()
+        .describe("Restrict to results published/updated within this window."),
+      includeDomains: z.array(z.string()).optional().describe("Restrict to these domains (whitelist)."),
+      excludeDomains: z
+        .array(z.string())
+        .optional()
+        .describe("Exclude these domains. No-op on providers without exclude support."),
+      extractCount: z
+        .number()
+        .int()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe(
+          "Kagi only: fetch full page content for the top N results inline as markdown (0-10). Incurs Extract API cost.",
+        ),
     },
     _meta: { ui: { resourceUri: UI_RESOURCE_URI } },
   },
-  async ({ query, limit, provider }) => {
+  async ({ query, limit, provider, freshness, includeDomains, excludeDomains, extractCount }) => {
     const chosen = resolveProvider(provider);
     if (!chosen) {
       const reason = provider
@@ -82,9 +100,12 @@ registerAppTool(
       };
     }
 
+    const filters =
+      freshness || includeDomains || excludeDomains ? { freshness, includeDomains, excludeDomains } : undefined;
+
     const start = performance.now();
     try {
-      const outcome = await chosen.search(query, { limit });
+      const outcome = await chosen.search(query, { limit, filters, extractCount });
       const elapsedMs = Math.round(performance.now() - start);
       const text = formatOutcome({ ...outcome, provider: chosen.name, elapsedMs });
       return {

@@ -89,7 +89,8 @@ The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-
 - All extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
 - Runtime config (journal constants, model roles) is read from `~/.config/llm/journal.json` and `~/.pi/agent/roles.json` respectively.
 - Auto-discovery: any directory under `config/llm/pi/extensions/` with an `index.ts` is symlinked automatically by `pi.nix` (the `allExtDirs` let binding reads the directory at eval time and generates symlink commands). Adding a new extension directory only requires `mise nix-switch` — no manual Nix edits. Directories without `index.ts` (like `shared/`) are also symlinked but pi only loads them as extensions if they have `index.ts`.
-- Cross-extension imports work via `../shared/` (Node resolves symlinks to real paths before resolving relative imports).
+- Imports between extensions/shared modules use relative paths like `../shared/`. **Pi resolves relative imports from the symlink path** (`~/.pi/agent/extensions/<ext>/`), NOT the realpath — so imported code must exist as a *sibling* under `~/.pi/agent/extensions/`. `../shared/` works because `shared/` physically lives under `config/llm/pi/extensions/` (tsc finds it) AND `allExtDirs` symlinks it into the runtime extensions dir (Node finds it) — same relative position in both trees.
+- To import code that lives **outside** `config/llm/pi/extensions/` (e.g. the MCP-tree web-search providers shared with other hosts), use a **bridge symlink** in two places: a repo symlink under `config/llm/pi/extensions/` (for tsc) and an explicit runtime symlink in the `pi.nix` `piExtensions` activation (for Node). See `web-search-core` (repo symlink + `pi.nix` entry pointing at `config/llm/mcp/web-search/providers`) for the example.
 - Shared code goes in `extensions/shared/` (no `index.ts` = not discovered as an extension).
 - Run `mise pi-check` before committing. `mise check` includes it.
 

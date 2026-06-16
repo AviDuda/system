@@ -42,7 +42,7 @@ run = "nixfmt --check *.nix **/*.nix"
 
 [tasks.check]
 description = "Run checks"
-depends = ["fmt-check", "pi-check"]
+depends = ["fmt-check", "pi-check", "mcp-check"]
 
 [tasks.pi-check]
 description = "Lint and test pi extensions"
@@ -61,6 +61,20 @@ bun test
 [tasks.pi-fmt]
 description = "Format pi extensions"
 run = "cd config/llm/pi && biome check --write ."
+
+[tasks.mcp-check]
+description = "Lint and test MCP servers"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cd config/llm/mcp/web-search
+echo "==> biome check"
+biome check .
+echo "==> tsc --noEmit"
+tsc --noEmit
+echo "==> bun test"
+bun test
+"""
 
 [tasks.nix-diff]
 description = "Diff this host's closure against current system"

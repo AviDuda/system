@@ -25,8 +25,14 @@
 
   # Kagi API key for web search (used by pi extension, needs user read access)
   sops.secrets.kagi_api_key = {
-    sopsFile = ../../secrets/kagi.yaml;
-    key = "api_key";
+    sopsFile = ../../secrets/websearch.yaml;
+    key = "kagi_api_key";
+    owner = config.user.name;
+  };
+  # Tavily API key for web search
+  sops.secrets.tavily_api_key = {
+    sopsFile = ../../secrets/websearch.yaml;
+    key = "tavily_api_key";
     owner = config.user.name;
   };
 

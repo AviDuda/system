@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatClaudeResults, parseMarkdownLinks } from "./claude-search";
+import { formatClaudeResults, parseMarkdownLinks } from "./claude";
 
 describe("parseMarkdownLinks", () => {
   test("parses standard markdown links", () => {
