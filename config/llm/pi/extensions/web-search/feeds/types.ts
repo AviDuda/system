@@ -15,6 +15,12 @@ export interface FeedResult {
   content: string;
 }
 
+export interface HttpFetchOptions {
+  signal?: AbortSignal;
+  /** Custom headers to merge with the transport's defaults (User-Agent, etc). */
+  headers?: Record<string, string>;
+}
+
 export interface BrowserFetchResult {
   /** Final URL after redirects. */
   url: string;
@@ -34,7 +40,7 @@ export interface FeedContext {
    * Plain HTTP fetch with a stealth User-Agent + timeout. For ungated APIs and
    * feeds that answer without a browser session. Returns raw status + body text.
    */
-  httpFetch?: (url: string, opts?: { signal?: AbortSignal }) => Promise<{ status: number; text: string }>;
+  httpFetch?: (url: string, opts?: HttpFetchOptions) => Promise<{ status: number; text: string }>;
 }
 
 export interface FeedProvider {

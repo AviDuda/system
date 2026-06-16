@@ -8,10 +8,11 @@
  * across hosts (pi/agent-browser now, forepaw/Firefox later, a browser-less
  * MCP server).
  */
+import { githubProvider } from "./github";
 import { redditProvider } from "./reddit";
 import type { FeedContext, FeedProvider, FeedResult } from "./types";
 
-const PROVIDERS: FeedProvider[] = [redditProvider];
+const PROVIDERS: FeedProvider[] = [redditProvider, githubProvider];
 
 /** Return the first provider whose `matches()` accepts the URL, else undefined. */
 export function matchFeed(url: string): FeedProvider | undefined {

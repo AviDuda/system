@@ -46,7 +46,7 @@ in
     # OpenRouter with ZDR (Zero Data Retention) enforced in OpenRouter settings
     openrouter = {
       type = "api_key";
-      key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main";
+      key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main'";
     };
     # Z.ai Coding Plan
     zai = {
@@ -156,7 +156,7 @@ in
       openrouter-sidecar = {
         baseUrl = "https://openrouter.ai/api/v1";
         api = "openai-completions";
-        apiKey = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-sidecar";
+        apiKey = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-sidecar'";
         models = [
           {
             id = "deepseek/deepseek-v4-flash";

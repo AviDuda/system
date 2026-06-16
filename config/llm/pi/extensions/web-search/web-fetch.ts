@@ -9,7 +9,7 @@
 import { execFile, spawn } from "node:child_process";
 import { basename } from "node:path";
 import { tryFeed } from "./feeds/registry";
-import type { FeedContext } from "./feeds/types";
+import type { FeedContext, HttpFetchOptions } from "./feeds/types";
 
 export interface FetchResult {
   url: string;
@@ -248,16 +248,16 @@ async function fetchPageInner(
  */
 function buildFeedContext(baseArgs: string[], signal?: AbortSignal): FeedContext {
   return {
-    httpFetch: (target, opts) => httpFetch(target, opts?.signal ?? signal),
+    httpFetch: (target, opts) => httpFetch(target, { ...opts, signal: opts?.signal ?? signal }),
     browserFetch: async (target, s) => browserFetch(baseArgs, target, s ?? signal),
   };
 }
 
 /** Plain-HTTP fetch with the stealth User-Agent. For ungated feeds and feeds reachable without a browser session. */
-async function httpFetch(url: string, signal?: AbortSignal): Promise<{ status: number; text: string }> {
+async function httpFetch(url: string, opts?: HttpFetchOptions): Promise<{ status: number; text: string }> {
   const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9" },
-    signal,
+    headers: { "User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9", ...opts?.headers },
+    signal: opts?.signal,
   });
   const text = await res.text();
   return { status: res.status, text };
