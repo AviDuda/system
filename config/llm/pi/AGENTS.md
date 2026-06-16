@@ -112,6 +112,8 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - `ExtensionUIContext` — `ctx.ui` separately. Use when a helper only needs UI methods. Has `select`, `confirm`, `input`, `notify`, `custom`, `setStatus`, `theme`, etc.
 - `Theme` — theming object with `fg(color, text)`, `bold(text)`, `dim(text)`, etc. Color names: `"accent"`, `"muted"`, `"dim"`, `"success"`, `"warning"`, `"error"`, etc.
 
+**Writing to the session:** `ctx.sessionManager` is **read-only** (typed `ReadonlySessionManager` — a `Pick` of query methods like `getBranch`/`getEntries`; `appendCustomEntry` is NOT on it). To persist state, use `pi.appendEntry(customType, data)` on the `pi` factory param — writes a `custom` session entry that does NOT participate in LLM context. There is no writable session manager handle exposed to extensions; all writes go through `pi.appendEntry` / `pi.setSessionName` / `pi.setLabel`.
+
 ### UI methods (`ctx.ui.*`)
 
 - `ctx.ui.custom<T>(factory)` — show a custom keyboard-focused component. Factory receives `(tui, theme, keybindings, done)`. Return an object with `render(width)`, `invalidate()`, `handleInput(data)`. `done(result)` dismisses it. The component can be a flat object (no Container needed) or a class.
