@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { cleanMarkdown, sessionName, stripAnsi, truncateContent } from "./web-fetch";
+import {
+  buildNavHeaders,
+  cleanMarkdown,
+  NAV_HEADERS,
+  parseEvalString,
+  sessionName,
+  spoofUserAgent,
+  stripAnsi,
+  truncateContent,
+  USER_AGENT,
+} from "./web-fetch";
 
 describe("sessionName", () => {
   test("derives from basename", () => {
@@ -42,6 +52,69 @@ describe("truncateContent", () => {
   test("exact limit is not truncated", () => {
     const result = truncateContent("a".repeat(100), 100);
     expect(result.truncated).toBe(false);
+  });
+});
+
+describe("stealth headers", () => {
+  test("User-Agent is not the headless giveaway", () => {
+    expect(USER_AGENT).not.toContain("HeadlessChrome");
+    expect(USER_AGENT).toMatch(/Chrome\/\d+/);
+  });
+
+  test("NAV_HEADERS is valid JSON carrying the UA + language", () => {
+    const parsed = JSON.parse(NAV_HEADERS);
+    expect(parsed["User-Agent"]).toBe(USER_AGENT);
+    expect(parsed["Accept-Language"]).toMatch(/en/);
+  });
+});
+
+describe("spoofUserAgent", () => {
+  test("swaps HeadlessChrome for Chrome, keeping version", () => {
+    const headless =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36";
+    expect(spoofUserAgent(headless)).toBe(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    );
+  });
+
+  test("no-op on a real-Chrome UA (headed mode)", () => {
+    const real =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+    expect(spoofUserAgent(real)).toBe(real);
+  });
+
+  test("preserves a future major version bump", () => {
+    expect(spoofUserAgent("...HeadlessChrome/200.0.0.0...")).toBe("...Chrome/200.0.0.0...");
+  });
+});
+
+describe("buildNavHeaders", () => {
+  test("produces JSON with the given UA + Accept-Language", () => {
+    const parsed = JSON.parse(buildNavHeaders("MyUA/1.0"));
+    expect(parsed["User-Agent"]).toBe("MyUA/1.0");
+    expect(parsed["Accept-Language"]).toBe("en-US,en;q=0.9");
+  });
+
+  test("NAV_HEADERS matches buildNavHeaders(USER_AGENT)", () => {
+    expect(buildNavHeaders(USER_AGENT)).toBe(NAV_HEADERS);
+  });
+});
+
+describe("parseEvalString", () => {
+  test("parses a JSON-quoted agent-browser eval result", () => {
+    expect(parseEvalString('"Mozilla/5.0 ... Safari/537.36"')).toBe("Mozilla/5.0 ... Safari/537.36");
+  });
+
+  test("strips surrounding quotes on malformed JSON", () => {
+    expect(parseEvalString('"unterminated')).toBe("unterminated");
+  });
+
+  test("passes plain unquoted text through", () => {
+    expect(parseEvalString("plain value")).toBe("plain value");
+  });
+
+  test("strips ANSI codes", () => {
+    expect(parseEvalString('\x1b[32m"hello"\x1b[0m')).toBe("hello");
   });
 });
 

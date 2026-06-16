@@ -29,6 +29,92 @@ export class FetchError extends Error {
   }
 }
 
+// ── Stealth headers ──
+//
+// agent-browser ships Chrome for Testing with `HeadlessChrome/...` in the UA,
+// which tier-1 edge/WAFs (Reddit, StackOverflow) block on sight. A realistic
+// `Chrome/...` User-Agent header clears those server-side checks. This does
+// NOT defeat client-side fingerprinting (Cloudflare Turnstile/WAF, DataDome):
+// those read CDP artifacts no header can hide.
+
+/**
+ * Fallback User-Agent (Chrome 149 = the currently bundled major version).
+ * `resolveNavHeaders` normally reads the browser's real UA instead, so this
+ * only matters if that probe fails. Bump when `agent-browser doctor` shows a
+ * new major version — but in practice the dynamic read keeps it fresh.
+ */
+export const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+
+/**
+ * Swap the HeadlessChrome token for Chrome, keeping the exact version the
+ * browser reports. No-op if the UA already looks like real Chrome (e.g.
+ * `--headed` mode reports `Chrome/...` directly). Reading + spoofing the real
+ * UA means we auto-track agent-browser's bundled Chrome bumps with zero
+ * maintenance, and the version always lines up with the real JS engine.
+ */
+export function spoofUserAgent(rawUa: string): string {
+  return rawUa.replace("HeadlessChrome", "Chrome");
+}
+
+/** Build the navigation-headers JSON string for a given User-Agent. */
+export function buildNavHeaders(userAgent: string): string {
+  return JSON.stringify({
+    "User-Agent": userAgent,
+    "Accept-Language": "en-US,en;q=0.9",
+  });
+}
+
+/** Fallback headers (used if the dynamic UA probe fails). */
+export const NAV_HEADERS = buildNavHeaders(USER_AGENT);
+
+/** Parse agent-browser `eval` stdout (a JSON-quoted string) into the raw value. */
+export function parseEvalString(stdout: string): string {
+  const trimmed = stripAnsi(stdout).trim();
+  if (trimmed.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "string") return parsed;
+    } catch {
+      // fall through to quote-strip
+    }
+  }
+  return trimmed.replace(/^["']|["']$/g, "");
+}
+
+/**
+ * Resolved navigation headers, cached for the process lifetime. One bundled
+ * Chrome → one UA, so a single global cache is correct across sessions/modes.
+ */
+let resolvedHeaders: string | null = null;
+
+/**
+ * Resolve navigation headers, preferring the browser's real (spoofed)
+ * User-Agent over the fallback constant. Reads `navigator.userAgent` once via
+ * an about:blank probe (~0.65s on first fetch), then caches. On any failure
+ * falls back to NAV_HEADERS so fetch still works. Caller (fetchPageInner) runs
+ * inside the fetch mutex, so the cache write is race-free.
+ */
+async function resolveNavHeaders(baseArgs: string[], signal?: AbortSignal): Promise<string> {
+  if (resolvedHeaders) return resolvedHeaders;
+  try {
+    await run([...baseArgs, "open", "about:blank"], { timeout: 8_000, signal });
+    const result = await run([...baseArgs, "eval", "navigator.userAgent"], {
+      timeout: 5_000,
+      signal,
+    });
+    const ua = parseEvalString(result.stdout);
+    if (ua.includes("Chrome")) {
+      resolvedHeaders = buildNavHeaders(spoofUserAgent(ua));
+      return resolvedHeaders;
+    }
+  } catch {
+    // probe failed — fall through to constant
+  }
+  resolvedHeaders = NAV_HEADERS;
+  return resolvedHeaders;
+}
+
 // ── Session naming ──
 
 /** Derive a session name from cwd to isolate browser state per project. */
@@ -99,8 +185,12 @@ async function fetchPageInner(
   const headedArgs = options.headed ? ["--headed"] : [];
   const baseArgs = [...sessionArgs, ...headedArgs];
 
-  // Navigate (safe: mutex ensures no concurrent navigation)
-  await run([...baseArgs, "open", url], {
+  // Stealth headers: realistic UA clears edge/WAF bot checks (Reddit, SO).
+  // Resolves the browser's real UA on first fetch (cached), falls back to constant.
+  const navHeaders = await resolveNavHeaders(baseArgs, options.signal);
+
+  // Navigate (safe: mutex ensures no concurrent navigation).
+  await run([...baseArgs, "--headers", navHeaders, "open", url], {
     timeout: 30_000,
     signal: options.signal,
   });
@@ -140,7 +230,10 @@ async function fetchPageInner(
 /** Convert HTML to markdown via pandoc. Strips data: URI images. */
 function htmlToMarkdown(html: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("pandoc", ["-f", "html", "-t", "commonmark-raw_html", "--wrap=none"], {
+    // gfm-raw_html: GFM pipe tables (commonmark can't represent tables, and
+    // with raw_html disabled it emitted a literal `[TABLE]` placeholder,
+    // silently dropping every table). -raw_html keeps the no-raw-HTML-dumps intent.
+    const child = spawn("pandoc", ["-f", "html", "-t", "gfm-raw_html", "--wrap=none"], {
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 15_000,
     });
