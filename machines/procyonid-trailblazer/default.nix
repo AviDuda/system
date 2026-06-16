@@ -4,6 +4,7 @@
   imports = [
     ../../profiles/personal.nix
     ../../modules/darwin
+    ../../modules/darwin/omlx-gpu-limit.nix
   ];
 
   # Machine-specific settings
