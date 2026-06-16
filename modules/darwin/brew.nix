@@ -19,7 +19,7 @@
       autoUpdate = false;
       upgrade = false;
       cleanup = "zap";
-      extraFlags = [ "--verbose" ];
+      extraFlags = [ "--verbose" "--force-cleanup" ];
     };
 
     global = {

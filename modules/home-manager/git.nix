@@ -1,5 +1,5 @@
 # Git configuration with 1Password SSH signing
-{ pkgs, pkgs-unstable, ... }:
+{ pkgs-unstable, ... }:
 {
   programs.git = {
     enable = true;
