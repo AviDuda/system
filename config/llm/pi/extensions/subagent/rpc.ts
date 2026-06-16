@@ -609,18 +609,22 @@ export async function runSingleAgent(
             emitUpdate();
             // Clear footer status on completion
             ctx.ui.setStatus("subagent", undefined);
-            // Pi's RPC mode runs `return new Promise(() => {})` to keep alive forever.
-            // No shutdown command exists. Abort cancels the agent operation, then
-            // SIGTERM triggers the registered signal handler which calls shutdown().
+            // Pi's RPC mode runs `return new Promise(() => {})` to keep alive forever —
+            // no shutdown command. Closing stdin triggers the child's onInputEnd handler,
+            // which calls shutdown() with the default exit code 0 (clean exit). The abort
+            // command first cancels any in-flight operation so dispose() is clean.
+            // SIGTERM was previously used here, but its handler hard-codes exit 143, which
+            // the parent read as a failure (isError = exitCode !== 0) and wrapped the
+            // result as "Agent failed:" even on a successful run.
             if (proc.stdin) {
               proc.stdin.write(`${JSON.stringify({ type: "abort" })}\n`);
+              proc.stdin.end();
             }
-            // SIGTERM triggers pi's shutdown handler (registered via registerSignalHandlers).
-            proc.kill("SIGTERM");
-            // Fallback: SIGKILL if SIGTERM doesn't work within 3s.
+            // Escalation fallback if stdin-close doesn't exit the child within 3s.
             killTimer = setTimeout(() => {
               if (!proc.killed) {
-                proc.kill("SIGKILL");
+                proc.kill("SIGTERM");
+                if (!proc.killed) proc.kill("SIGKILL");
               }
             }, 3000);
           }
