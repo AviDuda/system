@@ -77,27 +77,21 @@ Both share `~/.lmstudio/models/` -- LM Studio can load both GGUF and MLX models,
 
 **LM Studio** is kept for model discovery (tells you if a model fits your RAM, curated suggestions, HuggingFace search). oMLX is the performance server -- tiered KV cache (RAM + SSD), continuous batching, multi-model serving with LRU eviction. oMLX's admin dashboard at `:8124/admin` also provides model search/download, chat, benchmarking, and settings -- sufficient for day-to-day without the GUI app.
 
-### Models (M4 Pro 48 GB)
+### Providers and model selection
 
-| Model | Format | Server | Size | Type |
-|-------|--------|--------|------|------|
-| Qwen 3.6 35B A3B UD | MLX 4-bit (Unsloth) | oMLX :8124 | ~25.6 GB | MoE 3B active |
-| Qwen 3.6 27B 6-bit | MLX 6-bit | oMLX :8124 | ~21.2 GB | Dense 27B |
-| Qwen 3.6 27B 4-bit | MLX 4-bit | oMLX :8124 | ~15.0 GB | Dense 27B |
-| Qwen 3.5 9B | GGUF | LM Studio :1234 | ~5 GB | Dense 9B |
-| GLM-4.7 Flash | MLX 6-bit | oMLX :8124 | ~23.8 GB | -- |
+Three tiers of providers, defined in `modules/home-manager/pi.nix`. Specific models come and go -- this section describes the tiers, not the inventory. `pi.nix` is the source of truth.
 
-### Qwen 3.6 chat template
+1. **Local inference** -- `omlx` (:8124, MLX) and `lmstudio` (:1234, GGUF). Zero cost, offline-capable, used for sidecar roles and offline main-model work. Local models are also kept in the sidecar fallback chains as free options ahead of paid cloud.
+2. **Cloud coding plans** -- flat-rate providers (currently z.ai) with no per-token cost. Good for main-model and sidecar use within plan limits.
+3. **OpenRouter** -- pay-per-token router with ZDR enforced at the account level. Two keys (main + sidecar) with separate spend caps; `openrouter-sidecar` carries cheap fallback models for sidecar roles, and the main key can route to any provider for backup main models.
 
-The Qwen 3.6 35B-A3B uses [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates) v19 instead of either the [official Qwen template](https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/chat_template.jinja) or the [unsloth UD template](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit/blob/main/chat_template.jinja) it shipped with. All three are different.
+Sidecar roles (explain, draft, vision) try the fastest suitable local model first, then cloud, then cheaper/last-resort options. The exact chains and per-model `requestParams` live in the `roles` block of `pi.nix`. When picking local models for sidecar use, throughput matters most -- only the fastest local quants are viable at sidecar latency; slower models are kept in the chain for experimentation.
 
-**Unsloth vs official:** unsloth adds developer role support (merges up to 2 system/developer messages), `|safe` on tojson for tool arguments, minijinja-compatible argument iteration (`for args_name in tool_call.arguments` instead of `|items`), and a multi-step tool heuristic (`last_query_index`) that preserves thinking only within the current tool chain. Both share the same core bugs: no error escalation, no think toggle, no empty-think prevention, and `preserve_thinking` not defaulted.
+### Chat templates for local models
 
-**froggeric v19 vs unsloth:** adds error escalation (warns on 1st tool error, forces corrected action on 2nd+ consecutive failure), `preserve_thinking` defaults to true (prevents amnesia in multi-turn tool chains), empty think block prevention (no KV cache drift), `<|think_on|>`/`<|think_off|>` toggle tokens per message, multiple think-end token handling (`</thinking>`, `</ think>`, etc.), string argument passthrough, and `add_vision_id` undefined guard.
+Local models load a chat template from `~/.lmstudio/models/<model>/chat_template.jinja` on disk (both LM Studio and oMLX read it from there). The template controls prompt formatting -- tool-call syntax, thinking on/off, system/developer role handling -- and the default template a quant ships with is often not the best one.
 
-The template file is `~/.lmstudio/models/Qwen3.6-35B-A3B-UD-MLX-4bit/chat_template.jinja`. LM Studio and oMLX both read it from disk on model load.
-
-The sidecar role fallback chains prioritize: 35B-A3B-UD (~35 tok/s, fastest MoE) → 27B-6bit → 27B-4bit. The 35B-A3B-UD is the only local model fast enough for sidecar latency. The 27B models are kept in the chain for experimentation despite being slower (~8 tok/s or lower). The 27B-4-bit listed is the standard `mlx-community` quant (not the bloated UD variant), which is 10.6 GB lighter than the UD and fits with KV cache headroom.
+When using Qwen-family local models, the [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates) template is preferred over both the official Qwen template and the unsloth UD template. It adds the things that matter for agent workloads: tool-call error escalation (forces a corrected action after repeated failures), `preserve_thinking` defaulted to true (prevents amnesia in multi-turn tool chains), empty-think-block prevention (avoids KV cache drift), and per-message think on/off toggles. The template file lives at `~/.lmstudio/models/<model>/chat_template.jinja`.
 
 ### Why both GGUF and MLX
 
@@ -107,7 +101,7 @@ Prefill speed: llama.cpp is faster at batch prompt processing (3+ years of optim
 
 ### Model routing in pi
 
-`modules/home-manager/pi.nix` defines providers and sidecar role fallback chains. Roles (explain, draft, vision) try cloud models first, then local oMLX, then local LM Studio as last resort. The `omlx` provider at `:8124` serves MLX models; `lmstudio` at `:1234` serves GGUF models.
+`modules/home-manager/pi.nix` defines providers and sidecar role fallback chains. Roles (explain, draft, vision) try the fastest suitable local model first, then cloud providers, with cheaper/last-resort options last. The `omlx` provider at `:8124` serves MLX models; `lmstudio` at `:1234` serves GGUF models.
 
 Per-model `requestParams` in roles.json controls thinking behavior and sampling per role (implemented via pi's `onPayload` hook):
 - `explain`/`draft`: `chat_template_kwargs: { enable_thinking: false }` -- skip chain-of-thought for fast sidecar responses
@@ -132,11 +126,11 @@ On unload, MLX arrays (weights + KV cache) are freed from Metal memory and retur
 
 Enabled per-model in the admin panel under Experimental Features.
 
-**TurboQuant KV cache** (enabled on Qwen 3.6 at 4-bit): compresses KV cache using vector quantization. At 4-bit, ~4x compression with negligible quality loss. This is the most impactful feature for memory-constrained setups -- a 32K context that would need ~6-8 GB KV cache at fp16 drops to ~1.5-2 GB.
+**TurboQuant KV cache**: compresses KV cache using vector quantization. At 4-bit, ~4x compression with negligible quality loss. The most impactful feature for memory-constrained setups -- a 32K context that would need ~6-8 GB KV cache at fp16 drops to ~1.5-2 GB. Enable per-model in the admin panel.
 
-**SpecPrefill** (not enabled): attention-based sparse prefill for MoE models. Skipped because prefill speed (~705 tok/s) isn't the bottleneck, and there are open bugs with quantized models.
+**SpecPrefill** (not enabled): attention-based sparse prefill for MoE models. Skipped because prefill speed isn't the bottleneck for this workload, and there are open bugs with quantized models.
 
-**DFlash** (not enabled): block diffusion speculative decoding for 3-4x faster generation. Only supports Qwen 3.5 family, falls back to normal engine for contexts >4K tokens (most agent conversations), and no paged/SSD cache integration. Faster generation would also make iTerm2 flicker worse.
+**DFlash** (not enabled): block diffusion speculative decoding for 3-4x faster generation. Limited model-family support, falls back to normal engine for contexts >4K tokens (most agent conversations), and no paged/SSD cache integration. Faster generation would also make iTerm2 flicker worse.
 
 ### oMLX setup
 
