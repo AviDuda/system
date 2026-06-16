@@ -148,12 +148,15 @@ function getOpenRouterKey(): string {
 
 function getAAKey(): string {
   try {
-    const secretsPath = join(import.meta.dirname ?? ".", "..", "secrets", "llm.yaml");
-    return execSync(`sops --decrypt --extract '["artificialanalysis"]' "${secretsPath}"`, {
-      encoding: "utf-8",
-    }).trim();
+    const key = execSync(
+      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/generic/artificialanalysis",
+      {
+        encoding: "utf-8",
+      },
+    ).trim();
+    return key;
   } catch {
-    console.error(`${RED}Artificial Analysis key not found in sops (secrets/llm.yaml:artificialanalysis)${RESET}`);
+    console.error(`${RED}Artificial Analysis key not found in 1Password${RESET}`);
     process.exit(1);
   }
 }

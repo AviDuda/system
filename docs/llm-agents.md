@@ -87,6 +87,16 @@ Both share `~/.lmstudio/models/` -- LM Studio can load both GGUF and MLX models,
 | Qwen 3.5 9B | GGUF | LM Studio :1234 | ~5 GB | Dense 9B |
 | GLM-4.7 Flash | MLX 6-bit | oMLX :8124 | ~23.8 GB | -- |
 
+### Qwen 3.6 chat template
+
+The Qwen 3.6 35B-A3B uses [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates) v19 instead of either the [official Qwen template](https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/chat_template.jinja) or the [unsloth UD template](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit/blob/main/chat_template.jinja) it shipped with. All three are different.
+
+**Unsloth vs official:** unsloth adds developer role support (merges up to 2 system/developer messages), `|safe` on tojson for tool arguments, minijinja-compatible argument iteration (`for args_name in tool_call.arguments` instead of `|items`), and a multi-step tool heuristic (`last_query_index`) that preserves thinking only within the current tool chain. Both share the same core bugs: no error escalation, no think toggle, no empty-think prevention, and `preserve_thinking` not defaulted.
+
+**froggeric v19 vs unsloth:** adds error escalation (warns on 1st tool error, forces corrected action on 2nd+ consecutive failure), `preserve_thinking` defaults to true (prevents amnesia in multi-turn tool chains), empty think block prevention (no KV cache drift), `<|think_on|>`/`<|think_off|>` toggle tokens per message, multiple think-end token handling (`</thinking>`, `</ think>`, etc.), string argument passthrough, and `add_vision_id` undefined guard.
+
+The template file is `~/.lmstudio/models/Qwen3.6-35B-A3B-UD-MLX-4bit/chat_template.jinja`. LM Studio and oMLX both read it from disk on model load.
+
 The sidecar role fallback chains prioritize: 35B-A3B-UD (~35 tok/s, fastest MoE) → 27B-6bit → 27B-4bit. The 35B-A3B-UD is the only local model fast enough for sidecar latency. The 27B models are kept in the chain for experimentation despite being slower (~8 tok/s or lower). The 27B-4-bit listed is the standard `mlx-community` quant (not the bloated UD variant), which is 10.6 GB lighter than the UD and fits with KV cache headroom.
 
 ### Why both GGUF and MLX

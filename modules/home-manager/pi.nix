@@ -34,86 +34,55 @@ in
     - Only use write for genuinely new files or when the entire file content is changing.
   '';
 
+  # auth.json file storing API keys and OAuth, see auth-storage.ts in pi.
+  ".pi/agent/auth.json".text = builtins.toJSON {
+    # OpenRouter with ZDR (Zero Data Retention) enforced in OpenRouter settings
+    openrouter = {
+      type = "api_key";
+      key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main";
+    };
+    # Z.ai Coding Plan
+    zai = {
+      type = "api_key";
+      key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/zai'";
+    };
+  };
+
   # Custom model providers (LM Studio local models, etc.)
   # Pi reloads this on /model -- no restart needed.
   # Models defined here are available as both main models (in pi's model picker)
   # and sidecar models (via roles.json refs like "provider/model-id").
   ".pi/agent/models.json".text = builtins.toJSON {
     providers = {
-      # z.ai GLM Coding plan -- direct provider (not via OpenRouter)
-      # API key stored in sops: sops secrets/llm.yaml -> glm_pi
-      zai = {
-        baseUrl = "https://api.z.ai/api/coding/paas/v4";
-        api = "openai-completions";
-        apiKey = "!cat /run/secrets/glm_pi";
-        models = [
-          {
-            id = "glm-5.1";
-            name = "GLM-5.1 (z.ai)";
-            reasoning = true;
-            input = [ "text" ];
-            contextWindow = 204800;
-            maxTokens = 131072;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
-            compat = {
-              supportsDeveloperRole = false;
-              thinkingFormat = "zai";
-            };
-          }
-          {
-            id = "glm-4.7-flash";
-            name = "GLM-4.7 Flash (z.ai)";
-            reasoning = true;
-            input = [ "text" ];
-            contextWindow = 200000;
-            maxTokens = 131072;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
-            compat = {
-              supportsDeveloperRole = false;
-              thinkingFormat = "zai";
-            };
-          }
-          {
-            id = "glm-4.6v-flash";
-            name = "GLM-4.6V Flash (z.ai)";
-            reasoning = false;
-            input = [ "text" "image" ];
-            contextWindow = 128000;
-            maxTokens = 4096;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
-            compat = {
-              supportsDeveloperRole = false;
-              thinkingFormat = "zai";
-            };
-          }
-        ];
-      };
+      # Category: Local providers
+
       lmstudio = {
         baseUrl = "http://127.0.0.1:1234/v1";
         api = "openai-completions";
         apiKey = "lm-studio";
-        compat = {
-          supportsDeveloperRole = false;
-          supportsReasoningEffort = false;
-          thinkingFormat = "qwen-chat-template";
-        };
         models = [
+          # byteshape's Qwen has a better perf than Unsloth's
+          # See https://byteshape.com/blogs/Qwen3.6-35B-A3B/
           {
-            id = "qwen/qwen3.5-9b";
-            name = "Qwen3.5 9B (Local)";
+            id = "byteshape/qwen3.6-35b-a3b";
+            name = "Byteshape Qwen3.6 35B A3B (local)";
             reasoning = true;
             input = [ "text" "image" ];
             contextWindow = 262144;
-            maxTokens = 8192;
+            maxTokens = 16384;
             cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            compat = {
+              supportsDeveloperRole = false;
+              supportsReasoningEffort = false;
+              thinkingFormat = "qwen-chat-template";
+            };
           }
         ];
       };
       # oMLX: MLX inference server with tiered KV cache, continuous batching.
       # Shares ~/.lmstudio/models/ with LM Studio. Auto-starts via brew service.
-      # Qwen 3.6 27B dense (UD MLX 4-bit) -- 27B active params, better quality than MoE.
       # requestParams per-role in roles.json override oMLX global sampling defaults.
-      # Global defaults (for direct oMLX chat): temp=0.6, top_p=0.95, top_k=20 (precise coding).
+      # Global Qwen defaults: temp=0.6, top_p=0.95, top_k=20 (precise coding).
       # Sidecar roles override to: temp=0.7, top_p=0.8, top_k=20 (concise non-thinking).
       omlx = {
         baseUrl = "http://127.0.0.1:8124/v1";
@@ -126,16 +95,7 @@ in
             reasoning = true;
             input = [ "text" "image" ];
             contextWindow = 262144;
-            maxTokens = 8192;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
-          }
-          {
-            id = "Qwen3.6-27B-6bit";
-            name = "Qwen 3.6 27B 6-bit (oMLX)";
-            reasoning = true;
-            input = [ "text" "image" ];
-            contextWindow = 262144;
-            maxTokens = 8192;
+            maxTokens = 16384;
             cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
           }
           {
@@ -144,78 +104,61 @@ in
             reasoning = true;
             input = [ "text" "image" ];
             contextWindow = 262144;
-            maxTokens = 8192;
+            maxTokens = 16384;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+          }
+          {
+            id = "gemma-4-31b-it-UD-MLX-4bit";
+            name = "Gemma 4 31B UD 4bit";
+            reasoning = true;
+            input = [ "text" "image" ];
+            contextWindow = 262144;
+            maxTokens = 16384;
             cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
           }
         ];
       };
-      # OpenRouter: backup models for when Claude is down.
-      # ZDR enforced at account level -- data never retained by providers.
-      # Two providers with separate API keys for cost tracking:
-      #   openrouter-main: backup main models (higher spend cap)
-      #   openrouter-sidecar: cheap fallback for explain/draft roles (tight cap)
-      # Create keys: security add-generic-password -s openrouter-pi-main -a $USER -w 'sk-or-...'
-      #              security add-generic-password -s openrouter-pi-sidecar -a $USER -w 'sk-or-...'
-      # Model info: curl -s https://openrouter.ai/api/v1/models | jq '.data[] | select(.id == "MODEL_ID") | {id, context_length, max_completion: .top_provider.max_completion_tokens, pricing}'
-      openrouter-main = {
-        baseUrl = "https://openrouter.ai/api/v1";
-        api = "openai-completions";
-        apiKey = "!security find-generic-password -s openrouter-pi-main -w";
+
+      # Category: Cloud providers
+
+      # z.ai GLM Coding plan
+      zai = {
         models = [
-          # Auto-router: picks best model per prompt from allowed set.
-          # Configure allowed models in OpenRouter Settings > Plugins > Auto Router.
-          # Suggested patterns: z-ai/*, deepseek/*, moonshotai/*, qwen/*
           {
-            id = "openrouter/auto";
-            name = "Auto (OpenRouter)";
+            id = "glm-5.2";
+            name = "GLM-5.2 (z.ai)";
             reasoning = true;
-            input = [ "text" "image" ];
-            contextWindow = 2000000;
-            maxTokens = 16384;
-            cost = { input = 0.5; output = 2; cacheRead = 0; cacheWrite = 0; };
-          }
-          {
-            id = "z-ai/glm-5";
-            name = "GLM 5 (OpenRouter)";
-            reasoning = false;
             input = [ "text" ];
-            contextWindow = 80000;
-            maxTokens = 16384;
-            cost = { input = 0.72; output = 2.3; cacheRead = 0; cacheWrite = 0; };
-          }
-          {
-            id = "moonshotai/kimi-k2.5";
-            name = "Kimi K2.5 (OpenRouter)";
-            reasoning = true;
-            input = [ "text" "image" ];
-            contextWindow = 262144;
-            maxTokens = 65535;
-            cost = { input = 0.42; output = 2.2; cacheRead = 0; cacheWrite = 0; };
-          }
-          {
-            id = "deepseek/deepseek-v3.2";
-            name = "DeepSeek V3.2 (OpenRouter)";
-            reasoning = false;
-            input = [ "text" ];
-            contextWindow = 163840;
-            maxTokens = 16384;
-            cost = { input = 0.26; output = 0.38; cacheRead = 0; cacheWrite = 0; };
+            contextWindow = 1000000;
+            maxTokens = 131072;
+            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+            compat = {
+              supportsDeveloperRole = false;
+              thinkingFormat = "zai";
+              zaiToolStream = true;
+            };
+            thinkingLevelMap = {
+              low = "high";
+              high = "max";
+              xhigh = "max";
+            };
           }
         ];
       };
+
       openrouter-sidecar = {
         baseUrl = "https://openrouter.ai/api/v1";
         api = "openai-completions";
-        apiKey = "!security find-generic-password -s openrouter-pi-sidecar -w";
+        apiKey = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-sidecar";
         models = [
           {
-            id = "deepseek/deepseek-v3.2";
-            name = "DeepSeek V3.2 (Sidecar)";
+            id = "deepseek/deepseek-v4-flash";
+            name = "DeepSeek V4 Flash (Sidecar)";
             reasoning = false;
             input = [ "text" ];
             contextWindow = 163840;
             maxTokens = 4096;
-            cost = { input = 0.26; output = 0.38; cacheRead = 0; cacheWrite = 0; };
+            cost = { input = 0.1; output = 0.19; cacheRead = 0; cacheWrite = 0; };
           }
         ];
       };
@@ -234,12 +177,12 @@ in
       maxTokens = 256;
       models = [
         { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
-        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "openrouter-sidecar/deepseek/deepseek-v4-flash"; thinking = "off"; }
+        { ref = "omlx/gemma-4-31b-it-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
         { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
-        { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
         { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
       ];
     };
@@ -247,20 +190,21 @@ in
       maxTokens = 128;
       models = [
         { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
-        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "openrouter-sidecar/deepseek/deepseek-v4-flash"; thinking = "off"; }
+        { ref = "omlx/gemma-4-31b-it-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; }; }
         { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { chat_template_kwargs = { enable_thinking = false; }; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.5-air"; thinking = "off"; }
         { ref = "zai/glm-4.7-flash"; thinking = "off"; }
         { ref = "anthropic/claude-haiku-4-5"; thinking = "off"; }
-        { ref = "openrouter-sidecar/deepseek/deepseek-v3.2"; thinking = "off"; }
         { ref = "lmstudio/qwen/qwen3.5-9b"; thinking = "off"; maxAttempts = 2; }
       ];
     };
     vision = {
-      maxTokens = 3072;
+      maxTokens = 4096;
       models = [
+        { ref = "openrouter/google/gemini-2.5-flash-lite"; }
         { ref = "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
-        { ref = "omlx/Qwen3.6-27B-6bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
+        { ref = "omlx/gemma-4-31b-it-UD-MLX-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; }; }
         { ref = "omlx/Qwen3.6-27B-4bit"; thinking = "off"; maxAttempts = 2; requestParams = { thinking_budget = 1024; temperature = 0.7; top_p = 0.8; top_k = 20; }; }
         { ref = "zai/glm-4.6v-flash"; thinking = "off"; }
       ];

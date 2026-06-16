@@ -30,13 +30,6 @@
     owner = config.user.name;
   };
 
-  # z.ai GLM Coding plan for Pi agent
-  sops.secrets.glm_pi = {
-    sopsFile = ../../secrets/llm.yaml;
-    key = "glm_pi";
-    owner = config.user.name;
-  };
-
   sops.templates."nix-github.conf" = {
     owner = config.user.name;
     content = ''
