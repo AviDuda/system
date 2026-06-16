@@ -323,7 +323,7 @@ export async function runSingleAgent(
   // Agent-specific extensions come from the `extensions` frontmatter field.
   args.push("--no-extensions");
 
-  const defaultSubagentExtensions = ["agents-loader"];
+  const defaultSubagentExtensions = ["agents-loader", "permission-gate"];
   const agentExtensions = agent.extensions ?? [];
   const allExtensions = [...new Set([...defaultSubagentExtensions, ...agentExtensions])];
 
@@ -379,6 +379,24 @@ export async function runSingleAgent(
   let agentEndReceived = false; // tracks whether agent_end fired (normal completion)
   let eventCount = 0;
   let updateCount = 0; // how many times emitUpdate was called
+
+  // ── Extension UI relay ──
+  // Subagent's ctx.ui.confirm()/select()/input() emit extension_ui_request events on stdout.
+  // We relay them to the parent's TUI via ctx.ui, then send the response back on stdin.
+  //
+  // The Promise resolves synchronously when the response arrives, which unblocks the event
+  // loop (the await yields to the microtask). The event loop then continues processing stdin
+  // events normally. See: https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-pending-tasks
+  const pendingDialogs = new Map<
+    string,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  const DIALOG_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+  const cleanup = () => {
+    for (const { timer } of pendingDialogs.values()) clearTimeout(timer);
+    pendingDialogs.clear();
+  };
   // Track how many tool calls have been sent, for incremental updates
   const emitUpdate = () => {
     if (onUpdate) {
@@ -613,24 +631,101 @@ export async function runSingleAgent(
           // Steering messages are queued — isStreaming tells us if we can send more
         }
 
-        // ── Extension UI request (permission gate, etc.) ──
+        // ── Extension UI request relay (permission gate, etc.) ──
+        // Subagent's ctx.ui.confirm()/select()/input() emit these on stdout.
+        // Relay to parent's TUI, then send response back on stdin.
         if (eventType === "extension_ui_request") {
-          // In RPC mode, extension UI requests come through stdout.
-          // We need to forward them to the parent's UI via the RPC extension UI sub-protocol.
-          // The parent TUI handles this automatically when running interactively.
-          // For subagent steering, we just log it.
           const method = event.method as string;
-          if (method === "confirm" || method === "select" || method === "input") {
-            // Dialog methods need a response — but subagents don't have UI access.
-            // Auto-resolve with defaults to avoid blocking.
-            const requestId = event.id as string;
-            if (method === "confirm") {
-              writeRpcCommand(proc, { type: "extension_ui_response", id: requestId, cancelled: true });
-            } else {
-              writeRpcCommand(proc, { type: "extension_ui_response", id: requestId, cancelled: true });
-            }
+          const requestId = event.id as string;
+          // Fire-and-forget methods — no response needed
+          if (
+            method === "notify" ||
+            method === "setStatus" ||
+            method === "setWorkingMessage" ||
+            method === "setWorkingVisible" ||
+            method === "setWorkingIndicator" ||
+            method === "setHiddenThinkingLabel" ||
+            method === "setWidget" ||
+            method === "setFooter" ||
+            method === "setHeader" ||
+            method === "setTitle" ||
+            method === "pasteToEditor" ||
+            method === "setEditorText" ||
+            method === "addAutocompleteProvider" ||
+            method === "setEditorComponent"
+          ) {
+            return;
           }
-          // Fire-and-forget methods (notify, setStatus, etc.) — no response needed
+          if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor") {
+            return;
+          }
+          // Already waiting on a dialog — ignore (permission gate shouldn't stack)
+          if (pendingDialogs.has(requestId)) return;
+
+          // Create a placeholder entry — the actual Promise is created by ctx.ui.confirm()
+          // below. We just track the requestId to prevent duplicate handling.
+          const timer = setTimeout(() => {
+            pendingDialogs.delete(requestId);
+            // Send cancellation to subagent so it doesn't hang forever
+            writeRpcCommand(proc, { type: "extension_ui_response", id: requestId, cancelled: true });
+          }, DIALOG_TIMEOUT_MS);
+          pendingDialogs.set(requestId, { resolve: () => {}, reject: () => {}, timer });
+
+          // Store the actual resolve/reject so the extension_ui_response handler
+          // can resolve the child's ctx.ui.custom() Promise.
+          const entry = pendingDialogs.get(requestId);
+          if (!entry) return;
+          entry.resolve = () => {
+            pendingDialogs.delete(requestId);
+            clearTimeout(entry.timer);
+          };
+          entry.reject = () => {
+            pendingDialogs.delete(requestId);
+            clearTimeout(entry.timer);
+          };
+
+          // Relay to parent's TUI. The await blocks this async fn but NOT the event
+          // loop — when the parent responds, the Promise resolves synchronously,
+          // scheduling a microtask that continues this relay after the current sync
+          // code finishes.
+          const relayToParent = async () => {
+            try {
+              let result: unknown;
+              if (method === "confirm") {
+                const title = (event.title as string) || "Permission";
+                const message = (event.message as string) || "";
+                result = await ctx.ui.confirm(title, message, { timeout: event.timeout as number | undefined });
+              } else if (method === "select") {
+                const title = (event.title as string) || "Select";
+                const options = (event.options as string[]) || [];
+                result = await ctx.ui.select(title, options, { timeout: event.timeout as number | undefined });
+              } else if (method === "input") {
+                const title = (event.title as string) || "Input";
+                const placeholder = (event.placeholder as string) || "";
+                result = await ctx.ui.input(title, placeholder, { timeout: event.timeout as number | undefined });
+              } else {
+                // editor — not supported in relay, auto-cancel
+                result = undefined;
+              }
+              // Send response back to subagent
+              writeRpcCommand(proc, {
+                type: "extension_ui_response",
+                id: requestId,
+                value: result,
+                confirmed: method === "confirm" ? result : undefined,
+                cancelled: !result,
+              });
+            } catch {
+              // Dialog was cancelled/timed out — send cancellation
+              writeRpcCommand(proc, { type: "extension_ui_response", id: requestId, cancelled: true });
+            } finally {
+              pendingDialogs.delete(requestId);
+            }
+          };
+
+          relayToParent().catch(() => {
+            // Relay failed (timeout, abort) — already sent cancellation above
+          });
         }
 
         // ── Extension error ──
@@ -686,6 +781,7 @@ export async function runSingleAgent(
     if (wasAborted && !agentEndReceived) throw new Error("Subagent was aborted");
     return currentResult;
   } finally {
+    cleanup();
     if (tmpPromptPath)
       try {
         fs.unlinkSync(tmpPromptPath);

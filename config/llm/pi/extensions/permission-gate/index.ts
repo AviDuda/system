@@ -12,7 +12,6 @@ import {
   type ExtensionContext,
   type ExtensionUIContext,
   renderDiff,
-  type Theme,
 } from "@earendil-works/pi-coding-agent";
 
 // Deep import: pi doesn't export edit-diff from its package exports map.
@@ -29,7 +28,6 @@ type ComputeEditsDiffFn = (
 
 let _computeEditsDiff: ComputeEditsDiffFn | undefined;
 
-import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
   type ConfirmResult,
@@ -144,19 +142,27 @@ export default function permissionGate(pi: ExtensionAPI) {
 
   /** Show confirmation dialog with optional inline note. */
   async function confirm(
-    ctx: {
-      ui: {
-        custom: <T>(
-          fn: (tui: TUI, theme: Theme, kb: KeybindingsManager, done: (v: T) => void) => Component,
-        ) => Promise<T>;
-      };
-    },
+    ctx: ExtensionContext,
     title: string,
     options: string[],
     explanation?: ExplanationProvider,
     diffBody?: DiffBody,
     detailsBody?: DetailsBody,
   ): Promise<ConfirmResult> {
+    // In non-TUI modes (rpc/print/json), ctx.ui.custom() returns undefined — no
+    // TUI to render the multi-option dialog. Fall back to ctx.ui.confirm(), which
+    // works over RPC (relayed to the parent TUI by the subagent extension) and
+    // returns a boolean. Can't show diff/explanation or multi-option choices here.
+    //
+    // Guard on ctx.mode, NOT ctx.hasUI: hasUI is true in RPC mode by design
+    // (confirm/select/input work there), but custom() does not. Guarding on
+    // !ctx.hasUI skipped this branch in subagents, so confirm() fell through to
+    // custom() → undefined → crash in handleDialogAutoToggle (toggledAutoClassify).
+    if (ctx.mode !== "tui") {
+      const confirmed = await ctx.ui.confirm(title, options.join(", "));
+      return { choice: confirmed ? options[0] : null, note: "", explanation: null };
+    }
+
     const uiOptions: ConfirmUIOptions = {
       autoClassify: state.autoClassify === "on",
       hasExplainRole: hasRole("explain"),
@@ -524,9 +530,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
 
     // action === "confirm"
-    // RPC mode (subagents) reports hasUI=true but ctx.ui.custom() returns undefined.
-    // Block with reason — no dialog possible.
-    if (!ctx.hasUI || process.env.PI_SUBAGENT === "1") {
+    // RPC mode subagents use ctx.ui.confirm()/select()/input() which emit
+    // extension_ui_request events. The subagent extension relays these to the
+    // parent's TUI and sends back extension_ui_response on stdin.
+    if (!ctx.hasUI) {
       return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
     }
 

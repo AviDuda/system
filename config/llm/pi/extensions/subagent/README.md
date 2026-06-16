@@ -98,9 +98,9 @@ Subagents run with:
 
 | Method | Works in subagents? | Behavior |
 |--------|---------------------|----------|
-| `confirm()` | Yes (auto-cancelled) | Emits `extension_ui_request`, auto-cancelled by subagent event loop |
-| `select()` | Yes (auto-cancelled) | Same as confirm |
-| `input()` | Yes (auto-cancelled) | Same as confirm |
+| `confirm()` | Yes (relayed) | Emitted to parent TUI via relay, response sent back on stdin |
+| `select()` | Yes (relayed) | Same as confirm |
+| `input()` | Yes (relayed) | Same as confirm |
 | `custom()` | No (returns undefined) | No-op in RPC mode — crashes callers that expect a result |
 | `notify()` | Yes | Fire-and-forget RPC event |
 | `setStatus()` | Yes | Fire-and-forget RPC event |
@@ -119,6 +119,6 @@ Subagents run with:
 ## Known limitations
 
 - **RPC shutdown**: pi has no `shutdown` command, so the extension uses SIGTERM + SIGKILL with a 5s timeout. Works but isn't clean.
-- **`custom()` in subagents**: extensions using `ctx.ui.custom()` will crash in subagent mode (returns undefined). Permission-gate is disabled for this reason.
+- **`custom()` in subagents**: extensions using `ctx.ui.custom()` will crash in subagent mode (returns undefined). The permission gate uses `confirm()`/`select()`/`input()` instead, which are relayed to the parent TUI.
 - **`web_fetch` blocked**: not in the permission gate's READ_ONLY_TOOLS, so it gets blocked in subagent mode. `web_search` is whitelisted.
 - **Parallel/chain modes**: implemented but not heavily tested beyond basic scenarios.
