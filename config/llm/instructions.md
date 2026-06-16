@@ -56,6 +56,13 @@ Write journal files directly — not via subagents. They lose the conversation c
 
 **Maintain TODO.md.** In the journal directory, keep `TODO.md` listing only unfinished work and open questions. Remove done items. Keep it short and current — not a backlog.
 
+TODO.md rules:
+- **Only actionable items you're actively working on or will work on next.** No wishlists, no reference material, no competitive analysis, no product ideas. That stuff goes in project docs or journal entries.
+- **Never add completed items.** Remove items when done, don't add "DONE" entries.
+- **No design docs.** If a feature needs design spec, write a journal entry and link it from TODO with one line.
+- **Plain prose, not Markdown checkboxes.** Use `- item` not `- [ ] item`. TODO is a living doc, not a checklist to tick off.
+- **Edit the file if it already exists.** Never fully rewrite the file.
+
 **Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
 
 ## Knowledge Routing
