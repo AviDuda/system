@@ -17,19 +17,28 @@ Split a file that has grown too large or mixes concerns into focused, cohesive m
 3. Propose the split plan to the user before making changes. Include:
    - File names and approximate line counts
    - Which functions/types go where
+   - Whether the target is a **new file** or an **existing file**
    - Dependencies between new files (imports)
    - Whether any new file is pure/testable
+4. If moving code into an **existing file**, read it first to understand its imports, conventions, and where the new code fits.
 
 ## Workflow
 
-### 1. Extract sections into new files
+### 1. Extract or move sections
 
-Extract in any order. Use LSP for symbol-level moves when available, otherwise use text tools.
+For **new files**: extract in any order. Use LSP for symbol-level moves when available, otherwise use text tools.
 
-- **`sed -n 'START,ENDp' file >> newfile`** — extract a section into a new file
+- **`sed -n 'START,ENDp' file > newfile`** — extract a section into a new file (use `>` not `>>` for the first section)
 - **`edit`** — fix imports, add exports, adjust signatures
 
+For **existing files**: same mechanics, but:
+- **Read the target file first** to avoid duplicating imports and to respect its conventions
+- **Merge imports** rather than appending a second `use`/`import` block
+- **Place code where it logically belongs**, not just at the end. Use `sed -n 'START,ENDp' source > /tmp/section` then `sed -i 'TARGET_LINEr /tmp/section' target` to insert at the right position (e.g., grouped with related functions, after types they depend on). On macOS, use `gsed` since BSD `sed` handles `-i` differently.
+
 **Do NOT use `write`** for moving code between files. It loses context and makes review harder.
+
+**Line numbers are stable during extraction** — you're only creating/modifying target files and fixing imports in the source, not deleting from it yet. Re-check line numbers with `rg -n` only if you've already started deleting (step 3).
 
 ### 2. Fix exports and imports
 
@@ -37,8 +46,10 @@ Use `edit` to add `export` to public functions/types in the new files, and add c
 
 ### 3. Delete extracted sections from source (end first)
 
-After all extractions and imports are done, delete the old code from the source file.
+After **all** extractions and imports are done, delete the old code from the source file.
 **Delete from highest line numbers to lowest** so earlier references stay stable across deletions.
+
+For large multi-line blocks where `edit` can't match exactly (whitespace sensitivity, blank lines between functions), `gsed -i 'START,ENDd'` is acceptable — but always verify line numbers with `rg -n` first since they may have shifted from imports added in step 2.
 
 ### 4. Iterate on diagnostics
 
