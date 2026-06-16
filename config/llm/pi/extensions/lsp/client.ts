@@ -8,6 +8,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { deepMerge } from "../shared/deep-merge";
 
 // ── Types ──
 
@@ -396,6 +397,49 @@ export function detectLanguageId(filePath: string): string {
 }
 
 /**
+ * Strip reserved metadata keys from a config object. Currently supports:
+ *   _comment  — string or array of strings (inline notes)
+ *   _meta     — arbitrary object (future-proofing)
+ * These are never passed to the LSP server.
+ */
+function stripMeta(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "_comment" || key === "_meta") continue;
+    result[key] =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? stripMeta(value as Record<string, unknown>)
+        : value;
+  }
+  return result;
+}
+
+/**
+ * Load project-specific LSP settings from .lsp/<server-name>.json.
+ * Supports _comment and _meta fields for inline notes (stripped before merging).
+ * Settings are deep-merged with server defaults (project settings take priority).
+ * Returns empty object if no .lsp/ directory or file exists.
+ */
+export async function loadLspSettings(cwd: string, serverName: string): Promise<Record<string, unknown>> {
+  const lspDir = path.join(cwd, ".lsp");
+  const settingsFile = path.join(lspDir, `${serverName}.json`);
+
+  if (!fs.existsSync(lspDir)) return {};
+
+  try {
+    const raw = await fs.promises.readFile(settingsFile, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(".lsp/<server>.json must contain a JSON object");
+    }
+    return stripMeta(parsed);
+  } catch {
+    // No .lsp/ dir, no file, or parse error — return empty
+    return {};
+  }
+}
+
+/**
  * Check if any root marker exists in a directory.
  */
 export function hasRootMarkers(cwd: string, markers: string[]): boolean {
@@ -496,13 +540,19 @@ export async function createClient(
   });
 
   // Initialize
+  // Merge server defaults with project-specific .lsp/<server>.json settings
+  const projectSettings = await loadLspSettings(cwd, name);
+  const initOptions = projectSettings
+    ? deepMerge(config.initOptions ?? {}, projectSettings)
+    : (config.initOptions ?? {});
+
   const initResult = (await Promise.race([
     transport.request("initialize", {
       processId: process.pid,
       capabilities: CLIENT_CAPABILITIES,
       rootUri: fileToUri(cwd),
       workspaceFolders: [{ uri: fileToUri(cwd), name: path.basename(cwd) }],
-      initializationOptions: config.initOptions ?? {},
+      initializationOptions: initOptions,
     }),
     new Promise((_, reject) =>
       setTimeout(() => reject(new Error(`LSP initialize timed out after ${timeoutMs}ms`)), timeoutMs),

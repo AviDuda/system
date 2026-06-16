@@ -73,6 +73,31 @@ src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable
 | servers.test.ts | Tests for server configs, file matching, memory scaling |
 | linters.test.ts | Tests for linter configs, biome/golangci-lint output parsing |
 
+## Per-project LSP settings (`.lsp/` directory)
+
+Projects can override server `initializationOptions` via a `.lsp/<server-name>.json` file in the project root. Settings are deep-merged with server defaults from `KNOWN_SERVERS` (project settings take priority).
+
+### Example
+
+```json
+// .lsp/rust-analyzer.json
+{
+  "_comment": "Dioxus RSX proc macros generate untypeable code (TemplateNode/TemplateAttribute mismatches). rustc compiles clean, rust-analyzer does not.",
+  "procMacro": {
+    "ignored": {
+      "dioxus-core-macro": ["rsx", "component"]
+    }
+  }
+}
+```
+
+### Reserved fields
+
+- `_comment` — string or array of strings (inline documentation, stripped before sending to server)
+- `_meta` — arbitrary object (reserved for future use, stripped before sending)
+
+Both are stripped recursively at all nesting levels.
+
 ## Adding new servers
 
 Add entries to `KNOWN_SERVERS` in `servers.ts`. Required fields:

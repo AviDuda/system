@@ -158,6 +158,13 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     fileTypes: [".swift"],
     rootMarkers: ["Package.swift", "*.xcodeproj", "*.xcworkspace"],
   },
+
+  "slint-lsp": {
+    command: "slint-lsp",
+    args: [],
+    fileTypes: [".slint"],
+    rootMarkers: ["Cargo.toml", ".slint"],
+  },
 };
 
 export interface DetectedServer {

@@ -195,6 +195,7 @@ in
         nixd # Nix language server (full-featured)
         nodePackages.bash-language-server # Bash/shell language server
         yaml-language-server # YAML language server
+        slint-lsp # Slint UI language server
         rsync # File transfer
         sd # Modern sed replacement
         speedtest-cli # Internet speed test

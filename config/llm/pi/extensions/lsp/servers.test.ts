@@ -39,6 +39,15 @@ describe("KNOWN_SERVERS", () => {
     expect(py.fileTypes).toContain(".py");
     expect(py.command).toBe("pyright-langserver");
   });
+
+  test("has slint-lsp", () => {
+    const slint = KNOWN_SERVERS["slint-lsp"];
+    expect(slint).toBeDefined();
+    expect(slint.fileTypes).toContain(".slint");
+    expect(slint.command).toBe("slint-lsp");
+    expect(slint.args).toEqual([]);
+    expect(slint.rootMarkers).toContain("Cargo.toml");
+  });
 });
 
 describe("serversForFile", () => {
