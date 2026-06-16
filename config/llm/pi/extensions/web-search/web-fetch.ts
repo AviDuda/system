@@ -8,6 +8,8 @@
 
 import { execFile, spawn } from "node:child_process";
 import { basename } from "node:path";
+import { tryFeed } from "./feeds/registry";
+import type { FeedContext } from "./feeds/types";
 
 export interface FetchResult {
   url: string;
@@ -185,6 +187,17 @@ async function fetchPageInner(
   const headedArgs = options.headed ? ["--headed"] : [];
   const baseArgs = [...sessionArgs, ...headedArgs];
 
+  // Structured-feed fast path: some sites publish a structured feed (JSON/API)
+  // that's materially better than scraped HTML — preserves comment threading,
+  // carries scores, drops page chrome. Host-injected transports keep feed
+  // providers reusable across hosts. Falls through to HTML scrape if no
+  // provider matches or the provider fails. See ./feeds/registry.ts.
+  const feedResult = await tryFeed(url, buildFeedContext(baseArgs, options.signal));
+  if (feedResult) {
+    resetIdleTimer(options.cwd);
+    return feedResult;
+  }
+
   // Stealth headers: realistic UA clears edge/WAF bot checks (Reddit, SO).
   // Resolves the browser's real UA on first fetch (cached), falls back to constant.
   const navHeaders = await resolveNavHeaders(baseArgs, options.signal);
@@ -225,6 +238,50 @@ async function fetchPageInner(
   resetIdleTimer(options.cwd);
 
   return { url: finalUrl, title, content };
+}
+
+/**
+ * Build a FeedContext wired to this host's transports: httpFetch (plain HTTP
+ * with the stealth UA) + browserFetch (the agent-browser session, used for
+ * cookie-gated feeds). Feed providers are transport-agnostic — a future
+ * forepaw host or browser-less MCP server builds its own context.
+ */
+function buildFeedContext(baseArgs: string[], signal?: AbortSignal): FeedContext {
+  return {
+    httpFetch: (target, opts) => httpFetch(target, opts?.signal ?? signal),
+    browserFetch: async (target, s) => browserFetch(baseArgs, target, s ?? signal),
+  };
+}
+
+/** Plain-HTTP fetch with the stealth User-Agent. For ungated feeds and feeds reachable without a browser session. */
+async function httpFetch(url: string, signal?: AbortSignal): Promise<{ status: number; text: string }> {
+  const res = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9" },
+    signal,
+  });
+  const text = await res.text();
+  return { status: res.status, text };
+}
+
+/**
+ * Browser-session fetch: open the URL in the agent-browser session, return the
+ * final URL + body text (unquoted via parseEvalString). For cookie-gated feeds
+ * (e.g. feeds behind a challenge cookie). Shares the stealth headers + mutex
+ * contract of the HTML path. Runs the open under the fetch mutex via the outer
+ * queue.
+ */
+async function browserFetch(
+  baseArgs: string[],
+  url: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; text: string }> {
+  const navHeaders = await resolveNavHeaders(baseArgs, signal);
+  await run([...baseArgs, "--headers", navHeaders, "open", url], { timeout: 30_000, signal });
+  const [urlResult, textResult] = await Promise.all([
+    run([...baseArgs, "get", "url"], { timeout: 5_000, signal }),
+    run([...baseArgs, "eval", "document.body.innerText"], { timeout: 8_000, signal }),
+  ]);
+  return { url: stripAnsi(urlResult.stdout).trim(), text: parseEvalString(textResult.stdout) };
 }
 
 /** Convert HTML to markdown via pandoc. Strips data: URI images. */
