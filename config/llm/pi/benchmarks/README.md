@@ -57,6 +57,6 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | File | Purpose |
 |------|---------|
 | `shared.ts` | Model resolution, `runBenchmark`, output formatting |
-| `shared.test.ts` | Tests for shared utilities (26 tests) |
-| `explain.ts` | Explain role benchmark (24 test cases) |
-| `draft.ts` | Draft role benchmark (22 follow-up + 5 startup) |
+| `shared.test.ts` | Tests for shared utilities |
+| `explain.ts` | Explain role benchmark |
+| `draft.ts` | Draft role benchmark |

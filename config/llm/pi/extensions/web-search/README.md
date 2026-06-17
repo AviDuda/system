@@ -25,7 +25,11 @@ Default chain: kagi (primary), tavily (fallback on 401/403), claude (last resort
 
 ### web_fetch
 
-Fetch a web page and extract its text content. Uses `agent-browser` CLI (headless Chrome daemon) which handles JavaScript rendering and bot detection.
+Fetch a web page and extract its text content.
+
+**Structured-data fast path:** before spinning up a browser, tries sites that publish a structured feed/API (e.g. Reddit, GitHub). These return clean data with no page chrome. See `feeds/` for providers; adding one is a single file in `feeds/`. Falls back to browser rendering otherwise.
+
+**Browser rendering:** uses `agent-browser` (headless Chrome daemon), which handles JavaScript rendering and bot detection. Renders HTML to **markdown via pandoc** (with table support), falling back to plain text. Uses agent-browser's **real User-Agent** (cached on first fetch) to clear edge/WAF bot checks.
 
 After `web_fetch` opens a page, the browser session persists. The LLM can use `agent-browser` directly via bash for complex interactions:
 
@@ -53,7 +57,8 @@ Session name is `pi-fetch-<project-basename>`, isolated per project.
 Provider clients + adapters + the registry are **canonical in the MCP tree** (`config/llm/mcp/web-search/providers/`). Pi imports them via the `web-search-core` bridge symlink and sources all providers generically from the registry — no per-provider branching in this file. Only orchestration (fallback, status, commands) is pi-specific.
 
 - `../web-search-core/` (bridge symlink) -- canonical provider clients, registry, types, formatting. Lives in the MCP tree (`config/llm/mcp/web-search/providers/`).
-- `web-fetch.ts` -- agent-browser CLI wrapper. Session management, content extraction.
+- `web-fetch.ts` -- agent-browser CLI wrapper. Session management, content extraction, pandoc markdown conversion, stealth UA handling.
+- `feeds/` -- structured-feed providers (registry + per-site clients) for the web_fetch fast path.
 - `web-fetch.test.ts` -- Tests for session naming, ANSI stripping, truncation.
 - `index.ts` -- Pi extension. Generic provider resolution via the registry, tool + command registration.
 

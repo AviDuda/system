@@ -1,6 +1,6 @@
 # web-search MCP server
 
-A host-agnostic [MCP](https://modelcontextprotocol.io/) server exposing a single `web_search` tool. Pluggable providers (Kagi enabled today; z.ai client included; Brave/Exa/etc. trivially addable). Returns text for the LLM and an MCP Apps iframe view for hosts that support it.
+A host-agnostic [MCP](https://modelcontextprotocol.io/) server exposing a single `web_search` tool. Pluggable providers (Kagi, Tavily, Claude; addable via one file). Returns text for the LLM and an MCP Apps iframe view for hosts that support it.
 
 **This tree is canonical for the provider clients** — pi imports them from here by relative path, so search logic survives a host swap (the MCP server is the multi-host survivor; pi may go).
 
@@ -49,7 +49,7 @@ Providers return a normalized `{ hits, relatedQuestions?, extracted? }` shape. T
 |---|---|---|
 | Claude Code | ✅ | ✅ |
 | OpenCode | ✅ | ❌ (text fallback, silently ignored) |
-| pi (`@mariozechner/pi-coding-agent`) | ❌ (no MCP support by design) | ❌ |
+| pi | ❌ (no MCP support by design) | ❌ |
 
 Pi uses its own in-tree web-search extension (`config/llm/pi/extensions/web-search/`), not this server.
 

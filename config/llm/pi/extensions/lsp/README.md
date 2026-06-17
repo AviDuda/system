@@ -4,7 +4,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 
 ## What it does
 
-1. **`lsp` tool** — the LLM can call this directly for diagnostics, definition, hover, references, symbols, rename, codeAction, codeActionApply
+1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, rename, and code actions (the tool's action enum has the full set, including `type_definition`, `implementation`, and `status`)
 2. **Auto-diagnostics** — after every edit/write, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
 4. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
@@ -15,22 +15,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 
 ## Supported servers
 
-Configured out of the box (requires the binary on PATH):
-
-| Server | Languages | Root markers |
-|--------|-----------|-------------|
-| typescript-language-server | .ts, .tsx, .js, .jsx | package.json, tsconfig.json |
-| rust-analyzer | .rs | Cargo.toml |
-| gopls | .go | go.mod |
-| pyright | .py | pyproject.toml, requirements.txt |
-| nixd | .nix | flake.nix, default.nix |
-| lua-language-server | .lua | .luarc.json |
-| bash-language-server | .sh, .bash, .zsh | .git |
-| yaml-language-server | .yaml, .yml | .git |
-| taplo | .toml | .git |
-| marksman | .md | .git |
-| clangd | .c, .cpp, .h | compile_commands.json, CMakeLists.txt |
-| zls | .zig | build.zig |
+Auto-detects common language servers from project markers (TypeScript, Rust, Go, Python, Nix, Swift, Lua, Bash, YAML, TOML, Markdown, C/C++, Zig, and more). The server binary must be on PATH. The full list with file types and root markers lives in `servers.ts` (`KNOWN_SERVERS`).
 
 ## Commands
 
