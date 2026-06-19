@@ -9,7 +9,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
 4. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
 5. **Server request handling** — responds to `client/registerCapability` (stores watcher glob patterns), `client/unregisterCapability`, and `workspace/configuration`
-6. **Cold server gating** — if a server times out on auto-diagnostics, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
+6. **Cold server gating** — if a server times out on auto-diagnostics or a `symbols` call, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
 7. **Code actions** — `codeAction` lists available refactorings/fixes at a position, `codeActionApply` executes one by its index. Supports `codeAction/resolve` for deferred edits.
 8. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
 
@@ -42,6 +42,29 @@ Successfully edited src/main.ts
 [LSP diagnostics (typescript-language-server): 1 error(s)]
 src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
 ```
+
+## Symbols
+
+The `symbols` action renders `textDocument/documentSymbol` as a compact skeleton — top-level declarations with line ranges, so the agent can `read` with `offset`/`limit` for just the symbol it needs instead of the whole file.
+
+**Container/body filter.** `documentSymbol` returns a scope tree; tsserver includes every local `const` and `.map()` callback inside function bodies, swamping the signal. `formatDocumentSymbol` only recurses into containers (Module, Class, Struct, Interface, Enum, Namespace, Object, Package) — body kinds (Function, Method, Property, Field, Constant, Variable) render as leaves. This is the scope-tree → declaration-tree conversion. Language-agnostic by design: the container/body axis holds across servers even when their SymbolKind sets differ, and it only ever drops body-locals, never declarations. (A no-op for Rust since rust-analyzer emits no body locals; for TS it collapses ~350 lines of scope-tree noise to ~50.)
+
+**Line ranges.** Every symbol carries its full-extent range (`sym.range`, covering doc comments and decorators, not just the name span): `@ line 42` single-line, `@ lines 243-802` multi-line. LSP's `range.end` is exclusive — a closing brace at a line boundary (character 0) is handled so ranges are read-ready (`read file.ts offset=243 limit=560`). When the server populates `sym.detail` (rust-analyzer always does — real signatures), it's appended after the range.
+
+**Cold-server graceful handling.** The first `symbols` call on an unanalyzed file (common right after session start, before edits warm the server) hits the 10s timeout. Instead of surfacing a raw error that looks like a bug, the action marks the server cold (same `coldServers` map auto-diagnostics uses) and returns a message telling the agent to retry immediately or fall back to `read` — not "retry in N seconds", which agents have no concept of and would translate to a blind `sleep`. A successful symbols call clears the cold mark.
+
+Example output (TS, after filter):
+
+```
+[?] rpc.ts (implicit module) (Module) @ lines 1-802
+  [c] SUBAGENT_SESSION_DIR (Constant) @ line 18
+  [I] UsageStats (Interface) @ lines 42-50
+    [p] input (Property) @ line 43
+  [F] runSingleAgent (Function) @ lines 243-802
+  [F] writeRpcCommand (Function) @ lines 237-241
+```
+
+**Agent steering.** A `promptGuideline` directs the agent to call `lsp symbols` before `read` on capable-server languages (e.g. Rust, TS/JS, C#, Go), explicitly excluding weak servers (e.g. nixd, bash-language-server). Scoped deliberately — over-steering backfires, and the filter can't save a server whose `documentSymbol` shape is fundamentally wrong (nixd emits every leaf value as a symbol).
 
 ## Files
 
@@ -135,6 +158,6 @@ The collapsed tool call display shows the action, file, line, symbol, and rename
 
 - **tsserver in large monorepos**: first access to each TS project reference is slow (5-30s warmup). Cold server gating handles this gracefully.
 - **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
-- **yamlls on large files**: `symbols` times out on YAML files >400 lines. Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
+- **yamlls on large files**: `symbols` times out on YAML files >400 lines (now surfaces the graceful 'still indexing' message rather than a raw error). Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
 - **Files outside cwd**: the file watcher only covers cwd. Files in other directories (e.g., a Go project elsewhere on disk) get basic `didOpen`/`didChange`/`didSave` but no watcher-driven notifications. Cross-file references may fail because the server is rooted at cwd, not the target project's module directory.
 - **Code actions**: command-only actions (no edit, just a command) are not applied — the model is told to run them manually. `documentChanges` (CreateFile/RenameFile/DeleteFile) are not yet supported — only `changes` (text edits within existing files).
