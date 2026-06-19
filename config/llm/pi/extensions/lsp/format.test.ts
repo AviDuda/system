@@ -151,6 +151,112 @@ describe("formatDocumentSymbol", () => {
     expect(lines[1]).toContain("constructor");
     expect(lines[1]).toMatch(/^\s{2}/); // indented
   });
+
+  // Container/body filter: LSP returns a scope tree, but we only want
+  // declarations. Bodies (functions/methods/properties/fields) carry
+  // local-scope children that are noise; containers (class/interface/struct/
+  // enum/module/object) carry declarations worth nesting. See CONTAINER_KINDS.
+  test("does not descend into function body locals", () => {
+    // Mirrors the tsserver failure mode: a function whose children are every
+    // local const and every `.map()` callback. These must not be rendered.
+    const sym: DocumentSymbol = {
+      name: "runSingleAgent",
+      kind: 12, // Function — body, not a container
+      range: { start: { line: 242, character: 0 }, end: { line: 800, character: 0 } },
+      selectionRange: { start: { line: 242, character: 9 }, end: { line: 242, character: 25 } },
+      children: [
+        {
+          name: "proc",
+          kind: 14, // Constant — local scope
+          range: { start: { line: 468, character: 8 }, end: { line: 468, character: 20 } },
+          selectionRange: { start: { line: 468, character: 8 }, end: { line: 468, character: 12 } },
+        },
+        {
+          name: "map callback",
+          kind: 12, // nested Function — local scope
+          range: { start: { line: 500, character: 10 }, end: { line: 510, character: 6 } },
+          selectionRange: { start: { line: 500, character: 10 }, end: { line: 500, character: 14 } },
+        },
+      ],
+    };
+    const lines = formatDocumentSymbol(sym);
+    expect(lines).toHaveLength(1); // the function only — no locals
+    expect(lines[0]).toContain("runSingleAgent");
+    expect(lines.join("\n")).not.toContain("proc");
+    expect(lines.join("\n")).not.toContain("map callback");
+  });
+
+  test("descends into interface members", () => {
+    const sym: DocumentSymbol = {
+      name: "UsageStats",
+      kind: 11, // Interface — container
+      range: { start: { line: 41, character: 0 }, end: { line: 49, character: 1 } },
+      selectionRange: { start: { line: 41, character: 10 }, end: { line: 41, character: 21 } },
+      children: [
+        {
+          name: "input",
+          kind: 7, // Property — declaration, rendered as a leaf
+          range: { start: { line: 42, character: 2 }, end: { line: 42, character: 15 } },
+          selectionRange: { start: { line: 42, character: 2 }, end: { line: 42, character: 7 } },
+        },
+        {
+          name: "output",
+          kind: 7,
+          range: { start: { line: 43, character: 2 }, end: { line: 43, character: 16 } },
+          selectionRange: { start: { line: 43, character: 2 }, end: { line: 43, character: 8 } },
+        },
+      ],
+    };
+    const lines = formatDocumentSymbol(sym);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("UsageStats");
+    expect(lines[1]).toContain("input");
+    expect(lines[2]).toContain("output");
+    expect(lines[1]).toMatch(/^\s{2}/); // indented under interface
+  });
+
+  test("descends into struct fields (rust-analyzer shape)", () => {
+    const sym: DocumentSymbol = {
+      name: "Click",
+      kind: 23, // Struct — container
+      range: { start: { line: 47, character: 0 }, end: { line: 63, character: 1 } },
+      selectionRange: { start: { line: 47, character: 7 }, end: { line: 47, character: 12 } },
+      children: [
+        {
+          name: "target",
+          kind: 8, // Field — declaration, rendered as a leaf
+          range: { start: { line: 49, character: 4 }, end: { line: 49, character: 18 } },
+          selectionRange: { start: { line: 49, character: 4 }, end: { line: 49, character: 10 } },
+        },
+      ],
+    };
+    const lines = formatDocumentSymbol(sym);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Click");
+    expect(lines[1]).toContain("target");
+  });
+
+  test("shows start-end range for multi-line symbols (range.end exclusive at line boundary)", () => {
+    // Closing brace on 1-indexed line 5; server sends end at start of next line
+    // (character 0). Must report "3-5", not "3-6".
+    const sym: DocumentSymbol = {
+      name: "main",
+      kind: 12, // Function
+      range: { start: { line: 2, character: 0 }, end: { line: 5, character: 0 } },
+      selectionRange: { start: { line: 2, character: 3 }, end: { line: 2, character: 7 } },
+    };
+    expect(formatDocumentSymbol(sym)[0]).toContain("@ lines 3-5");
+  });
+
+  test("shows single line for one-line symbols", () => {
+    const sym: DocumentSymbol = {
+      name: "MAX",
+      kind: 14, // Constant
+      range: { start: { line: 17, character: 6 }, end: { line: 17, character: 48 } },
+      selectionRange: { start: { line: 17, character: 6 }, end: { line: 17, character: 9 } },
+    };
+    expect(formatDocumentSymbol(sym)[0]).toContain("@ line 18");
+  });
 });
 
 describe("resolveSymbolColumn", () => {

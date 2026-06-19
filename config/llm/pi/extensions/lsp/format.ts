@@ -169,61 +169,143 @@ export function extractHoverText(contents: Hover["contents"]): string {
 
 // ── Symbols ──
 
+/**
+ * LSP SymbolKind enum — the canonical numeric values servers send in
+ * DocumentSymbol.kind. Stable since LSP 3.0; reproduced here from the
+ * current spec so we reference kinds by name instead of magic numbers:
+ * https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/#symbolKind
+ */
+const SymbolKind = {
+  File: 1,
+  Module: 2,
+  Namespace: 3,
+  Package: 4,
+  Class: 5,
+  Method: 6,
+  Property: 7,
+  Field: 8,
+  Constructor: 9,
+  Enum: 10,
+  Interface: 11,
+  Function: 12,
+  Variable: 13,
+  Constant: 14,
+  String: 15,
+  Number: 16,
+  Boolean: 17,
+  Array: 18,
+  Object: 19,
+  Key: 20,
+  Null: 21,
+  EnumMember: 22,
+  Struct: 23,
+  Event: 24,
+  Operator: 25,
+  TypeParameter: 26,
+} as const;
+
 /** Maps LSP SymbolKind enum values to human-readable labels. */
 const SYMBOL_KINDS: Record<number, string> = {
-  1: "File",
-  2: "Module",
-  3: "Namespace",
-  4: "Package",
-  5: "Class",
-  6: "Method",
-  7: "Property",
-  8: "Field",
-  9: "Constructor",
-  10: "Enum",
-  11: "Interface",
-  12: "Function",
-  13: "Variable",
-  14: "Constant",
-  15: "String",
-  16: "Number",
-  17: "Boolean",
-  18: "Array",
-  19: "Object",
-  20: "Key",
-  21: "Null",
-  22: "EnumMember",
-  23: "Struct",
-  24: "Event",
-  25: "Operator",
-  26: "TypeParameter",
+  [SymbolKind.File]: "File",
+  [SymbolKind.Module]: "Module",
+  [SymbolKind.Namespace]: "Namespace",
+  [SymbolKind.Package]: "Package",
+  [SymbolKind.Class]: "Class",
+  [SymbolKind.Method]: "Method",
+  [SymbolKind.Property]: "Property",
+  [SymbolKind.Field]: "Field",
+  [SymbolKind.Constructor]: "Constructor",
+  [SymbolKind.Enum]: "Enum",
+  [SymbolKind.Interface]: "Interface",
+  [SymbolKind.Function]: "Function",
+  [SymbolKind.Variable]: "Variable",
+  [SymbolKind.Constant]: "Constant",
+  [SymbolKind.String]: "String",
+  [SymbolKind.Number]: "Number",
+  [SymbolKind.Boolean]: "Boolean",
+  [SymbolKind.Array]: "Array",
+  [SymbolKind.Object]: "Object",
+  [SymbolKind.Key]: "Key",
+  [SymbolKind.Null]: "Null",
+  [SymbolKind.EnumMember]: "EnumMember",
+  [SymbolKind.Struct]: "Struct",
+  [SymbolKind.Event]: "Event",
+  [SymbolKind.Operator]: "Operator",
+  [SymbolKind.TypeParameter]: "TypeParameter",
 };
+
+/**
+ * SymbolKinds that are structural containers — their children are themselves
+ * declarations worth showing nested (methods on a class, fields on a struct,
+ * variants of an enum, members of an interface, fns in a module/impl block).
+ *
+ * Every other kind is a body (function, method, property, field, constant,
+ * variable, ...): LSP returns a scope tree for these, so their children are
+ * local-scope noise (every const, every `.map()` callback, every destructured
+ * property). Rendering that swamps the signal — one TS function can emit 200+
+ * lines of locals. We render the body symbol itself but don't descend.
+ *
+ * This is the container/body axis tree-sitter skeleton tools (maki, ast-outline)
+ * get implicitly from node-type selection. It is language-agnostic: the
+ * distinction is structural and holds even when servers emit different
+ * SymbolKind sets (rust-analyzer, tsserver, OmniSharp, ...). It only ever
+ * drops body-locals, never declarations, so it's safe for languages we
+ * haven't measured yet.
+ */
+const CONTAINER_KINDS = new Set<number>([
+  SymbolKind.File, // root document
+  SymbolKind.Module, // e.g. Rust `mod`
+  SymbolKind.Namespace,
+  SymbolKind.Package,
+  SymbolKind.Class,
+  SymbolKind.Enum, // children are EnumMembers
+  SymbolKind.Interface, // children are methods/properties
+  SymbolKind.Object, // e.g. Rust `impl` blocks
+  SymbolKind.Struct, // children are fields
+]);
 
 /** Single-character icons for compact symbol display. Only the most common kinds. */
 const SYMBOL_ICONS: Record<number, string> = {
-  5: "C", // Class
-  6: "m", // Method
-  7: "p", // Property
-  8: "f", // Field
-  9: "K", // Constructor
-  10: "E", // Enum
-  11: "I", // Interface
-  12: "F", // Function
-  13: "v", // Variable
-  14: "c", // Constant
-  22: "e", // EnumMember
-  23: "S", // Struct
-  26: "T", // TypeParameter
+  [SymbolKind.Class]: "C",
+  [SymbolKind.Method]: "m",
+  [SymbolKind.Property]: "p",
+  [SymbolKind.Field]: "f",
+  [SymbolKind.Constructor]: "K",
+  [SymbolKind.Enum]: "E",
+  [SymbolKind.Interface]: "I",
+  [SymbolKind.Function]: "F",
+  [SymbolKind.Variable]: "v",
+  [SymbolKind.Constant]: "c",
+  [SymbolKind.EnumMember]: "e",
+  [SymbolKind.Struct]: "S",
+  [SymbolKind.TypeParameter]: "T",
 };
+
+/**
+ * 1-indexed line range string for a symbol's full extent (sym.range, which
+ * covers doc comments and decorators, not the selectionRange name span).
+ * Returns "line N" for single-line symbols, "lines S-E" otherwise.
+ *
+ * LSP range.end is exclusive: if it lands on a line boundary (character 0),
+ * the last real line is the previous one, so we subtract rather than add 1.
+ */
+function symbolLineRange(sym: DocumentSymbol): string {
+  const start = sym.range.start.line + 1;
+  const rawEnd = sym.range.end.line + 1;
+  const end = sym.range.end.character === 0 ? Math.max(start, rawEnd - 1) : rawEnd;
+  return end <= start ? `line ${start}` : `lines ${start}-${end}`;
+}
 
 export function formatDocumentSymbol(sym: DocumentSymbol, indent = 0): string[] {
   const kind = SYMBOL_KINDS[sym.kind] ?? "Unknown";
   const icon = SYMBOL_ICONS[sym.kind] ?? "?";
-  const line = sym.selectionRange.start.line + 1;
   const detail = sym.detail ? ` — ${sym.detail}` : "";
   const prefix = " ".repeat(indent * 2);
-  const lines = [`${prefix}[${icon}] ${sym.name} (${kind}) @ line ${line}${detail}`];
-  if (sym.children) {
+  const lines = [`${prefix}[${icon}] ${sym.name} (${kind}) @ ${symbolLineRange(sym)}${detail}`];
+  // Only descend into containers. Body kinds (Function, Method, Property,
+  // Field, Constant, Variable, ...) carry local-scope children that are noise
+  // — see CONTAINER_KINDS. Rendered as leaves here.
+  if (sym.children && CONTAINER_KINDS.has(sym.kind)) {
     for (const child of sym.children) {
       lines.push(...formatDocumentSymbol(child, indent + 1));
     }
