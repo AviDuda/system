@@ -25,6 +25,7 @@ import {
   FileChangeType,
   fileToUri,
   type Hover,
+  LSP_REQUEST_TIMEOUT_MS,
   type LspClient,
   notifyFileChanges,
   notifySaved,
@@ -521,6 +522,7 @@ export default function (pi: ExtensionAPI) {
     description: `Language Server Protocol operations. Actions: ${LSP_ACTIONS.join(", ")}. Requires a running language server for the target file's language.`,
     promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, rename, codeAction, codeActionApply, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
     promptGuidelines: [
+      "Before `read`ing a large source file (Rust, TS/JS, C#, Go, and other languages with a capable LSP server), use `lsp` with action `symbols` first. It returns a compact skeleton — top-level functions, structs/classes/interfaces with their fields, and line ranges — so you can `read` with `offset`/`limit` for just the symbol you need instead of the whole file. Useless for you on languages with weak servers (nixd, bash-language-server); fall back to `read` there. If a symbols call reports the server is still indexing, retry it immediately or use `read` directly.",
       "Use `lsp` with action `diagnostics` after making changes to check for type errors.",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
       "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
@@ -678,11 +680,30 @@ export default function (pi: ExtensionAPI) {
           }
 
           case "symbols": {
-            const raw = (await client.request("textDocument/documentSymbol", {
-              textDocument: { uri },
-            })) as (DocumentSymbol | SymbolInformation)[] | null;
+            let raw: (DocumentSymbol | SymbolInformation)[] | null;
+            try {
+              raw = (await client.request("textDocument/documentSymbol", {
+                textDocument: { uri },
+              })) as (DocumentSymbol | SymbolInformation)[] | null;
+            } catch (err) {
+              // Cold-server timeout: the server is still analyzing this file
+              // (most common right after session start, before any edits warmed
+              // it). Mark it cold for the auto-diagnostics path and tell the
+              // agent to retry immediately — the analysis started by this call
+              // continues in the background, so the next call usually succeeds.
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg.includes("timed out")) {
+                coldServers.set(server.name, Date.now());
+                return text(
+                  `${server.name} is still indexing ${path.relative(ctx.cwd, abs)} (timed out after ${LSP_REQUEST_TIMEOUT_MS / 1000}s). The file analysis continues in the background — try again immediately, or use read with offset/limit in the meantime.`,
+                );
+              }
+              throw err;
+            }
 
             if (!raw || raw.length === 0) return text("No symbols found");
+            // A successful symbols call means the server is warm for this file.
+            coldServers.delete(server.name);
 
             const relPath = path.relative(ctx.cwd, abs);
             if ("selectionRange" in raw[0]) {

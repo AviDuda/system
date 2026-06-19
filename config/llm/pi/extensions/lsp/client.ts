@@ -250,11 +250,10 @@ function createTransport(proc: ChildProcess) {
   function request(method: string, params?: unknown): Promise<unknown> {
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      const REQUEST_TIMEOUT_MS = 10_000;
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(`LSP request timed out: ${method} (${REQUEST_TIMEOUT_MS / 1000}s)`));
-      }, REQUEST_TIMEOUT_MS);
+        reject(new Error(`LSP request timed out: ${method} (${LSP_REQUEST_TIMEOUT_MS / 1000}s)`));
+      }, LSP_REQUEST_TIMEOUT_MS);
 
       pending.set(id, {
         resolve: (value) => {
@@ -294,6 +293,14 @@ function createTransport(proc: ChildProcess) {
 }
 
 // ── Client lifecycle ──
+
+/**
+ * Per-request timeout for LSP calls (ms). When a request exceeds this the
+ * client rejects with "LSP request timed out: <method> (Ns)"; callers decide
+ * whether to surface that as an error or treat it as a cold-server signal
+ * (e.g. the symbols action retries immediately and marks the server cold).
+ */
+export const LSP_REQUEST_TIMEOUT_MS = 10_000;
 
 const CLIENT_CAPABILITIES = {
   textDocument: {
