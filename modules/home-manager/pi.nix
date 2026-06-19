@@ -129,29 +129,30 @@ in
       # Category: Cloud providers
 
       # z.ai GLM Coding plan
-      zai = {
-        models = [
-          {
-            id = "glm-5.2";
-            name = "GLM-5.2 (z.ai)";
-            reasoning = true;
-            input = [ "text" ];
-            contextWindow = 1000000;
-            maxTokens = 131072;
-            cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
-            compat = {
-              supportsDeveloperRole = false;
-              thinkingFormat = "zai";
-              zaiToolStream = true;
-            };
-            thinkingLevelMap = {
-              low = "high";
-              high = "max";
-              xhigh = "max";
-            };
-          }
-        ];
-      };
+      # Should be included by default, but keeping it commented here in case some changes need to be made.
+      # zai = {
+      #   models = [
+      #     {
+      #       id = "glm-5.2";
+      #       name = "GLM-5.2 (z.ai)";
+      #       reasoning = true;
+      #       input = [ "text" ];
+      #       contextWindow = 1000000;
+      #       maxTokens = 131072;
+      #       cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };
+      #       compat = {
+      #         supportsDeveloperRole = false;
+      #         thinkingFormat = "zai";
+      #         zaiToolStream = true;
+      #       };
+      #       thinkingLevelMap = {
+      #         low = "high";
+      #         high = "max";
+      #         xhigh = "max";
+      #       };
+      #     }
+      #   ];
+      # };
 
       openrouter-sidecar = {
         baseUrl = "https://openrouter.ai/api/v1";
