@@ -97,15 +97,8 @@ export function resetSidecarStats() {
 
 // ── Config loading ──
 
-let cachedConfig: RolesFile | null = null;
-let configPath: string | null = null;
-
-function getConfigPath(): string {
-  if (!configPath) {
-    configPath = join(getAgentDir(), "roles.json");
-  }
-  return configPath;
-}
+const DEFAULTS_PATH = join(getAgentDir(), "roles.json");
+const LOCAL_PATH = join(getAgentDir(), "roles.local.json");
 
 function readJsonFile(filePath: string): RolesFile {
   if (!existsSync(filePath)) return {};
@@ -117,23 +110,11 @@ function readJsonFile(filePath: string): RolesFile {
   }
 }
 
+/** Read roles config from disk. Always reads fresh — no caching. */
 export function loadConfig(): RolesFile {
-  const defaults = readJsonFile(getConfigPath());
-  const localPath = join(getAgentDir(), "roles.local.json");
-  const local = readJsonFile(localPath);
-  cachedConfig = { ...defaults, ...local };
-  return cachedConfig;
-}
-
-/** Force reload config from disk. */
-export function reloadConfig(): RolesFile {
-  cachedConfig = null;
-  return loadConfig();
-}
-
-function getConfig(): RolesFile {
-  if (cachedConfig) return cachedConfig;
-  return loadConfig();
+  const defaults = readJsonFile(DEFAULTS_PATH);
+  const local = readJsonFile(LOCAL_PATH);
+  return { ...defaults, ...local };
 }
 
 // ── Model resolution ──
@@ -153,7 +134,7 @@ export async function resolveRole(
   roleName: string,
   modelRegistry: ModelRegistry,
 ): Promise<(ResolvedModel & { entry: ModelEntry }) | null> {
-  const config = getConfig();
+  const config = loadConfig();
   const role = config[roleName];
   if (!role?.models?.length) return null;
 
@@ -192,7 +173,7 @@ export async function sidecarComplete(
   modelRegistry: ModelRegistry,
   options?: { signal?: AbortSignal; notify?: (msg: string, level: "info" | "warning") => void },
 ): Promise<SidecarResult | null> {
-  const config = getConfig();
+  const config = loadConfig();
   const role = config[roleName];
   if (!role?.models?.length) return null;
 
@@ -269,7 +250,7 @@ export async function sidecarComplete(
  * Check if a role is configured (has at least one model entry).
  */
 export function hasRole(roleName: string): boolean {
-  const config = getConfig();
+  const config = loadConfig();
   const role = config[roleName];
   return !!role?.models?.length;
 }

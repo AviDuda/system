@@ -19,7 +19,7 @@ import { extname } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, isReadToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { extractText, hasRole, reloadConfig, type SidecarResult, sidecarComplete } from "../shared/model-roles.js";
+import { extractText, hasRole, type SidecarResult, sidecarComplete } from "../shared/model-roles.js";
 import {
   buildVisionMessages,
   extractImageParts,
@@ -61,7 +61,6 @@ export default function visionExtension(pi: ExtensionAPI) {
   let needsVisionAssist = false;
 
   function updateVisionState(ctx: ExtensionContext) {
-    reloadConfig();
     needsVisionAssist = !modelSupportsImage(ctx.model?.input) && hasRole("vision");
 
     if (needsVisionAssist) {

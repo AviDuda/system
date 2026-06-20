@@ -25,7 +25,6 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@earendil-works/pi-tui";
-import { reloadConfig } from "../shared/model-roles";
 
 // ── Settings helpers ──
 
@@ -389,8 +388,6 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           local[selectedRole] = { ...base[selectedRole], models: chain };
           writeLocal(local);
           isDirty = false;
-          // Invalidate model-roles cache so permission-gate / draft pick up the new config
-          reloadConfig();
           setSidecarStatus(ctx);
           updateFooter();
           tui.requestRender();
@@ -408,7 +405,6 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
           isDirty = false;
-          reloadConfig();
           setSidecarStatus(ctx);
           buildFilteredItems();
           updateHeader();
@@ -421,7 +417,6 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
           isDirty = false;
-          reloadConfig();
           setSidecarStatus(ctx);
           if (screen === "models") {
             buildFilteredItems();
@@ -521,7 +516,6 @@ export default function sidecarCommand(pi: ExtensionAPI) {
                   local[roleName] = { ...current, models: newChain };
                 }
                 writeLocal(local);
-                reloadConfig();
                 setSidecarStatus(ctx);
                 ctx.ui.notify(`All roles synced to ${mainRef}`, "info");
                 buildFilteredItems();
