@@ -64,6 +64,7 @@ in
       # Category: Local providers
 
       lmstudio = {
+        tags = [ "local" ];
         baseUrl = "http://127.0.0.1:1234/v1";
         api = "openai-completions";
         apiKey = "lm-studio";
@@ -92,6 +93,7 @@ in
       # Global Qwen defaults: temp=0.6, top_p=0.95, top_k=20 (precise coding).
       # Sidecar roles override to: temp=0.7, top_p=0.8, top_k=20 (concise non-thinking).
       omlx = {
+        tags = [ "local" ];
         baseUrl = "http://127.0.0.1:8124/v1";
         api = "openai-completions";
         apiKey = "not-needed";
@@ -128,6 +130,18 @@ in
 
       # Category: Cloud providers
 
+      # Built-in openrouter provider — tags and ZDR config for model-policy extension.
+      # No models array = keeps all built-in models, only overrides provider-level fields.
+      openrouter = {
+        tags = [ "zdr" "cloud" ];
+        compat = {
+          openRouterRouting = {
+            zdr = true;
+            data_collection = "deny";
+          };
+        };
+      };
+
       # z.ai GLM Coding plan
       # Should be included by default, but keeping it commented here in case some changes need to be made.
       # zai = {
@@ -155,9 +169,16 @@ in
       # };
 
       openrouter-sidecar = {
+        tags = [ "zdr" "cloud" ];
         baseUrl = "https://openrouter.ai/api/v1";
         api = "openai-completions";
         apiKey = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-sidecar'";
+        compat = {
+          openRouterRouting = {
+            zdr = true;
+            data_collection = "deny";
+          };
+        };
         models = [
           {
             id = "deepseek/deepseek-v4-flash";
