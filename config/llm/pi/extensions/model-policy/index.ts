@@ -34,8 +34,8 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
   expandPattern,
   findCompliantFromList,
@@ -87,70 +87,52 @@ function showPolicySelector(
   return ctx.ui.custom((tui, theme, _kb, done) => {
     const selected = new Set(currentTags);
     let selectedIndex = 0;
+    const accent = (s: string) => theme.fg("accent", s);
+    const dim = (s: string) => theme.fg("dim", s);
 
-    const container = new Container();
-    container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Model Policy — select allowed tags"))));
-    container.addChild(new Text(theme.fg("dim", "Model must have at least ONE selected tag (OR logic)")));
-    container.addChild(new Text(""));
-
-    const itemsRef: Text[] = [];
-
-    function renderItems() {
-      for (const item of itemsRef) {
-        container.removeChild(item);
-      }
-      itemsRef.length = 0;
+    function render(width: number): string[] {
+      const lines: string[] = [];
+      lines.push(accent("─".repeat(width)));
+      lines.push(accent(theme.bold("Model Policy — select allowed tags")));
+      lines.push(dim("Model must have at least ONE selected tag (OR logic)"));
+      lines.push("");
 
       for (let i = 0; i < availableTags.length; i++) {
         const tag = availableTags[i];
         const isSelected = selected.has(tag);
         const isFocused = i === selectedIndex;
 
-        let line = isFocused ? theme.fg("accent", "▸ ") : "  ";
-        line += isSelected ? theme.fg("success", "● ") : theme.fg("dim", "○ ");
+        let line = isFocused ? accent("▸ ") : "  ";
+        line += isSelected ? theme.fg("success", "● ") : dim("○ ");
         line += isFocused ? theme.bold(tag) : tag;
-
-        const text = new Text(line, 0, 0);
-        itemsRef.push(text);
-        container.addChild(text);
+        lines.push(line);
       }
 
       // "any" option
-      const anyIdx = availableTags.length;
-      const anyFocused = selectedIndex === anyIdx;
+      const anyFocused = selectedIndex === availableTags.length;
       const anySelected = selected.size === 0;
-      let anyLine = anyFocused ? theme.fg("accent", "▸ ") : "  ";
-      anyLine += anySelected ? theme.fg("success", "● ") : theme.fg("dim", "○ ");
+      let anyLine = anyFocused ? accent("▸ ") : "  ";
+      anyLine += anySelected ? theme.fg("success", "● ") : dim("○ ");
       anyLine += anyFocused ? theme.bold("any (unrestricted)") : "any (unrestricted)";
-      const anyText = new Text(anyLine, 0, 0);
-      itemsRef.push(anyText);
-      container.addChild(anyText);
+      lines.push(anyLine);
 
-      container.addChild(new Text(""));
-      const hint = new Text(theme.fg("dim", "↑↓ navigate • space toggle • enter confirm • esc cancel"));
-      itemsRef.push(hint);
-      container.addChild(hint);
+      lines.push("");
+      lines.push(dim("↑↓ navigate • space toggle • enter confirm • esc cancel"));
+      lines.push(accent("─".repeat(width)));
+      return lines;
     }
 
-    renderItems();
-    container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-
     return {
-      render(width: number) {
-        return container.render(width);
-      },
-      invalidate() {
-        container.invalidate();
-      },
+      render,
+      invalidate() {},
       handleInput(data: string) {
         const totalItems = availableTags.length + 1; // +1 for "any"
 
-        if (data === "up") {
+        if (matchesKey(data, Key.up)) {
           selectedIndex = (selectedIndex - 1 + totalItems) % totalItems;
-        } else if (data === "down") {
+        } else if (matchesKey(data, Key.down)) {
           selectedIndex = (selectedIndex + 1) % totalItems;
-        } else if (data === " ") {
+        } else if (matchesKey(data, Key.space)) {
           if (selectedIndex < availableTags.length) {
             const tag = availableTags[selectedIndex];
             if (selected.has(tag)) {
@@ -162,19 +144,21 @@ function showPolicySelector(
             // "any" — clear all selections
             selected.clear();
           }
-        } else if (data === "return") {
-          if (selected.size === 0 || selectedIndex === availableTags.length) {
-            done(null);
+        } else if (matchesKey(data, Key.enter)) {
+          if (selectedIndex === availableTags.length) {
+            // "any" — remove policy (unrestricted)
+            done([]);
+          } else if (selected.size === 0) {
+            done([]);
           } else {
             done([...selected]);
           }
           return;
-        } else if (data === "escape") {
+        } else if (matchesKey(data, Key.escape)) {
           done(null);
           return;
         }
 
-        renderItems();
         tui.requestRender();
       },
     };
@@ -208,6 +192,12 @@ export default function modelPolicyExtension(pi: ExtensionAPI) {
       const result = await showPolicySelector(availableTags, currentTags, ctx);
 
       if (result === null) {
+        // Escape — cancel without changes
+        ctx.ui.notify("Cancelled", "info");
+        return;
+      }
+
+      if (result.length === 0) {
         // "any" — remove policy for this project
         if (currentPolicy) {
           delete policies[ctx.cwd];
@@ -218,11 +208,6 @@ export default function modelPolicyExtension(pi: ExtensionAPI) {
         } else {
           ctx.ui.notify("No policy set — already unrestricted", "info");
         }
-        return;
-      }
-
-      if (result.length === 0) {
-        ctx.ui.notify("No tags selected — nothing to set", "warning");
         return;
       }
 
