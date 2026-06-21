@@ -66,25 +66,15 @@ in
         # 1Password configs
         "~/.ssh/1Password/config"
       ];
-    matchBlocks = {
+    settings = {
       # Default settings for all hosts
       "*" = {
-        controlMaster = "auto";
-        controlPersist = "10m";
-        controlPath = "~/.ssh/cm/%C";
-      };
-      "gamediscoverco" = {
-        user = "discoverer";
-        localForwards = [
-          {
-            bind.port = 23306;
-            host.address = "127.0.0.1";
-            host.port = 3306;
-          }
-        ];
+        ControlMaster = "auto";
+        ControlPersist = "10m";
+        ControlPath = "~/.ssh/cm/%C";
       };
       "raccpat-public" = {
-        hostname = "176.9.147.244";
+        HostName = "176.9.147.244";
       };
     };
   };

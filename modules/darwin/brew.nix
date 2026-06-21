@@ -11,6 +11,10 @@
     "/opt/homebrew/sbin"
   ];
 
+  # Don't quit/reopen apps during cask upgrade — darwin-switch.sh handles
+  # this selectively for apps with no unsaved state (menu bar utilities).
+  environment.variables.HOMEBREW_NO_UPGRADE_QUIT_CASKS = "1";
+
   homebrew = {
     enable = true;
 
@@ -19,7 +23,7 @@
       autoUpdate = false;
       upgrade = false;
       cleanup = "zap";
-      extraFlags = [ "--verbose" "--force-cleanup" ];
+      extraFlags = [ "--verbose" ];
     };
 
     global = {
@@ -27,11 +31,11 @@
     };
 
     taps = [
-      "anomalyco/tap"
-      "f/mcptools"
-      "steamre/tools"
-      "stripe/stripe-cli"
-      "ungive/music-presence"
+      { name = "anomalyco/tap"; trusted = true; }
+      { name = "f/mcptools"; trusted = true; }
+      { name = "steamre/tools"; trusted = true; }
+      { name = "stripe/stripe-cli"; trusted = true; }
+      { name = "ungive/music-presence"; trusted = true; }
     ];
 
     # Most CLI tools are in nixpkgs - see modules/home-manager/personal/pkgs.nix

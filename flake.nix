@@ -6,23 +6,18 @@
 
   inputs = {
     # Packages
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     # Systems
     nixos-hardware.url = "github:nixos/nixos-hardware";
     darwin = {
       # Keep version in sync with nixpkgs
-      url = "github:lnl7/nix-darwin/nix-darwin-25.11";
+      url = "github:lnl7/nix-darwin/nix-darwin-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     home-manager = {
-      # See https://nix-community.github.io/home-manager/release-notes.xhtml
-      url = "github:nix-community/home-manager/release-25.11";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    lix-module = {
-      # See https://docs.lix.systems/manual/lix/nightly/release-notes/release-notes.html
-      url = "https://git.lix.systems/lix-project/nixos-module/archive/2.93.3-2.tar.gz";
+      # See https://nix-community.github.io/home-manager/release-notes/rl-2605.html
+      url = "github:nix-community/home-manager/release-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     sops-nix = {
@@ -36,7 +31,6 @@
       self,
       nixpkgs,
       nixpkgs-unstable,
-      lix-module,
       darwin,
       home-manager,
       ...
@@ -93,7 +87,6 @@
                 };
               }
             )
-            lix-module.nixosModules.default
             inputs.sops-nix.darwinModules.sops
           ];
         };
@@ -125,7 +118,6 @@
                 };
               }
             )
-            lix-module.nixosModules.default
             inputs.sops-nix.nixosModules.sops
           ];
         };

@@ -1,6 +1,9 @@
 # Core darwin settings: nix config, shell, locale, binary caches
-{ config, ... }:
+{ config, pkgs, ... }:
 {
+  # Lix from nixpkgs (see https://lix.systems/add-to-config/)
+  nix.package = pkgs.lixPackageSets.lix_2_95.lix;
+
   # sops-nix: use age key for decryption (not SSH host keys)
   # Key location on macOS - see docs/secrets.md for setup
   sops.age.keyFile = "/Users/${config.user.name}/Library/Application Support/sops/age/keys.txt";

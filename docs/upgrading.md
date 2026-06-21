@@ -16,7 +16,7 @@ Repos:
 - https://github.com/NixOS/nixpkgs
 - https://github.com/LnL7/nix-darwin
 - https://github.com/nix-community/home-manager
-- https://git.lix.systems/lix-project/nixos-module/tags
+- https://git.lix.systems/lix-project/lix
 
 One-liners to check latest release branches:
 
@@ -33,24 +33,21 @@ gh api repos/nix-community/home-manager/branches --paginate --jq '.[].name' | gr
 
 Note: nix-darwin often lags behind nixpkgs/home-manager by one release.
 
-Lix uses tags instead of branches. Check the tags page manually or:
+Lix is now managed via nixpkgs (see https://lix.systems/add-to-config/).
+The package is set in `modules/darwin/core.nix` and `modules/nixos/core.nix`.
+To check available versions, see `pkgs/tools/package-management/lix/default.nix` in nixpkgs, or:
 
 ```bash
-# lix-module (requires curl + jq, not gh; limit=100 for pagination)
-curl -s "https://git.lix.systems/api/v1/repos/lix-project/nixos-module/tags?limit=100" | jq -r '.[].name' | sort -V | tail -5
+# Available lix versions in nixpkgs
+gh api repos/NixOS/nixpkgs/contents/pkgs/tools/package-management/lix/default.nix?ref=nixos-XX.YY --jq '.content' | base64 -d | grep 'version ='
 ```
-
-The flake URL format for Lix is:
-```nix
-url = "https://git.lix.systems/lix-project/nixos-module/archive/X.YY.Z-N.tar.gz";
-```
-
-Lix maintains multiple version lines (e.g., 2.91.x, 2.92.x, 2.93.x). Pick the latest tag in your preferred line.
 
 ## Changelogs
 
 - nix-darwin: https://github.com/LnL7/nix-darwin/blob/master/CHANGELOG
-- home-manager: https://nix-community.github.io/home-manager/release-notes.xhtml
+- home-manager: https://nix-community.github.io/home-manager/release-notes/rl-2605.html
+
+Note: The URL includes the release version (e.g. `rl-2605.html`). Update it when changing the release branch (e.g. `rl-2611.html`).
 - nixpkgs: https://nixos.org/manual/nixos/stable/release-notes.html
 - lix: https://docs.lix.systems/manual/lix/nightly/release-notes/release-notes.html
 

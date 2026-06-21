@@ -119,7 +119,7 @@ in
       nodejs # Node.js runtime
       sops # Secrets management
       typescript # TypeScript compiler
-      nodePackages.typescript-language-server # TypeScript/JS language server
+      typescript-language-server # TypeScript/JS language server
     ])
     ++
       # Stable packages (versions match homebrew)
@@ -174,7 +174,7 @@ in
         miller # CSV/JSON swiss-army knife
         openal # 3D audio library
         optipng # PNG optimizer
-        opusTools # Opus encoder/decoder
+        opus-tools # Opus encoder/decoder
         p7zip # 7z archive support
         pigz # Parallel gzip
         plantuml # UML diagrams
@@ -193,7 +193,7 @@ in
         gopls # Go language server
         nil # Nix language server
         nixd # Nix language server (full-featured)
-        nodePackages.bash-language-server # Bash/shell language server
+        bash-language-server # Bash/shell language server
         yaml-language-server # YAML language server
         slint-lsp # Slint UI language server
         rsync # File transfer

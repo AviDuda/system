@@ -39,12 +39,12 @@
   ];
 
   # SSH config for local VMs (shared key, not NixOS-specific)
-  hm.programs.ssh.matchBlocks = {
+  hm.programs.ssh.settings = {
     "phantom-tanuki" = {
-      hostname = "phantom-tanuki.local";
-      user = "avi";
-      identityFile = "~/.ssh/vm";
-      identitiesOnly = true;
+      HostName = "phantom-tanuki.local";
+      User = "avi";
+      IdentityFile = "~/.ssh/vm";
+      IdentitiesOnly = true;
     };
     "192.168.64.*" = {
       user = "avi";
