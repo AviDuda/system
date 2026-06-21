@@ -72,11 +72,11 @@ Example output (TS, after filter):
 
 ## Workspace Symbol Search
 
-The `workspace_symbol` action searches for symbols across the entire project by name. Unlike `symbols` (which lists all symbols in one file), `workspace_symbol` does a substring match across all active LSP servers.
+The `workspace_symbol` action searches for symbols across the entire project by name. Unlike `symbols` (which lists all symbols in one file), `workspace_symbol` queries all active LSP servers.
 
 **Parameters:**
 - `action: "workspace_symbol"` — the action to perform
-- `query: string` — case-insensitive substring match on symbol names
+- `query: string` — symbol name query (matching behavior is server-dependent: some do substring, some prefix, some fuzzy)
 
 **Behavior:**
 - Broadcasts `workspace/symbol` to all active LSP clients (across all roots)
@@ -166,7 +166,7 @@ Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBi
 2. Resolves deferred actions via `codeAction/resolve` if the server uses lazy evaluation
 3. Applies the resulting `WorkspaceEdit` to disk via `applyWorkspaceEdit`
 
-`applyWorkspaceEdit` (in `format.ts`) handles per-file `TextEdit[]` in reverse order to preserve character positions. Supports single-line edits, multi-line replacements, insertions, and deletions.
+`applyWorkspaceEdit` (in `format.ts`) handles per-file `TextEdit[]` in reverse order to preserve character positions. Supports single-line edits, multi-line replacements, insertions, and deletions. Requires an `onFileWritten` callback that's invoked after each file is written — used to sync modified content back to the LSP server via `didChange` so subsequent edits (e.g., round-trip renames) don't operate on stale positions.
 
 ## Progress reporting
 
@@ -179,10 +179,21 @@ Servers send progress via `window/workDoneProgress/create` + `$/progress` notifi
 ## Failure context
 
 When an LSP action returns no results (no definition found, no hover info, no references, etc.), the response includes:
-- **Column info**: the resolved column position and the symbol that was searched for (e.g., `(symbol "foo" at col 0)`)
+- **Position info**: the resolved position with resolution method (e.g., `(symbol "foo" at 42:15 via semantic)` or `(symbol "foo" not found at line 5)`)
 - **Context lines**: 2 lines around the target line so the model can see what's actually there and retry with the correct parameters
 
 For `rename` failures, 3 lines of context are shown. For `codeAction`, 5 lines.
+
+## Position resolution
+
+When the agent provides a `symbol` parameter, the extension resolves the exact cursor position using two strategies:
+
+1. **Semantic** (when `line` is NOT specified): fetches `textDocument/documentSymbol` and searches the symbol tree by name. Uses `selectionRange` — the precise name span at the declaration site. Most reliable for "find where X is defined."
+2. **Textual** (when `line` IS specified): word-boundary regex match on the given line. Finds the symbol at the usage site, not the declaration. Required for `references`, `hover`, `type_definition` at a specific usage.
+
+When `line` is omitted, semantic resolution is used (finds the declaration). When `line` is provided, textual resolution is used (finds the usage at that line). The `source` field in position info (`via semantic` / `via textual`) tells the agent which path was used.
+
+Word-boundary matching (`\b`) prevents false matches where a symbol name appears inside another identifier (e.g., `get` won't match `getApiKey`).
 
 ## Tool call rendering
 
@@ -190,11 +201,13 @@ The collapsed tool call display shows the action, file, line, symbol, and rename
 - `lsp definition index.ts:46 readLocationContext`
 - `lsp rename index.ts:42 oldName → newName`
 - `lsp codeAction index.ts:42 [3]`
+- `lsp workspace_symbol "handleInput"`
+- `lsp restart index.ts`
 
 ## Known limitations
 
 - **tsserver in large monorepos**: first access to each TS project reference is slow (5-30s warmup). Cold server gating handles this gracefully.
 - **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
 - **yamlls on large files**: `symbols` times out on YAML files >400 lines (now surfaces the graceful 'still indexing' message rather than a raw error). Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
-- **Files outside cwd**: the file watcher only covers cwd. Files in other directories (e.g., a Go project elsewhere on disk) get basic `didOpen`/`didChange`/`didSave` but no watcher-driven notifications. Cross-file references may fail because the server is rooted at cwd, not the target project's module directory.
+- **Files outside cwd**: the file watcher only covers cwd. Files in other directories get server-side watching via the LSP server's own watchers (registered via `client/registerCapability`), but bash-side file changes (e.g., `rm`, `echo >`) in external projects won't trigger notifications. Cross-file references within external projects work correctly via multi-root support — the server is rooted at the project's Cargo.toml/package.json/go.mod ancestor, not the session cwd.
 - **Code actions**: command-only actions (no edit, just a command) are not applied — the model is told to run them manually. `documentChanges` (CreateFile/RenameFile/DeleteFile) are not yet supported — only `changes` (text edits within existing files).
