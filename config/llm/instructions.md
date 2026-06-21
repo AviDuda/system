@@ -81,4 +81,4 @@ Check `git log --oneline -10` for conventions before committing. Match existing 
 
 ## Wrapping Up Sessions
 
-When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work. The wrap-up is complete when the journal is complete.
+When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work. Include your own thoughts — what worked well, what surprised you, what you'd do differently, what felt fragile. The wrap-up is complete when the journal is complete.
