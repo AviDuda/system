@@ -49,17 +49,18 @@ Custom pi extensions follow a pattern: augment the agent with context and guardr
 
 **Context injection** -- agents-loader discovers AGENTS.md files from touched directories; journal extension injects notes and instructions; at-mentions inlines file contents on `@path` references.
 
-**Guardrails** -- permission-gate intercepts tool calls with a confirmation dialog showing colored diffs, sidecar-generated verdicts (SAFE/RISKY/DANGEROUS), and session-allow rules with shell escalation detection.
+**Guardrails** -- permission-gate intercepts tool calls with a confirmation dialog showing colored diffs, sidecar-generated verdicts (SAFE/RISKY/DANGEROUS), and session-allow rules with shell escalation detection. model-policy enforces per-project model requirements based on provider tags (e.g., local/ZDR only for sensitive projects).
 
-**Augmentation** -- LSP extension runs diagnostics after every edit/write so the agent sees type errors immediately; draft-suggestion predicts the next user message as ghost text; web-search provides Kagi and Claude-based search.
+**Augmentation** -- LSP extension runs diagnostics after every edit/write so the agent sees type errors immediately; draft-suggestion predicts the next user message as ghost text; web-search provides web search and web_fetch (structured-feed fast path + headless browser rendering); vision routes image reads to a capable sidecar when the main model is text-only; stats provides live throughput readouts and per-message annotations.
 
-**Sidecar pattern** -- cheap models (Haiku-class) run alongside the main conversation for tasks like classification, explanation generation, and draft prediction. They don't share conversation context -- they get focused, purpose-built prompts.
+**Sidecar pattern** -- cheap models run alongside the main conversation for tasks like classification, explanation generation, draft prediction, and vision descriptions. They don't share conversation context -- they get focused, purpose-built prompts. Roles are configured in `pi.nix` and managed at runtime via `/sidecar-models`.
+
+See `config/llm/pi/README.md` for the full extension list and development guidelines.
 
 ### What's intentionally absent
 
-- **Sub-agents / plan mode.** Subagents lack session context and can't be steered. Plan mode prevents journaling and burns context on planning that should be captured in the journal. The journal is the plan.
-- **Prompt history storage.** Less tracking preferred.
-- **MCP integration.** CLI tools with READMEs (skills) cover the same ground without the protocol overhead. May be added later if needed for specific project work.
+- **Plan mode.** Prevents journaling and burns context on planning that should be captured in the journal. The journal is the plan.
+- **MCP integration.** MCP servers exist in `config/llm/mcp/` for other clients (Claude Code, OpenCode). Pi uses native extensions instead — same capabilities, better integration. MCP may be added to pi later if a specific need arises, likely as a toggleable option.
 - **Autonomous features.** No auto-commit, auto-compact customization, or background processing. The human steers; the agent executes and journals.
 
 ## Local LLMs
