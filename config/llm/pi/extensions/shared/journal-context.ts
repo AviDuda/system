@@ -115,7 +115,7 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
   projects.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
 
   const lines = projects.map((p) => {
-    const names = p.filenames.map((f) => f.replace(/\.md$/, "")).join(", ");
+    const names = p.filenames.join(", ");
     return `  ${p.name}: ${names}`;
   });
   return `Other project journals (recent entries):\n${lines.join("\n")}`;
@@ -176,7 +176,7 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
     if (result.allFilenames.length > 3) {
       const olderFilenames = result.allFilenames.slice(3, FILENAME_LIST_CURRENT);
       const total = result.allFilenames.length;
-      let listing = olderFilenames.map((f) => f.replace(/\.md$/, "")).join("\n");
+      let listing = olderFilenames.join("\n");
       if (total > FILENAME_LIST_CURRENT) {
         listing += `\n... and ${total - FILENAME_LIST_CURRENT} more`;
       }
