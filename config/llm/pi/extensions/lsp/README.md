@@ -4,14 +4,16 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 
 ## What it does
 
-1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, rename, and code actions (the tool's action enum has the full set, including `type_definition`, `implementation`, and `status`)
+1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, workspace symbol search, rename, code actions, and restart (the tool's action enum has the full set, including `type_definition`, `implementation`, `workspace_symbol`, `restart`, and `status`)
 2. **Auto-diagnostics** — after every edit/write, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
-4. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
-5. **Server request handling** — responds to `client/registerCapability` (stores watcher glob patterns), `client/unregisterCapability`, and `workspace/configuration`
-6. **Cold server gating** — if a server times out on auto-diagnostics or a `symbols` call, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
-7. **Code actions** — `codeAction` lists available refactorings/fixes at a position, `codeActionApply` executes one by its index. Supports `codeAction/resolve` for deferred edits.
-8. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
+4. **Multi-root support** — automatically roots LSP servers at the correct project root for files outside the session cwd (e.g., rust-analyzer rooted at the Cargo.toml ancestor, not the session dir). Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist.
+5. **Workspace symbol search** — `workspace_symbol` action searches across all active LSP servers by symbol name, returning matches from the entire project (not just one file)
+6. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
+7. **Server request handling** — responds to `client/registerCapability` (stores watcher glob patterns), `client/unregisterCapability`, and `workspace/configuration`
+8. **Cold server gating** — if a server times out on auto-diagnostics or a `symbols` call, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
+9. **Code actions** — `codeAction` lists available refactorings/fixes at a position, `codeActionApply` executes one by its index. Supports `codeAction/resolve` for deferred edits.
+10. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
 
 ## Supported servers
 
@@ -20,7 +22,9 @@ Auto-detects common language servers from project markers (TypeScript, Rust, Go,
 ## Commands
 
 - `/lsp` — show detected servers and status
-- `/lsp-restart` — restart all LSP servers
+- `/lsp-restart` — restart all LSP servers (user command)
+
+The agent can also restart servers via `lsp(action="restart")` (all servers) or `lsp(action="restart", file="...")` (server for a specific file's project).
 
 ## How auto-diagnostics work
 
@@ -66,6 +70,38 @@ Example output (TS, after filter):
 
 **Agent steering.** A `promptGuideline` directs the agent to call `lsp symbols` before `read` on capable-server languages (e.g. Rust, TS/JS, C#, Go), explicitly excluding weak servers (e.g. nixd, bash-language-server). Scoped deliberately — over-steering backfires, and the filter can't save a server whose `documentSymbol` shape is fundamentally wrong (nixd emits every leaf value as a symbol).
 
+## Workspace Symbol Search
+
+The `workspace_symbol` action searches for symbols across the entire project by name. Unlike `symbols` (which lists all symbols in one file), `workspace_symbol` does a substring match across all active LSP servers.
+
+**Parameters:**
+- `action: "workspace_symbol"` — the action to perform
+- `query: string` — case-insensitive substring match on symbol names
+
+**Behavior:**
+- Broadcasts `workspace/symbol` to all active LSP clients (across all roots)
+- Results are sorted alphabetically by symbol name
+- Each result shows the symbol kind, container name, and file location
+- Returns up to the server's limit (typically 50-200 results)
+
+**When to use:** Finding a function/type/class when you know the name but not the file. More precise than `rg` for symbols (respects scoping, includes types/interfaces, handles overloads).
+
+**Example:** `lsp(action="workspace_symbol", query="handleInput")` — finds all symbols matching "handleInput" across the project.
+
+## Multi-root Support
+
+When working on files outside the session cwd, the extension automatically roots LSP servers at the correct project root.
+
+**How it works:**
+1. For each file, `findProjectRoot` walks up from the file's directory looking for root markers (Cargo.toml, package.json, go.mod, etc.)
+2. If a server is already running for that root, it's reused
+3. Otherwise, a new server instance is spawned rooted at the project root
+4. Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist (e.g., one rust-analyzer for `~/dev/project-a/` and another for `~/dev/project-b/`)
+
+**Example scenario:** Session cwd is `~/config/` (Nix config). Agent opens `~/projects/myapp/src/lib.rs` — rust-analyzer starts rooted at `~/projects/myapp/`, not `~/config/`. All LSP features work correctly (diagnostics, go-to-definition, symbols, etc.).
+
+**Status display:** The `/lsp` command shows both session-cwd servers and dynamically-started servers from other roots.
+
 ## Files
 
 | File | Purpose |
@@ -80,6 +116,7 @@ Example output (TS, after filter):
 | format.test.ts | Tests for formatting |
 | servers.test.ts | Tests for server configs, file matching, memory scaling |
 | linters.test.ts | Tests for linter configs, biome/golangci-lint output parsing |
+| client.test.ts | Tests for project root detection |
 
 ## Per-project LSP settings (`.lsp/` directory)
 

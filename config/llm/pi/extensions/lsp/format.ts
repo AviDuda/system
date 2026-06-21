@@ -322,43 +322,135 @@ export function formatSymbolInformation(sym: SymbolInformation, cwd: string): st
 }
 
 /**
- * Resolve the column position of a symbol on a given line.
- * If symbol is provided, finds its position on the line.
- * Otherwise returns 0.
+ * Result of resolving a symbol position in a file.
+ * Contains the 0-based line and column, plus whether the resolution succeeded.
  */
+export interface ResolvedPosition {
+  /** 0-based line number */
+  line: number;
+  /** 0-based column number */
+  character: number;
+  /** Whether the symbol was actually found at this position */
+  found: boolean;
+  /** Total occurrences of the symbol on the resolved line (for diagnostics) */
+  occurrenceCount?: number;
+  /** How the position was resolved (for error messages) */
+  source?: "semantic" | "textual";
+}
+
+/** Escape a string for use in a RegExp. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Resolve the 0-based column position of a symbol on a given line.
- *
- * Used by the LSP action dispatcher to convert (file, line, symbol) triples
- * into the (file, line, character) positions that LSP requests require.
- *
- * @param filePath - Absolute path to the source file
- * @param line - 1-based line number
- * @param symbol - Text to find on the line (if undefined, returns column 0)
- * @param occurrence - Which occurrence to match (1-based, defaults to 1)
- * @returns 0-based column index, or 0 if not found
+ * Find all word-boundary matches of `symbol` in a line. Returns column indices.
+ * Word boundary = the symbol is surrounded by non-word characters or line edges.
  */
-export function resolveSymbolColumn(filePath: string, line: number, symbol?: string, occurrence?: number): number {
-  if (!symbol) return 0;
+function findWordMatches(lineText: string, symbol: string): number[] {
+  const re = new RegExp(`\\b${escapeRegex(symbol)}\\b`, "g");
+  const indices: number[] = [];
+  for (const match of lineText.matchAll(re)) {
+    indices.push(match.index);
+  }
+  return indices;
+}
+
+/**
+ * Search a DocumentSymbol tree for a symbol by name. Returns its selectionRange.
+ * Searches depth-first, preferring the shallowest match.
+ */
+function findInSymbolTree(
+  symbols: DocumentSymbol[],
+  name: string,
+  maxDepth = 10,
+): { line: number; character: number } | null {
+  if (maxDepth <= 0) return null;
+  for (const sym of symbols) {
+    if (sym.name === name) {
+      return { line: sym.selectionRange.start.line, character: sym.selectionRange.start.character };
+    }
+    if (sym.children) {
+      const found = findInSymbolTree(sym.children, name, maxDepth - 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the position of a symbol in a file.
+ *
+ * Three resolution strategies (tried in order):
+ * 1. Semantic (no line): if `documentSymbols` is provided and no `line` is specified,
+ *    search the symbol tree by name. Uses `selectionRange` — the precise name span.
+ *    This finds the declaration site, which is what you want for "find where X is defined."
+ * 2. Textual (specific line): word-boundary match on the given line, occurrence N.
+ *    This finds the usage site at the specified line, which is what you want for
+ *    references/hover/type_definition at a specific usage.
+ * 3. Textual (file-wide): if no line specified and no semantic match, first
+ *    word-boundary match in file.
+ *
+ * Returns `found: false` when the symbol can't be located, so callers can
+ * distinguish "not found" from "found at column 0".
+ */
+export function resolveSymbolPosition(
+  filePath: string,
+  line: number | undefined,
+  symbol: string | undefined,
+  occurrence?: number,
+  documentSymbols?: DocumentSymbol[],
+): ResolvedPosition {
+  // No symbol: default to line start
+  if (!symbol) {
+    return { line: (line ?? 1) - 1, character: 0, found: false };
+  }
+
+  // Strategy 1: Semantic resolution from document symbol tree (only when no line specified)
+  // When `line` is provided, the user is pointing at a specific usage site — use textual.
+  if (line === undefined && documentSymbols && documentSymbols.length > 0) {
+    const semantic = findInSymbolTree(documentSymbols, symbol);
+    if (semantic) {
+      return { line: semantic.line, character: semantic.character, found: true, source: "semantic" };
+    }
+  }
+
   try {
     const content = fs.readFileSync(filePath, "utf-8");
-    const lines = content.split("\n");
-    const targetLine = lines[line - 1];
-    if (!targetLine) return 0;
+    const fileLines = content.split("\n");
 
-    const occ = occurrence ?? 1;
-    let found = 0;
-    let idx = -1;
-    let searchFrom = 0;
-    while (found < occ) {
-      idx = targetLine.indexOf(symbol, searchFrom);
-      if (idx === -1) break;
-      found++;
-      searchFrom = idx + 1;
+    // Strategy 2: Textual match on specific line
+    if (line !== undefined) {
+      const targetLine = fileLines[line - 1];
+      if (!targetLine) return { line: line - 1, character: 0, found: false };
+
+      const matches = findWordMatches(targetLine, symbol);
+      const occ = occurrence ?? 1;
+
+      if (matches.length > 0 && occ <= matches.length) {
+        return {
+          line: line - 1,
+          character: matches[occ - 1],
+          found: true,
+          occurrenceCount: matches.length,
+          source: "textual",
+        };
+      }
+
+      return { line: line - 1, character: 0, found: false, occurrenceCount: matches.length };
     }
-    return idx >= 0 ? idx : 0;
+
+    // Strategy 3: Textual match across entire file
+    for (let i = 0; i < fileLines.length; i++) {
+      const matches = findWordMatches(fileLines[i], symbol);
+      if (matches.length > 0) {
+        return { line: i, character: matches[0], found: true, source: "textual" };
+      }
+    }
+
+    return { line: 0, character: 0, found: false };
   } catch {
-    return 0;
+    return { line: (line ?? 1) - 1, character: 0, found: false };
   }
 }
 
@@ -376,11 +468,15 @@ export function resolveSymbolColumn(filePath: string, line: number, symbol?: str
  *
  * @param edit - The WorkspaceEdit to apply
  * @param cwd - Current working directory for relative path reporting
+ * @param onFileWritten - Callback invoked with each file's absolute path after writing.
+ *   Used to sync modified content back to the LSP server via didChange.
+ *   Pass a no-op `() => {}` if no sync is needed.
  * @returns Array of "relativePath: N edit(s)" strings
  */
 export async function applyWorkspaceEdit(
   edit: WorkspaceEdit,
   cwd: string,
+  onFileWritten: (absolutePath: string) => void,
 ): Promise<Array<{ path: string; count: number }>> {
   const results: Array<{ path: string; count: number }> = [];
 
@@ -414,6 +510,7 @@ export async function applyWorkspaceEdit(
       }
 
       await fs.promises.writeFile(editPath, lines.join("\n"));
+      onFileWritten(editPath);
       results.push({ path: relPath, count: edits.length });
     }
   }

@@ -7,7 +7,7 @@ import {
   formatDocumentSymbol,
   formatLocation,
   normalizeLocations,
-  resolveSymbolColumn,
+  resolveSymbolPosition,
   sortDiagnostics,
 } from "./format";
 
@@ -259,12 +259,36 @@ describe("formatDocumentSymbol", () => {
   });
 });
 
-describe("resolveSymbolColumn", () => {
-  test("returns 0 when no symbol", () => {
-    expect(resolveSymbolColumn("/nonexistent", 1)).toBe(0);
+describe("resolveSymbolPosition", () => {
+  test("returns found=false with no symbol", () => {
+    const result = resolveSymbolPosition("/nonexistent", undefined, undefined);
+    expect(result.found).toBe(false);
+    expect(result.line).toBe(0);
+    expect(result.character).toBe(0);
   });
 
-  test("returns 0 for nonexistent file", () => {
-    expect(resolveSymbolColumn("/nonexistent", 1, "foo")).toBe(0);
+  test("returns found=false for nonexistent file", () => {
+    const result = resolveSymbolPosition("/nonexistent", 1, "foo");
+    expect(result.found).toBe(false);
+  });
+
+  test("finds symbol on line in real file", () => {
+    // Use this test file itself — we know 'describe' appears on line 1 area
+    const result = resolveSymbolPosition(import.meta.path, 1, "describe");
+    expect(result.found).toBe(true);
+    expect(result.character).toBeGreaterThanOrEqual(0);
+  });
+
+  test("searches entire file when no line specified", () => {
+    const result = resolveSymbolPosition(import.meta.path, undefined, "resolveSymbolPosition");
+    expect(result.found).toBe(true);
+    expect(result.line).toBeGreaterThan(0);
+  });
+
+  test("returns found=false for symbol not in file", () => {
+    // Generate a random string at runtime so it can't appear in the source
+    const randomSymbol = `sym_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const result = resolveSymbolPosition(import.meta.path, undefined, randomSymbol);
+    expect(result.found).toBe(false);
   });
 });

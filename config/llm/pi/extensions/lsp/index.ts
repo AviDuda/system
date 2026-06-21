@@ -24,6 +24,7 @@ import {
   type DocumentSymbol,
   FileChangeType,
   fileToUri,
+  findProjectRoot,
   type Hover,
   LSP_REQUEST_TIMEOUT_MS,
   type LspClient,
@@ -45,17 +46,28 @@ import {
   formatSymbolInformation,
   normalizeLocations,
   readLocationContext,
-  resolveSymbolColumn,
+  resolveSymbolPosition,
   sortDiagnostics,
 } from "./format";
 import { type DetectedLinter, detectLinters, findLinterByExtension, lintersForFile, lintFile } from "./linters";
-import { type DetectedServer, detectServers, findServerByExtension, serversForFile } from "./servers";
+import { type DetectedServer, detectServers, findServerByExtension, KNOWN_SERVERS, serversForFile } from "./servers";
 import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType } from "./watcher";
 
 // ── State ──
 
-/** Active LSP clients, keyed by server name */
+/** Active LSP clients, keyed by `serverName::rootPath` */
 const clients = new Map<string, LspClient>();
+
+/** Build a client map key from server name and project root. */
+function clientKey(serverName: string, root: string): string {
+  return `${serverName}::${root}`;
+}
+
+/** Parse a client key back into server name and root. */
+function parseClientKey(key: string): { serverName: string; root: string } {
+  const idx = key.indexOf("::");
+  return { serverName: key.slice(0, idx), root: key.slice(idx + 2) };
+}
 
 /** Detected servers for current cwd */
 let detectedServers: DetectedServer[] = [];
@@ -74,41 +86,88 @@ let fileWatcher: FileWatcher | null = null;
 
 // ── Client management ──
 
-async function getClient(serverName: string): Promise<LspClient | null> {
-  const existing = clients.get(serverName);
+/**
+ * Get or create a client for a specific server at a specific root.
+ */
+async function getClientAt(serverName: string, root: string): Promise<LspClient | null> {
+  const key = clientKey(serverName, root);
+  const existing = clients.get(key);
   if (existing && !existing.dead) return existing;
 
-  const server = detectedServers.find((s) => s.name === serverName);
-  if (!server) return null;
+  // Look up server config
+  const config = KNOWN_SERVERS[serverName];
+  if (!config) return null;
 
   try {
-    const client = await createClient(serverName, server.config, currentCwd);
-    // Wire up progress notifications to status bar (throttled for high-frequency updates)
+    const client = await createClient(serverName, config, root);
     client.onProgress = () => updateStatusBarThrottled();
-    clients.set(serverName, client);
+    clients.set(key, client);
     return client;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[lsp] Failed to start ${serverName}: ${msg}`);
+    console.error(`[lsp] Failed to start ${serverName} at ${root}: ${msg}`);
     return null;
   }
+}
+
+async function getClient(serverName: string): Promise<LspClient | null> {
+  return getClientAt(serverName, currentCwd);
 }
 
 function getServersForFile(filePath: string): DetectedServer[] {
   return serversForFile(filePath, detectedServers);
 }
 
-async function getClientForFile(filePath: string): Promise<{ client: LspClient; server: DetectedServer } | null> {
-  let servers = getServersForFile(filePath);
+/**
+ * Find the project root for a file using known servers' root markers.
+ * Returns the root and which server matched, or null.
+ */
+function findRootForFile(filePath: string): { root: string; serverName: string } | null {
+  for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
+    const root = findProjectRoot(filePath, config.rootMarkers);
+    if (root) return { root, serverName: name };
+  }
+  return null;
+}
 
-  // Lazy detection: if no detected server handles this file, check KNOWN_SERVERS by extension
+async function getClientForFile(filePath: string): Promise<{ client: LspClient; server: DetectedServer } | null> {
+  const abs = path.resolve(filePath);
+  const isOutsideCwd = !abs.startsWith(currentCwd);
+
+  // For files outside the session cwd, try project root detection first.
+  // Pre-detected servers are rooted at currentCwd and won't work for external projects.
+  if (isOutsideCwd) {
+    const found = findRootForFile(abs);
+    if (found) {
+      const client = await getClientAt(found.serverName, found.root);
+      if (client) {
+        const config = KNOWN_SERVERS[found.serverName];
+        return { client, server: { name: found.serverName, config, resolvedCommand: "" } };
+      }
+    }
+  }
+
+  // 1. Try pre-detected servers (session cwd) — fastest path for files inside cwd
+  let servers = getServersForFile(abs);
+
+  // 2. If no pre-detected server handles this extension, find project root
   if (servers.length === 0) {
-    const found = findServerByExtension(filePath, currentCwd);
-    if (found && !detectedServers.some((s) => s.name === found.name)) {
-      detectedServers.push(found);
+    const found = findRootForFile(abs);
+    if (found) {
+      const client = await getClientAt(found.serverName, found.root);
+      if (client) {
+        const config = KNOWN_SERVERS[found.serverName];
+        return { client, server: { name: found.serverName, config, resolvedCommand: "" } };
+      }
+    }
+
+    // 3. Fallback: lazy detection by extension (original behavior)
+    const lazyFound = findServerByExtension(abs, currentCwd);
+    if (lazyFound && !detectedServers.some((s) => s.name === lazyFound.name)) {
+      detectedServers.push(lazyFound);
       updateStatusBar();
     }
-    servers = getServersForFile(filePath);
+    servers = getServersForFile(abs);
     if (servers.length === 0) return null;
   }
 
@@ -125,8 +184,16 @@ const PROGRESS_STALE_MS = 30_000;
 
 function updateStatusBar(): void {
   if (!sessionCtx) return;
-  const names = [...detectedServers.map((s) => s.name), ...detectedLinters.map((l) => l.name)];
-  if (names.length === 0) return;
+
+  // Collect unique server names from both detected and dynamically-started clients
+  const activeNames = new Set<string>();
+  for (const key of clients.keys()) {
+    const { serverName } = parseClientKey(key);
+    activeNames.add(serverName);
+  }
+  for (const s of detectedServers) activeNames.add(s.name);
+  for (const l of detectedLinters) activeNames.add(l.name);
+  if (activeNames.size === 0) return;
 
   // Expire stale progress entries (servers that sent 'begin' but never 'end')
   const now = Date.now();
@@ -152,7 +219,7 @@ function updateStatusBar(): void {
   if (progressParts.length > 0) {
     status = sessionCtx.ui.theme.fg("accent", `lsp:${progressParts.join(", ")}`);
   } else {
-    status = sessionCtx.ui.theme.fg("muted", `lsp:${names.join(",")}`);
+    status = sessionCtx.ui.theme.fg("muted", `lsp:${[...activeNames].join(",")}`);
   }
   sessionCtx.ui.setStatus("lsp", status);
 }
@@ -233,7 +300,8 @@ function handleFileChanges(changes: FileChange[]): void {
         }
       } else {
         // Fallback: match against detected server file types
-        const server = detectedServers.find((s) => s.name === clientName);
+        const { serverName } = parseClientKey(clientName);
+        const server = detectedServers.find((s) => s.name === serverName);
         if (server) {
           const ext = path.extname(change.absolutePath).toLowerCase();
           matched = server.config.fileTypes.some((ft) => ft === ext);
@@ -510,9 +578,11 @@ export default function (pi: ExtensionAPI) {
     "references",
     "hover",
     "symbols",
+    "workspace_symbol",
     "rename",
     "codeAction",
     "codeActionApply",
+    "restart",
     "status",
   ] as const;
 
@@ -520,16 +590,18 @@ export default function (pi: ExtensionAPI) {
     name: "lsp",
     label: "LSP",
     description: `Language Server Protocol operations. Actions: ${LSP_ACTIONS.join(", ")}. Requires a running language server for the target file's language.`,
-    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, rename, codeAction, codeActionApply, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
+    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, workspace_symbol, rename, codeAction, codeActionApply, restart, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
     promptGuidelines: [
       "Before `read`ing a large source file (Rust, TS/JS, C#, Go, and other languages with a capable LSP server), use `lsp` with action `symbols` first. It returns a compact skeleton — top-level functions, structs/classes/interfaces with their fields, and line ranges — so you can `read` with `offset`/`limit` for just the symbol you need instead of the whole file. Useless for you on languages with weak servers (nixd, bash-language-server); fall back to `read` there. If a symbols call reports the server is still indexing, retry it immediately or use `read` directly.",
       "Use `lsp` with action `diagnostics` after making changes to check for type errors.",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
       "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
       "The `hover` action shows type information for a symbol at a given position.",
-      "Always provide `file` for all actions except `status`.",
-      "Use `line` and optionally `symbol` to target a specific position.",
+      "Always provide `file` for all actions except `status`, `workspace_symbol`, and `restart`.",
+      "Use `line` and optionally `symbol` to target a specific position. When `symbol` is provided without `line`, the tool searches the file for the symbol — this is often more reliable for go-to-definition since it uses semantic resolution.",
       "Use `lsp` with action `codeAction` to list refactorings available at a position. Then use `codeActionApply` with the action index to execute it.",
+      "Use `lsp` with action `workspace_symbol` to search for symbols across the entire project by name. Provide `query` (substring match, case-insensitive). Works across all active LSP servers. Useful for finding function/type definitions when you know the name but not the file.",
+      "Use `lsp` with action `restart` to restart language servers. Without `file`, restarts all servers. With `file`, restarts only the server for that file's project. Use when a server is stuck, dead, or giving stale results.",
     ],
     parameters: Type.Object({
       action: StringEnum([...LSP_ACTIONS]),
@@ -540,6 +612,9 @@ export default function (pi: ExtensionAPI) {
         Type.Number({ description: "Which occurrence of symbol on the line (1-indexed, default 1)" }),
       ),
       new_name: Type.Optional(Type.String({ description: "New name for rename action" })),
+      query: Type.Optional(
+        Type.String({ description: "Search query for workspace_symbol action (substring match, case-insensitive)" }),
+      ),
       index: Type.Optional(Type.Number({ description: "Index of the code action to apply (from codeAction listing)" })),
     }),
 
@@ -548,25 +623,122 @@ export default function (pi: ExtensionAPI) {
 
       // ── Status ──
       if (action === "status") {
-        if (detectedServers.length === 0 && detectedLinters.length === 0) {
+        if (detectedServers.length === 0 && detectedLinters.length === 0 && clients.size === 0) {
           return text("No language servers or linters detected for this project.");
         }
         const lines: string[] = [];
+
+        // Show pre-detected servers (session cwd)
         if (detectedServers.length > 0) {
-          lines.push(`Detected ${detectedServers.length} language server(s):`);
+          lines.push(`Detected ${detectedServers.length} language server(s) for ${currentCwd}:`);
           for (const s of detectedServers) {
-            const client = clients.get(s.name);
+            const client = clients.get(clientKey(s.name, currentCwd));
             const status = client && !client.dead ? `running (${formatUptime(client.createdAt)})` : "available";
             lines.push(`  ${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
           }
         }
+
+        // Show dynamically-started clients (other roots)
+        const otherRoots = [...clients.entries()].filter(([key]) => {
+          const { root } = parseClientKey(key);
+          return root !== currentCwd;
+        });
+        if (otherRoots.length > 0) {
+          lines.push(``);
+          lines.push(`Active servers for other projects (${otherRoots.length}):`);
+          for (const [key, client] of otherRoots) {
+            const { serverName, root } = parseClientKey(key);
+            const relRoot = path.relative(currentCwd, root);
+            const status = !client.dead ? `running (${formatUptime(client.createdAt)})` : "dead";
+            lines.push(`  ${serverName} @ ${relRoot} — ${status}`);
+          }
+        }
+
         if (detectedLinters.length > 0) {
+          lines.push(``);
           lines.push(`Detected ${detectedLinters.length} linter(s):`);
           for (const l of detectedLinters) {
             lines.push(`  ${l.name} (${l.config.fileTypes.join(", ")}) — cli`);
           }
         }
         return text(lines.join("\n"));
+      }
+
+      // ── Workspace symbol search (no file required — broadcasts to all clients) ──
+      if (action === "workspace_symbol") {
+        const workspaceQuery = params.query;
+        if (!workspaceQuery) return text("Error: query parameter required for workspace_symbol");
+
+        const allResults: SymbolInformation[] = [];
+        for (const [, c] of clients) {
+          if (c.dead) continue;
+          if (!c.capabilities.workspaceSymbolProvider) continue;
+          try {
+            const raw = (await c.request("workspace/symbol", {
+              query: workspaceQuery,
+            })) as SymbolInformation[] | null;
+            if (raw && raw.length > 0) {
+              allResults.push(...raw);
+            }
+          } catch {
+            // Non-fatal: server may not support workspace symbols or timed out
+          }
+        }
+
+        if (allResults.length === 0) return text(`No workspace symbols found for "${workspaceQuery}"`);
+
+        allResults.sort((a, b) => a.name.localeCompare(b.name));
+        const lines = allResults.map((s) => formatSymbolInformation(s, ctx.cwd));
+        return text(`Workspace symbols matching "${workspaceQuery}" (${allResults.length}):\n${lines.join("\n")}`);
+      }
+
+      // ── Restart servers ──
+      if (action === "restart") {
+        if (file) {
+          // Restart only the server for this file's project
+          const abs = path.resolve(ctx.cwd, file);
+          const pair = await getClientForFile(abs);
+          if (!pair) return text(`No language server available for ${file}`);
+
+          const { client } = pair;
+          const serverName = client.name;
+
+          // Find and remove the client key for this specific server+root
+          let removedKey: string | undefined;
+          for (const [key, c] of clients) {
+            if (c === client) {
+              removedKey = key;
+              break;
+            }
+          }
+
+          await client.shutdown();
+          if (removedKey) clients.delete(removedKey);
+
+          // Re-create the server
+          const { root } = removedKey ? parseClientKey(removedKey) : { root: currentCwd };
+          const newClient = await getClientAt(serverName, root);
+          if (newClient) {
+            updateStatusBar();
+            return text(`Restarted ${serverName} (root: ${root})`);
+          }
+          return text(`Failed to restart ${serverName}`);
+        }
+
+        // Restart all servers
+        const names = [...clients.values()].map((c) => c.name);
+        await shutdownAll();
+
+        // Re-warm session cwd servers
+        for (const server of detectedServers) {
+          try {
+            await getClient(server.name);
+          } catch {
+            // Non-fatal
+          }
+        }
+        updateStatusBar();
+        return text(`Restarted ${names.length} server(s): ${names.join(", ") || "none"}`);
       }
 
       // ── File-based actions ──
@@ -590,10 +762,47 @@ export default function (pi: ExtensionAPI) {
         await openFile(client, abs);
 
         const uri = fileToUri(abs);
-        const resolvedLine = line ?? 1;
-        const col = resolveSymbolColumn(abs, resolvedLine, symbol, occurrence);
-        const position = { line: resolvedLine - 1, character: col };
-        const colInfo = symbol ? ` (symbol "${symbol}" at col ${col})` : ` (col ${col})`;
+
+        // Fetch document symbols for semantic position resolution.
+        // The server is already parsing the file from openFile, so this is fast.
+        // Not all servers support documentSymbol, so gracefully handle failures.
+        let docSymbols: DocumentSymbol[] | undefined;
+        if (symbol && client.capabilities.documentSymbolProvider) {
+          try {
+            const raw = (await client.request("textDocument/documentSymbol", {
+              textDocument: { uri },
+            })) as (DocumentSymbol | SymbolInformation)[] | null;
+            if (raw && raw.length > 0 && "selectionRange" in raw[0]) {
+              docSymbols = raw as DocumentSymbol[];
+            }
+          } catch {
+            // Non-fatal: fall back to textual resolution
+          }
+        }
+
+        const resolved = resolveSymbolPosition(abs, line, symbol, occurrence, docSymbols);
+        const position = { line: resolved.line, character: resolved.character };
+        const displayLine = resolved.line + 1; // 1-based for display
+
+        // Build diagnostic info about position resolution
+        let posInfo: string;
+        if (!symbol) {
+          posInfo = ``;
+        } else if (resolved.found) {
+          const method = resolved.source === "semantic" ? "semantic" : "textual";
+          const occInfo =
+            resolved.occurrenceCount && resolved.occurrenceCount > 1
+              ? ` (occurrence ${occurrence ?? 1} of ${resolved.occurrenceCount})`
+              : "";
+          posInfo = ` (symbol "${symbol}" at ${displayLine}:${resolved.character + 1} via ${method}${occInfo})`;
+        } else if (line !== undefined) {
+          // Symbol specified + line specified, but not found on that line
+          const occInfo = resolved.occurrenceCount === 0 ? " — symbol not found on this line" : "";
+          posInfo = ` (symbol "${symbol}" not found at line ${line}${occInfo})`;
+        } else {
+          // Symbol specified, no line, not found anywhere
+          posInfo = ` (symbol "${symbol}" not found in file)`;
+        }
 
         switch (action) {
           case "diagnostics": {
@@ -610,8 +819,8 @@ export default function (pi: ExtensionAPI) {
             });
             const locs = normalizeLocations(raw);
             if (locs.length === 0) {
-              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
-              return text(`No definition found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+              const ctx = readLocationContext(abs, displayLine, 2).join("\n");
+              return text(`No definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} definition(s):\n${lines.join("\n")}`);
@@ -624,8 +833,8 @@ export default function (pi: ExtensionAPI) {
             });
             const locs = normalizeLocations(raw);
             if (locs.length === 0) {
-              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
-              return text(`No type definition found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+              const ctx = readLocationContext(abs, displayLine, 2).join("\n");
+              return text(`No type definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} type definition(s):\n${lines.join("\n")}`);
@@ -638,8 +847,8 @@ export default function (pi: ExtensionAPI) {
             });
             const locs = normalizeLocations(raw);
             if (locs.length === 0) {
-              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
-              return text(`No implementation found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+              const ctx = readLocationContext(abs, displayLine, 2).join("\n");
+              return text(`No implementation found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
             return text(`Found ${locs.length} implementation(s):\n${lines.join("\n")}`);
@@ -653,8 +862,8 @@ export default function (pi: ExtensionAPI) {
             });
             const locs = normalizeLocations(raw);
             if (locs.length === 0) {
-              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
-              return text(`No references found${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+              const ctx = readLocationContext(abs, displayLine, 2).join("\n");
+              return text(`No references found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const contextLimit = 30;
             const withContext = locs.slice(0, contextLimit);
@@ -673,8 +882,8 @@ export default function (pi: ExtensionAPI) {
               position,
             })) as Hover | null;
             if (!raw?.contents) {
-              const ctx = readLocationContext(abs, resolvedLine, 2).join("\n");
-              return text(`No hover information${colInfo}. Context around line ${resolvedLine}:\n${ctx}`);
+              const ctx = readLocationContext(abs, displayLine, 2).join("\n");
+              return text(`No hover information${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             return text(extractHoverText(raw.contents));
           }
@@ -725,9 +934,9 @@ export default function (pi: ExtensionAPI) {
             })) as { changes?: Record<string, TextEdit[]> } | null;
 
             if (!raw?.changes) {
-              const context = readLocationContext(abs, resolvedLine, 3).join("\n");
+              const context = readLocationContext(abs, displayLine, 3).join("\n");
               return text(
-                `Rename failed — no renameable symbol found at line ${resolvedLine}${symbol ? `, symbol "${symbol}"` : ""}.\n\nContext around line ${resolvedLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
+                `Rename failed — no renameable symbol found at line ${displayLine}${symbol ? `, symbol "${symbol}"` : ""}.\n\nContext around line ${displayLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
               );
             }
 
@@ -762,6 +971,12 @@ export default function (pi: ExtensionAPI) {
               }
 
               await fs.promises.writeFile(editPath, lines.join("\n"));
+
+              // Sync the modified content back to the server so its in-memory
+              // model matches disk. Without this, subsequent renames compute
+              // edits against stale positions and corrupt the file.
+              await syncFile(client, editPath);
+
               results.push(`${relPath}: ${edits.length} edit(s)`);
             }
 
@@ -772,14 +987,14 @@ export default function (pi: ExtensionAPI) {
             // Query available code actions at the cursor position
             const raw = (await client.request("textDocument/codeAction", {
               textDocument: { uri },
-              range: { start: { line: resolvedLine - 1, character: 0 }, end: { line: resolvedLine - 1, character: 0 } },
+              range: { start: { line: resolved.line, character: 0 }, end: { line: resolved.line, character: 0 } },
               context: { diagnostics: [] },
             })) as Array<{ title: string; kind?: string; isPreferred?: boolean; disabled?: { reason: string } }>;
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
 
             // Show available actions with context lines around cursor
-            const context = readLocationContext(abs, resolvedLine, 5).join("\n");
+            const context = readLocationContext(abs, displayLine, 5).join("\n");
 
             const lines: string[] = [`Available code actions (${raw.length}):`];
             for (let i = 0; i < raw.length; i++) {
@@ -790,7 +1005,7 @@ export default function (pi: ExtensionAPI) {
               lines.push(`  [${i}]${kind} ${a.title}${preferred}${disabled}`);
             }
             lines.push("");
-            lines.push(`Context around line ${resolvedLine}:`);
+            lines.push(`Context around line ${displayLine}:`);
             lines.push(context);
             lines.push("");
             lines.push("To apply: use action 'codeActionApply' with the index of the action you want.");
@@ -806,7 +1021,7 @@ export default function (pi: ExtensionAPI) {
             // Query available code actions
             const raw = (await client.request("textDocument/codeAction", {
               textDocument: { uri },
-              range: { start: { line: resolvedLine - 1, character: 0 }, end: { line: resolvedLine - 1, character: 0 } },
+              range: { start: { line: resolved.line, character: 0 }, end: { line: resolved.line, character: 0 } },
               context: { diagnostics: [] },
             })) as CodeAction[];
 
@@ -836,8 +1051,10 @@ export default function (pi: ExtensionAPI) {
               );
             }
 
-            // Apply the workspace edit
-            const results = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd);
+            // Apply the workspace edit, syncing each modified file back to the server
+            const results = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd, (editPath) => {
+              syncFile(client, editPath);
+            });
             return text(
               `Applied "${selected.title}":\n${results.map((r) => `  ${r.path}: ${r.count} edit(s)`).join("\n")}`,
             );
@@ -859,8 +1076,9 @@ export default function (pi: ExtensionAPI) {
       const line = args.line ? theme.fg("muted", `:${args.line}`) : "";
       const sym = args.symbol ? ` ${theme.fg("dim", String(args.symbol))}` : "";
       const rename = args.new_name ? ` ${theme.fg("muted", "→")} ${theme.fg("accent", String(args.new_name))}` : "";
+      const query = args.query ? ` "${theme.fg("accent", String(args.query))}"` : "";
       const idx = args.index !== undefined ? ` [${args.index}]` : "";
-      return new Text(`${label}${action}${file}${line}${sym}${rename}${idx}`, 0, 0);
+      return new Text(`${label}${action}${file}${line}${sym}${rename}${query}${idx}`, 0, 0);
     },
 
     renderResult(result, { expanded }, theme) {

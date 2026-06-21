@@ -39,6 +39,7 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
+      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -68,6 +69,7 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
+      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 2 }]);
@@ -92,6 +94,7 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
+      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -114,6 +117,7 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
+      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -136,6 +140,7 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
+      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -143,7 +148,7 @@ describe("applyWorkspaceEdit", () => {
   });
 
   test("handles empty changes", async () => {
-    const result = await applyWorkspaceEdit({ changes: {} }, tmpDir);
+    const result = await applyWorkspaceEdit({ changes: {} }, tmpDir, () => {});
     expect(result).toEqual([]);
   });
 });

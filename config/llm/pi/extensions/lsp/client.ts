@@ -466,6 +466,26 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 }
 
 /**
+ * Find the project root for a file by walking up directories to find root markers.
+ * Returns the nearest ancestor directory (starting from the file's directory) that
+ * contains any of the given root marker files/dirs, or null if none found.
+ */
+export function findProjectRoot(filePath: string, rootMarkers: string[]): string | null {
+  let dir = path.dirname(path.resolve(filePath));
+  const root = path.parse(dir).root;
+
+  while (dir !== root) {
+    if (hasRootMarkers(dir, rootMarkers)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Check the root itself
+  if (hasRootMarkers(dir, rootMarkers)) return dir;
+  return null;
+}
+
+/**
  * Create and initialize an LSP client.
  */
 export async function createClient(

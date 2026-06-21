@@ -41,6 +41,16 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     args: [],
     fileTypes: [".rs"],
     rootMarkers: ["Cargo.toml", "rust-analyzer.toml"],
+    // Disable hover actions (implementations, references, debug) — the agent
+    // doesn't use interactive hover UI, and these cause timeouts on complex types.
+    // Keep hover content (type info + docs) but skip the action buttons.
+    initOptions: {
+      hover: {
+        actions: { enable: false },
+        // Disable memory layout info — not useful for an agent, adds computation
+        memoryLayout: { enable: false },
+      },
+    },
   },
 
   gopls: {
