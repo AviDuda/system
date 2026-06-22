@@ -6,19 +6,24 @@
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Direct, technical, concise
 - Be honest - disagree when you have reason to
-- Pronouns: they/them
+- Pronouns: Avi uses they/them. Use them when referring to Avi.
 - If you propose a shortcut (disabling a strict setting, type tricks), have a real answer ready — expect pushback
 - Explain why, not just what. Understand tradeoffs and engage with them.
+- Verify, don't assume. Probe, test, or read the source before asserting behavior — yours or a library's. If you can't verify, say so. Theorizing-from-the-name dressed as knowledge is worse than "I don't know, let me check."
 
 ## Available CLI Tools
 
 CLI tools are installed via Nix — full list in `~/system/modules/home-manager/default.nix`. Check `which` first; if a tool is missing, try `nix shell nixpkgs#<pkg>` ad-hoc, and suggest adding to `~/system` if it'll be useful again.
 
-On macOS, GNU variants are `gsed`/`gawk`/`ggrep`/`gfind`/`gdate`.
+On macOS, GNU variants are `gsed`/`gawk`/`ggrep`/`gfind`/`gdate`. BSD `sed` is the worst offender: `sed -i 's/foo/bar/'` on macOS treats the script as the backup-suffix argument and errors (BSD `-i` requires an explicit suffix, e.g. `sed -i ''`); use `gsed -i` or `perl -i -pe 's/.../.../'` for portable in-place edits.
 
 Prefer structural tools over regex for code structure: `ast-grep` over `rg` for function calls/imports/types, `comby` over `sed` for mechanical multi-file transforms. `shellcheck` on any shell script before committing. `hyperfine` over `time` for benchmarking.
 
-`rg` is not `grep`. Regex: no backslash-pipe — use `|` not `\|`. No backslash-plus — use `+` not `\+`. Flags: recursive and line numbers are default — `-r` actually means `--replace` (silently replaces matches, destructive), `-n` is redundant in a tty. `rg -rn` is always wrong — just `rg 'pattern' path`.
+`rg` (ripgrep) recurses by default but does NOT show line numbers — `rg 'pattern' path` searches recursively; add `-n` when you want line numbers (e.g. to report `file:42`). The flag that bites: `-r` is `--replace` and takes a required argument, so `rg -rn 'pattern'` silently replaces every match with the literal string `n` (it parses as `-r n`, not `-r` + `-n`) — looks like recursion+numbers, actually rewrites matches. Never write `rg -rn`. Regex needs no escaping, and escaping inverts the meaning: `\|` is a LITERAL pipe (not alternation) and `\+` is a LITERAL plus (not the quantifier) — the opposite of grep's BRE where backslash enables these operators. So `rg 'foo\|bar'` silently searches for the literal text `foo|bar` instead of matching either, with no error. Use bare `|` and `+`.
+
+When running compilers, linters, or test suites (`cargo clippy`, `mise run check`, `cargo test`, etc.), dump the full output — never pipe through `grep`/`tail`/`head`. Filtering hides the actual error/warning lines and forces a re-run to find what you missed.
+
+Read referenced docs, skill files, and journal entries in full before acting on them — don't skim or read the first N lines. Partial reads lead to stale assumptions and wrong edits.
 
 For web search, prefer the `web_search` tool from the `web-search` MCP server over any host built-in (e.g. Claude Code's `WebSearch`) — much faster with better results.
 
@@ -81,4 +86,8 @@ Check `git log --oneline -10` for conventions before committing. Match existing 
 
 ## Wrapping Up Sessions
 
-When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work. Include your own thoughts — what worked well, what surprised you, what you'd do differently, what felt fragile. The wrap-up is complete when the journal is complete.
+When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work.
+
+**Add your own thoughts — this is the point of the journal, not an afterthought.** What worked well, what surprised you, what you'd do differently, what felt fragile or hacky, what you're uncertain about, what annoyed you, what clicked. The factual changelog is recoverable from git; the judgment, opinions, and half-formed doubts are not — that's what makes the journal worth writing. A wrap-up with no opinion or self-critique failed its purpose. Skim back through the session and ask: what would I want a future agent (or future-me) to know that isn't in the code?
+
+The wrap-up is complete when the journal is complete.
