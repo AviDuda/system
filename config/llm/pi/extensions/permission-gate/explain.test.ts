@@ -204,21 +204,21 @@ describe("findVerdictLine", () => {
 describe("blockReason", () => {
   test("note only for bash", () => {
     expect(blockReason("don't do that", null, "bash")).toBe(
-      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[User note: don't do that]",
+      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[Instruction from the user: don't do that]",
     );
   });
 
   test("explanation only for edit", () => {
     const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
     expect(blockReason("", expl, "edit")).toBe(
-      "BLOCKED by user. The file was NOT modified. Do not retry unless the user asks.\n[Classification: DANGEROUS \u2014 Deletes everything]",
+      "BLOCKED by user. The file was NOT modified. Do not retry unless the user asks.\n[Automated command classification: DANGEROUS \u2014 Deletes everything]",
     );
   });
 
   test("classification before note for write", () => {
     const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
     expect(blockReason("be careful", expl, "write")).toBe(
-      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Classification: RISKY \u2014 Modifies config]\n[User note: be careful]",
+      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Automated command classification: RISKY \u2014 Modifies config]\n[Instruction from the user: be careful]",
     );
   });
 

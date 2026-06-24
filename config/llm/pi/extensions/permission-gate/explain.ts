@@ -139,8 +139,8 @@ export function blockReason(note: string, explanation: ExplanationResult | null,
           : "The action was NOT performed.";
   const lines = [`BLOCKED by user. ${verb} Do not retry unless the user asks.`];
   if (explanation) {
-    lines.push(`[Classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
+    lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
-  if (note) lines.push(`[User note: ${note}]`);
+  if (note) lines.push(`[Instruction from the user: ${note}]`);
   return lines.join("\n");
 }

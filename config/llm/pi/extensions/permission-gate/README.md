@@ -71,8 +71,8 @@ Every confirmation shows a custom TUI with:
 - Colored unified diff preview (edit/write/patch tools) — compact 6-line view by default
 - Select list of actions (Allow once, Allow for session, Block)
 - Multi-line note editor (Tab to focus, Shift+Enter for newlines) — attached to the tool result so the model sees it
-- Notes on allow: appended as `[User note: ...]` to tool output
-- Notes on block: included in the block reason with classification
+- Notes on allow: appended as `[Instruction from the user: ...]` to tool output
+- Notes on block: included in the block reason alongside the automated classification
 
 ### Diff preview
 

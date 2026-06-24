@@ -672,7 +672,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     pendingNotes.delete(event.toolCallId);
 
     return {
-      content: [...event.content, { type: "text" as const, text: `\n\n[User note: ${note}]` }],
+      content: [...event.content, { type: "text" as const, text: `\n\n[Instruction from the user: ${note}]` }],
     };
   });
 }
