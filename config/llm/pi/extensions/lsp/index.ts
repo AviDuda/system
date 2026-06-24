@@ -33,7 +33,7 @@ import {
   openFile,
   type SymbolInformation,
   syncFile,
-  type TextEdit,
+  type WorkspaceEdit,
 } from "./client";
 import {
   applyWorkspaceEdit,
@@ -943,56 +943,39 @@ export default function (pi: ExtensionAPI) {
               textDocument: { uri },
               position,
               newName: new_name,
-            })) as { changes?: Record<string, TextEdit[]> } | null;
+            })) as WorkspaceEdit | null;
 
-            if (!raw?.changes) {
+            if (!raw || ((!raw.changes || Object.keys(raw.changes).length === 0) && !raw.documentChanges?.length)) {
               const context = readLocationContext(abs, displayLine, 3).join("\n");
+              // If the symbol resolved (semantically or textually) but the
+              // server returned no edits, the most common cause is a server
+              // that hasn't finished indexing this file for the rename/
+              // references provider yet — the read-only providers (hover,
+              // references, documentSymbol) often warm up before rename does.
+              // The reliable fix is to run `references` first (it confirms the
+              // symbol AND warms the index), then retry rename.
+              const warmHint = resolved.found
+                ? "\n\nThe symbol resolved at this position, so the server may still be indexing for the rename provider. This is often transient — retry, or run `references` first (it warms the index and confirms the symbol)."
+                : "";
               return text(
-                `Rename failed — no renameable symbol found at line ${displayLine}${symbol ? `, symbol "${symbol}"` : ""}.\n\nContext around line ${displayLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
+                `Rename failed — no renameable symbol found at line ${displayLine}${symbol ? `, symbol "${symbol}"` : ""}.${warmHint}\n\nContext around line ${displayLine}:\n${context}\n\nCheck: is the line number correct? Use the \`symbol\` parameter to target a specific identifier.`,
               );
             }
 
-            // Apply the edits
-            const results: string[] = [];
-            for (const [editUri, edits] of Object.entries(raw.changes)) {
-              const editPath = editUri.replace(/^file:\/\//, "");
-              const relPath = path.relative(ctx.cwd, editPath);
-              const content = await fs.promises.readFile(editPath, "utf-8");
-              const lines = content.split("\n");
+            // Apply the edits. rust-analyzer returns `documentChanges`;
+            // tsserver/others may return `changes`. applyWorkspaceEdit handles
+            // both (documentChanges is authoritative when present) and syncs
+            // each file back to the server so subsequent renames use fresh
+            // positions instead of corrupting the file.
+            const { applied, unsupported } = await applyWorkspaceEdit(raw, ctx.cwd, (editPath) => {
+              syncFile(client, editPath);
+            });
 
-              // Apply edits in reverse order to preserve positions
-              const sorted = [...edits].sort((a, b) => {
-                const lineDiff = b.range.start.line - a.range.start.line;
-                return lineDiff !== 0 ? lineDiff : b.range.start.character - a.range.start.character;
-              });
-
-              for (const edit of sorted) {
-                const startLine = edit.range.start.line;
-                const endLine = edit.range.end.line;
-                const startChar = edit.range.start.character;
-                const endChar = edit.range.end.character;
-
-                if (startLine === endLine) {
-                  const line = lines[startLine];
-                  lines[startLine] = line.slice(0, startChar) + edit.newText + line.slice(endChar);
-                } else {
-                  const firstLine = lines[startLine].slice(0, startChar) + edit.newText;
-                  const lastLine = lines[endLine].slice(endChar);
-                  lines.splice(startLine, endLine - startLine + 1, firstLine + lastLine);
-                }
-              }
-
-              await fs.promises.writeFile(editPath, lines.join("\n"));
-
-              // Sync the modified content back to the server so its in-memory
-              // model matches disk. Without this, subsequent renames compute
-              // edits against stale positions and corrupt the file.
-              await syncFile(client, editPath);
-
-              results.push(`${relPath}: ${edits.length} edit(s)`);
+            const lines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
+            if (unsupported.length > 0) {
+              lines.push(`  (skipped unsupported resource ops: ${unsupported.join(", ")})`);
             }
-
-            return text(`Renamed to "${new_name}":\n${results.map((r) => `  ${r}`).join("\n")}`);
+            return text(`Renamed to "${new_name}":\n${lines.join("\n")}`);
           }
 
           case "codeAction": {
@@ -1064,20 +1047,36 @@ export default function (pi: ExtensionAPI) {
             }
 
             // Apply the workspace edit, syncing each modified file back to the server
-            const results = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd, (editPath) => {
+            const { applied, unsupported } = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd, (editPath) => {
               syncFile(client, editPath);
             });
-            return text(
-              `Applied "${selected.title}":\n${results.map((r) => `  ${r.path}: ${r.count} edit(s)`).join("\n")}`,
-            );
+            const appliedLines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
+            if (unsupported.length > 0) {
+              appliedLines.push(`  (skipped unsupported resource ops: ${unsupported.join(", ")})`);
+            }
+            return text(`Applied "${selected.title}":\n${appliedLines.join("\n")}`);
           }
 
           default:
             return text(`Unknown action: ${action}`);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return text(`LSP error (${server.name}): ${msg}`);
+        // The client prepends "LSP error: " to JSON-RPC error rejections; strip
+        // it here so we don't get the doubled "LSP error (server): LSP error: …".
+        const raw = err instanceof Error ? err.message : String(err);
+        const msg = raw.replace(/^LSP error:\s*/, "");
+        // Some server errors right after opening a file are transient: the
+        // server hasn't finished indexing the rename/references provider even
+        // though it parsed the file for read-only queries. JSON-RPC codes:
+        //   -32602 InvalidParams (rust-analyzer: "No references found at position")
+        //   -32801 ContentModified (the document changed under the server)
+        // Neither means the call is permanently wrong. Tell the agent it's
+        // likely transient and how to warm the index, rather than letting it
+        // bail to a manual fallback on the first failure.
+        const transientHint = /\(-32602\)|\(-32801\)/.test(msg)
+          ? " This is often transient (the server may still be indexing after opening the file) — retry, or run `references` first to warm the index and confirm the symbol resolves."
+          : "";
+        return text(`LSP error (${server.name}): ${msg}${transientHint}`);
       }
     },
 

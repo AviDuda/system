@@ -116,9 +116,30 @@ export interface TextEdit {
   newText: string;
 }
 
+export interface TextDocumentEdit {
+  textDocument: { uri: string; version: number | null };
+  edits: TextEdit[];
+}
+
 export interface WorkspaceEdit {
   changes?: Record<string, TextEdit[]>;
-  documentChanges?: unknown[];
+  documentChanges?: Array<TextDocumentEdit | CreateFile | RenameFile | DeleteFile>;
+}
+
+/** LSP resource operations. Only `TextDocumentEdit` carries edits we apply;
+ * file create/rename/delete are reported as unsupported rather than executed. */
+export interface CreateFile {
+  kind: "create";
+  uri: string;
+}
+export interface RenameFile {
+  kind: "rename";
+  oldUri: string;
+  newUri: string;
+}
+export interface DeleteFile {
+  kind: "delete";
+  uri: string;
 }
 
 export interface Hover {

@@ -8,6 +8,16 @@ function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
 }
 
+/** Returns the applied edits, throwing if any unsupported ops were reported. */
+async function appliedOnly(
+  edit: Parameters<typeof applyWorkspaceEdit>[0],
+  cwd: string,
+): Promise<Array<{ path: string; count: number }>> {
+  const { applied, unsupported } = await applyWorkspaceEdit(edit, cwd, () => {});
+  expect(unsupported).toEqual([]);
+  return applied;
+}
+
 describe("applyWorkspaceEdit", () => {
   let tmpDir: string;
 
@@ -27,7 +37,7 @@ describe("applyWorkspaceEdit", () => {
     const filePath = path.join(tmpDir, "test.ts");
     await fs.promises.writeFile(filePath, "const x = 1;\nconst y = 2;\n");
 
-    const result = await applyWorkspaceEdit(
+    const result = await appliedOnly(
       {
         changes: {
           [`file://${filePath}`]: [
@@ -39,7 +49,6 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
-      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -53,7 +62,7 @@ describe("applyWorkspaceEdit", () => {
     // Edit 1 (applied last): pos 0-5 "hello" → "goodbye"
     await fs.promises.writeFile(filePath, "hello world foo bar\n");
 
-    const result = await applyWorkspaceEdit(
+    const result = await appliedOnly(
       {
         changes: {
           [`file://${filePath}`]: [
@@ -69,7 +78,6 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
-      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 2 }]);
@@ -82,7 +90,7 @@ describe("applyWorkspaceEdit", () => {
     // Replace lines 0-1 ("line1\nline2\n") with "replaced\n"
     // splice(startLine, endLine - startLine + 1, firstLine + lastLine)
     // = splice(0, 2, "replaced\n" + "line3\n")
-    const result = await applyWorkspaceEdit(
+    const result = await appliedOnly(
       {
         changes: {
           [`file://${filePath}`]: [
@@ -94,7 +102,6 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
-      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -105,7 +112,7 @@ describe("applyWorkspaceEdit", () => {
     const filePath = path.join(tmpDir, "test.ts");
     await fs.promises.writeFile(filePath, "hello\n");
 
-    const result = await applyWorkspaceEdit(
+    const result = await appliedOnly(
       {
         changes: {
           [`file://${filePath}`]: [
@@ -117,7 +124,6 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
-      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -128,7 +134,7 @@ describe("applyWorkspaceEdit", () => {
     const filePath = path.join(tmpDir, "test.ts");
     await fs.promises.writeFile(filePath, "hello world\n");
 
-    const result = await applyWorkspaceEdit(
+    const result = await appliedOnly(
       {
         changes: {
           [`file://${filePath}`]: [
@@ -140,7 +146,6 @@ describe("applyWorkspaceEdit", () => {
         },
       },
       tmpDir,
-      () => {},
     );
 
     expect(result).toEqual([{ path: "test.ts", count: 1 }]);
@@ -148,7 +153,92 @@ describe("applyWorkspaceEdit", () => {
   });
 
   test("handles empty changes", async () => {
-    const result = await applyWorkspaceEdit({ changes: {} }, tmpDir, () => {});
-    expect(result).toEqual([]);
+    const { applied, unsupported } = await applyWorkspaceEdit({ changes: {} }, tmpDir, () => {});
+    expect(applied).toEqual([]);
+    expect(unsupported).toEqual([]);
+  });
+
+  // rust-analyzer returns `documentChanges` (the structured form), not
+  // `changes`. This is the regression test for the rename bug where the
+  // extension only read `.changes` and reported "no renameable symbol" even
+  // though the server returned a complete TextDocumentEdit[].
+  test("applies documentChanges (TextDocumentEdit) — rust-analyzer rename form", async () => {
+    const filePath = path.join(tmpDir, "test.rs");
+    await fs.promises.writeFile(filePath, "struct Foo { scale: f64 }\nlet f = Foo { scale: 1.0 };\n");
+
+    const result = await appliedOnly(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri: `file://${filePath}`, version: 1 },
+            edits: [
+              // declaration ("scale" at 13:18)
+              { range: { start: { line: 0, character: 13 }, end: { line: 0, character: 18 } }, newText: "ratio" },
+              // usage ("scale" at 14:19)
+              { range: { start: { line: 1, character: 14 }, end: { line: 1, character: 19 } }, newText: "ratio" },
+            ],
+          },
+        ],
+      },
+      tmpDir,
+    );
+
+    expect(result).toEqual([{ path: "test.rs", count: 2 }]);
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("struct Foo { ratio: f64 }\nlet f = Foo { ratio: 1.0 };\n");
+  });
+
+  test("documentChanges is authoritative when both are present (no double-apply)", async () => {
+    const filePath = path.join(tmpDir, "test.ts");
+    await fs.promises.writeFile(filePath, "hello\n");
+
+    const { applied, unsupported } = await applyWorkspaceEdit(
+      {
+        // A stale/decoy `changes` that would turn "hello" into "DECOY" if applied.
+        changes: {
+          [`file://${filePath}`]: [
+            { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, newText: "DECOY" },
+          ],
+        },
+        // `documentChanges` wins.
+        documentChanges: [
+          {
+            textDocument: { uri: `file://${filePath}`, version: 1 },
+            edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, newText: "world" }],
+          },
+        ],
+      },
+      tmpDir,
+      () => {},
+    );
+
+    expect(applied).toEqual([{ path: "test.ts", count: 1 }]);
+    expect(unsupported).toEqual([]);
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("world\n");
+  });
+
+  test("reports unsupported resource ops (create/rename/delete) without executing them", async () => {
+    const filePath = path.join(tmpDir, "test.ts");
+    await fs.promises.writeFile(filePath, "a\n");
+
+    const { applied, unsupported } = await applyWorkspaceEdit(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri: `file://${filePath}`, version: 1 },
+            edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "b" }],
+          },
+          { kind: "create", uri: `file://${path.join(tmpDir, "new.ts")}` },
+          { kind: "rename", oldUri: `file://${filePath}`, newUri: `file://${path.join(tmpDir, "moved.ts")}` },
+        ],
+      },
+      tmpDir,
+      () => {},
+    );
+
+    expect(applied).toEqual([{ path: "test.ts", count: 1 }]);
+    expect(unsupported).toEqual(["create: new.ts", "rename: test.ts"]);
+    // The rename was NOT executed — original file still has the (edited) content.
+    expect(fs.existsSync(path.join(tmpDir, "moved.ts"))).toBe(false);
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("b\n");
   });
 });

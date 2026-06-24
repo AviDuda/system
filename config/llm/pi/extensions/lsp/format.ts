@@ -18,6 +18,7 @@ import type {
   Location,
   LocationLink,
   SymbolInformation,
+  TextEdit,
   WorkspaceEdit,
 } from "./client";
 import { uriToFile } from "./client";
@@ -457,63 +458,108 @@ export function resolveSymbolPosition(
 // ── Workspace edit application ──
 
 /**
+ * Apply a set of TextEdits to one file on disk, in reverse order (end-to-start)
+ * so character positions are preserved as each edit is applied.
+ *
+ * Returns the relative path and edit count on success. Throws on read/write
+ * errors so callers can surface them.
+ */
+async function applyTextEdits(
+  editUri: string,
+  edits: TextEdit[],
+  cwd: string,
+  onFileWritten: (absolutePath: string) => void,
+): Promise<{ path: string; count: number }> {
+  const editPath = uriToFile(editUri);
+  const relPath = path.relative(cwd, editPath);
+  const content = await fs.promises.readFile(editPath, "utf-8");
+  const lines = content.split("\n");
+
+  // Apply edits in reverse order to preserve positions
+  const sorted = [...edits].sort((a, b) => {
+    const lineDiff = b.range.start.line - a.range.start.line;
+    return lineDiff !== 0 ? lineDiff : b.range.start.character - a.range.start.character;
+  });
+
+  for (const textEdit of sorted) {
+    const startLine = textEdit.range.start.line;
+    const endLine = textEdit.range.end.line;
+    const startChar = textEdit.range.start.character;
+    const endChar = textEdit.range.end.character;
+
+    if (startLine === endLine) {
+      const line = lines[startLine];
+      lines[startLine] = line.slice(0, startChar) + textEdit.newText + line.slice(endChar);
+    } else {
+      const firstLine = lines[startLine].slice(0, startChar) + textEdit.newText;
+      const lastLine = lines[endLine].slice(endChar);
+      lines.splice(startLine, endLine - startLine + 1, firstLine + lastLine);
+    }
+  }
+
+  await fs.promises.writeFile(editPath, lines.join("\n"));
+  onFileWritten(editPath);
+  return { path: relPath, count: edits.length };
+}
+
+/**
  * Apply a WorkspaceEdit to files on disk.
  *
- * Handles both `changes` (per-file TextEdit[]) and `documentChanges`
- * (structured edits that may create/rename files). For the LSP extension's
- * current use case, only `changes` is needed.
+ * A WorkspaceEdit carries edits in two forms (per the LSP spec), and servers
+ * differ in which they use:
+ * - `changes`: a simple { uri → TextEdit[] } map.
+ * - `documentChanges`: an ordered array of structured edits. rust-analyzer
+ *   returns this form for `textDocument/rename` and most refactors; the
+ *   `TextDocumentEdit` variant is the only one we apply.
  *
- * Edits within each file are applied in reverse order (end-to-start)
- * to preserve character positions.
+ * When BOTH are present, only `documentChanges` is applied (the spec says it
+ * is authoritative and `changes` is legacy/optional). We apply per-file edits
+ * in reverse order (end-to-start) to preserve character positions.
+ *
+ * Resource operations other than text edits (CreateFile/RenameFile/DeleteFile)
+ * are collected into `unsupported` rather than executed, so callers can tell
+ * the user the refix was only partially applied.
  *
  * @param edit - The WorkspaceEdit to apply
  * @param cwd - Current working directory for relative path reporting
  * @param onFileWritten - Callback invoked with each file's absolute path after writing.
  *   Used to sync modified content back to the LSP server via didChange.
  *   Pass a no-op `() => {}` if no sync is needed.
- * @returns Array of "relativePath: N edit(s)" strings
+ * @returns Applied edits plus any unsupported resource operations.
  */
 export async function applyWorkspaceEdit(
   edit: WorkspaceEdit,
   cwd: string,
   onFileWritten: (absolutePath: string) => void,
-): Promise<Array<{ path: string; count: number }>> {
-  const results: Array<{ path: string; count: number }> = [];
+): Promise<{ applied: Array<{ path: string; count: number }>; unsupported: string[] }> {
+  const applied: Array<{ path: string; count: number }> = [];
+  const unsupported: string[] = [];
+
+  // `documentChanges` is authoritative when present (LSP 3.x). rust-analyzer
+  // uses it for rename; tsserver uses `changes`. Applying both would double-apply.
+  if (edit.documentChanges && edit.documentChanges.length > 0) {
+    for (const change of edit.documentChanges) {
+      if (typeof change !== "object" || change === null) continue;
+      if ("kind" in change) {
+        // CreateFile/RenameFile/DeleteFile — report, don't execute.
+        const uri = "uri" in change ? change.uri : "oldUri" in change ? change.oldUri : "?";
+        unsupported.push(`${change.kind}: ${path.relative(cwd, uriToFile(uri))}`);
+        continue;
+      }
+      // TextDocumentEdit
+      if ("textDocument" in change && "edits" in change) {
+        const td = change as { textDocument: { uri: string }; edits: TextEdit[] };
+        applied.push(await applyTextEdits(td.textDocument.uri, td.edits, cwd, onFileWritten));
+      }
+    }
+    return { applied, unsupported };
+  }
 
   if (edit.changes) {
     for (const [editUri, edits] of Object.entries(edit.changes)) {
-      const editPath = uriToFile(editUri);
-      const relPath = path.relative(cwd, editPath);
-      const content = await fs.promises.readFile(editPath, "utf-8");
-      const lines = content.split("\n");
-
-      // Apply edits in reverse order to preserve positions
-      const sorted = [...edits].sort((a, b) => {
-        const lineDiff = b.range.start.line - a.range.start.line;
-        return lineDiff !== 0 ? lineDiff : b.range.start.character - a.range.start.character;
-      });
-
-      for (const textEdit of sorted) {
-        const startLine = textEdit.range.start.line;
-        const endLine = textEdit.range.end.line;
-        const startChar = textEdit.range.start.character;
-        const endChar = textEdit.range.end.character;
-
-        if (startLine === endLine) {
-          const line = lines[startLine];
-          lines[startLine] = line.slice(0, startChar) + textEdit.newText + line.slice(endChar);
-        } else {
-          const firstLine = lines[startLine].slice(0, startChar) + textEdit.newText;
-          const lastLine = lines[endLine].slice(endChar);
-          lines.splice(startLine, endLine - startLine + 1, firstLine + lastLine);
-        }
-      }
-
-      await fs.promises.writeFile(editPath, lines.join("\n"));
-      onFileWritten(editPath);
-      results.push({ path: relPath, count: edits.length });
+      applied.push(await applyTextEdits(editUri, edits, cwd, onFileWritten));
     }
   }
 
-  return results;
+  return { applied, unsupported };
 }
