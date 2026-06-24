@@ -316,6 +316,7 @@ export interface PlannedReplacement {
 
 export type EditOutcome =
   | { editIndex: number; status: "applied"; hits: MatchHit[] }
+  | { editIndex: number; status: "no-op"; hits: MatchHit[] }
   | { editIndex: number; status: "no-match" }
   | { editIndex: number; status: "ambiguous"; hits: MatchHit[] }
   | { editIndex: number; status: "empty" };
@@ -330,6 +331,20 @@ export interface PlanResult {
 function finalizeNewText(rawNewText: string, hit: MatchHit): string {
   const newText = normalizeToLF(rawNewText);
   return hit.kind === "normalized" ? adjustIndentation(newText, hit.fileIndent) : newText;
+}
+
+/**
+ * Is a replacement a no-op — i.e. would it write the same bytes that are
+ * already there? Uses the SAME space the applier splices into (original
+ * content for exact matches, the normalized form for normalized matches), so
+ * this is guaranteed consistent with `applyPreservingOriginal`: if newText
+ * equals the matched slice here, that replacement contributes zero byte
+ * change there. Catches the footgun where oldText and newText are pasted
+ * byte-identical (no real intent to change), even when mixed with edits that
+ * DO change the file — the whole-file guard can't see that case.
+ */
+function isNoOpReplacement(matchSpace: string, rep: { start: number; length: number; newText: string }): boolean {
+  return rep.newText === matchSpace.slice(rep.start, rep.start + rep.length);
 }
 
 /**
@@ -369,18 +384,27 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
 
     const hits = occurrences.map((occ) => buildHit(content, space, occ));
 
+    // Build candidate replacements for this edit, then drop the no-op ones
+    // (newText byte-identical to what's matched). An edit whose candidates
+    // are ALL no-ops reports status "no-op" so the caller can flag it instead
+    // of silently counting it as applied.
+    const candidates: PlannedReplacement[] = [];
+    const addCandidate = (occ: RawOccurrence) => {
+      const hit = buildHit(content, space, occ);
+      const rep: PlannedReplacement = {
+        editIndex: i,
+        start: occ.start,
+        length: occ.length,
+        newText: finalizeNewText(edit.newText, hit),
+        kind: space,
+      };
+      if (!isNoOpReplacement(matchSpace, rep)) candidates.push(rep);
+    };
+
     if (edit.replaceAll) {
-      for (const occ of occurrences) {
-        const hit = buildHit(content, space, occ);
-        replacements.push({
-          editIndex: i,
-          start: occ.start,
-          length: occ.length,
-          newText: finalizeNewText(edit.newText, hit),
-          kind: space,
-        });
-      }
-      outcomes.push({ editIndex: i, status: "applied", hits });
+      for (const occ of occurrences) addCandidate(occ);
+      replacements.push(...candidates);
+      outcomes.push({ editIndex: i, status: candidates.length > 0 ? "applied" : "no-op", hits });
       continue;
     }
 
@@ -390,15 +414,13 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
         if (anchorLines.length > 0) {
           const chosen = nearestOccurrence(occurrences, anchorLines, matchSpace);
           if (chosen) {
-            const hit = buildHit(content, space, chosen);
-            replacements.push({
+            addCandidate(chosen);
+            replacements.push(...candidates);
+            outcomes.push({
               editIndex: i,
-              start: chosen.start,
-              length: chosen.length,
-              newText: finalizeNewText(edit.newText, hit),
-              kind: space,
+              status: candidates.length > 0 ? "applied" : "no-op",
+              hits: [buildHit(content, space, chosen)],
             });
-            outcomes.push({ editIndex: i, status: "applied", hits: [hit] });
             continue;
           }
         }
@@ -409,15 +431,9 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
 
     const occ = occurrences[0];
     if (occ) {
-      const hit = buildHit(content, space, occ);
-      replacements.push({
-        editIndex: i,
-        start: occ.start,
-        length: occ.length,
-        newText: finalizeNewText(edit.newText, hit),
-        kind: space,
-      });
-      outcomes.push({ editIndex: i, status: "applied", hits: [hit] });
+      addCandidate(occ);
+      replacements.push(...candidates);
+      outcomes.push({ editIndex: i, status: candidates.length > 0 ? "applied" : "no-op", hits });
     }
   }
 

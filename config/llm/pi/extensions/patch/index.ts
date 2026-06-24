@@ -13,11 +13,12 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { generateDiffString, renderDiff, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { detectBoundaryDuplication, formatOutcomes, summarizeOrTruncateDiff } from "./diagnostics";
+import { detectBoundaryDuplication, formatOutcomes } from "./diagnostics";
 import {
   applyPreservingOriginal,
   detectLineEnding,
   type Edit,
+  type EditOutcome,
   normalizeToLF,
   planAll,
   restoreLineEndings,
@@ -147,6 +148,10 @@ interface FileResult {
   editCount: number;
   /** Total occurrences replaced (editCount counts replaceAll as one edit). */
   occurrenceCount: number;
+  /** Where each applied edit landed (1-based lines), for verification.
+   * Especially important for anchored edits: a mis-targeted match would
+   * otherwise only surface in a possibly-truncated diff. */
+  appliedLocations: Array<{ editIndex: number; lines: number[]; anchored: boolean }>;
 }
 
 interface FileFailure {
@@ -241,14 +246,22 @@ async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[
       continue;
     }
     const { diff, firstChangedLine } = generateDiffString(content, newContent);
-    const applied = plan.outcomes.filter((o) => o.status === "applied");
+    const appliedOutcomes = plan.outcomes.filter(
+      (o): o is Extract<EditOutcome, { status: "applied" }> => o.status === "applied",
+    );
+    const appliedLocations = appliedOutcomes.map((o) => ({
+      editIndex: o.editIndex,
+      lines: o.hits.map((h) => h.line),
+      anchored: Boolean(edits[o.editIndex]?.anchor),
+    }));
     results.push({
       displayPath,
       newContent: bom + restoreLineEndings(newContent, ending),
       diff,
       firstChangedLine,
-      editCount: applied.length,
+      editCount: appliedOutcomes.length,
       occurrenceCount: plan.replacements.length,
+      appliedLocations,
     });
   }
 
@@ -263,11 +276,27 @@ async function withQueues<T>(paths: string[], fn: () => Promise<T>): Promise<T> 
   return withFileMutationQueue(first, () => withQueues(rest, fn));
 }
 
+function formatLocations(r: FileResult): string {
+  if (r.appliedLocations.length === 0) return "";
+  // Surface where each edit landed — most valuable when an anchor picked
+  // among near-identical sites, where a mis-target would otherwise only
+  // surface in a re-grep. Line numbers are 1-based.
+  return r.appliedLocations
+    .map((loc) => {
+      const tag = loc.anchored ? " (anchored)" : "";
+      return `  edits[${loc.editIndex}] → line${loc.lines.length === 1 ? "" : "s"} ${loc.lines.join(", ")}${tag}`;
+    })
+    .join("\n");
+}
+
 function buildSuccessText(results: FileResult[]): string {
   const edits = results.reduce((sum, r) => sum + r.editCount, 0);
   const occurrences = results.reduce((sum, r) => sum + r.occurrenceCount, 0);
   const header = `Applied ${edits} edit(s) (${occurrences} occurrence(s)) across ${results.length} file(s). Files written.`;
-  const parts = results.map((r) => `--- ${r.displayPath} ---\n${summarizeOrTruncateDiff(r.diff)}`);
+  const parts = results.map((r) => {
+    const locs = formatLocations(r);
+    return locs ? `--- ${r.displayPath} ---\n${locs}\n${r.diff}` : `--- ${r.displayPath} ---\n${r.diff}`;
+  });
   return [header, ...parts].join("\n\n");
 }
 

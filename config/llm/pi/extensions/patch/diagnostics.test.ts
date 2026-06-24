@@ -12,7 +12,6 @@ import {
   formatOutcomes,
   numberedLines,
   similarity,
-  summarizeOrTruncateDiff,
 } from "./diagnostics";
 import { type MatchHit, planAll } from "./match";
 
@@ -170,8 +169,10 @@ describe("describeDiagnosis", () => {
   });
   test("lists each non-zero category", () => {
     const s = describeDiagnosis({ whitespaceOnly: 1, contentDiffer: 2, missingFromOldText: 1, extraInOldText: 0 });
-    expect(s).toContain("1 whitespace");
-    expect(s).toContain("2 content");
+    expect(s).toContain("1 line");
+    expect(s).toContain("whitespace");
+    expect(s).toContain("2 line");
+    expect(s).toContain("actual text");
     expect(s).toContain("missing 1");
     expect(s).not.toContain("extra");
   });
@@ -261,6 +262,17 @@ describe("formatOutcomes", () => {
     const plan = planAll(content, [{ oldText: "foo", newText: "FOO" }]);
     expect(formatOutcomes(content, plan, [{ oldText: "foo" }])).toHaveLength(0);
   });
+
+  test("no-op outcome produces a self-contained message", () => {
+    const content = "let scale_factor = output_sf;\n";
+    const plan = planAll(content, [
+      { oldText: "let scale_factor = output_sf;", newText: "let scale_factor = output_sf;" },
+    ]);
+    const messages = formatOutcomes(content, plan, [{ oldText: "let scale_factor = output_sf;" }]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("no-op");
+    expect(messages[0]).toContain("identical");
+  });
 });
 
 // ── detectBoundaryDuplication ──────────────────────────────────────────────
@@ -303,22 +315,6 @@ describe("detectBoundaryDuplication", () => {
     // so repeating it in newText is flagged.
     const result = detectBoundaryDuplication(content, hit(2, 1), "} else {\n  REPLACED");
     expect(result?.edge).toBe("before");
-  });
-});
-
-// ── summarizeOrTruncateDiff ────────────────────────────────────────────────
-
-describe("summarizeOrTruncateDiff", () => {
-  test("passes through small diffs", () => {
-    const diff = "-old\n+new";
-    expect(summarizeOrTruncateDiff(diff)).toBe(diff);
-  });
-
-  test("summarizes large diffs", () => {
-    const diff = Array.from({ length: 30 }, (_, i) => `+line ${i}`).join("\n");
-    const summary = summarizeOrTruncateDiff(diff, 20);
-    expect(summary).toContain("30 lines changed");
-    expect(summary).toContain("Re-read");
   });
 });
 

@@ -141,15 +141,24 @@ function normalizeWhitespace(line: string): string {
   return line.replace(/[^\S\n]+/g, " ").trim();
 }
 
-/** Render a diagnosis as a human phrase. */
+/** Render a diagnosis as a human phrase (self-contained: names what differs
+ * AND the implied fix, so a clueless model can act without inferring). */
 export function describeDiagnosis(d: LineDiffDiagnosis): string {
   const bits: string[] = [];
-  if (d.whitespaceOnly > 0) bits.push(`${d.whitespaceOnly} whitespace/indentation-only`);
-  if (d.contentDiffer > 0) bits.push(`${d.contentDiffer} content`);
-  if (d.missingFromOldText > 0) bits.push(`missing ${d.missingFromOldText} line(s) the file has`);
-  if (d.extraInOldText > 0) bits.push(`${d.extraInOldText} extra line(s) not in the file`);
+  if (d.whitespaceOnly > 0)
+    bits.push(
+      `${d.whitespaceOnly} line(s) differ only in whitespace/indentation (text tokens match — your oldText needs the file's actual tabs/spaces)`,
+    );
+  if (d.contentDiffer > 0)
+    bits.push(`${d.contentDiffer} line(s) differ in actual text (rewrite oldText to match those lines)`);
+  if (d.missingFromOldText > 0)
+    bits.push(
+      `your oldText is missing ${d.missingFromOldText} line(s) that the file has at this spot (add them to oldText)`,
+    );
+  if (d.extraInOldText > 0)
+    bits.push(`your oldText has ${d.extraInOldText} extra line(s) not in the file here (remove them from oldText)`);
   if (bits.length === 0) return "identical";
-  return bits.join(", ");
+  return bits.join("; ");
 }
 
 /**
@@ -345,6 +354,11 @@ export function formatOutcomes(content: string, plan: PlanResult, edits: { oldTe
     switch (outcome.status) {
       case "applied":
         continue;
+      case "no-op":
+        messages.push(
+          `edits[${outcome.editIndex}]: no-op — oldText and newText are identical (after normalization), so this edit changes nothing. You likely pasted the same text on both sides. Remove this edit or correct newText.`,
+        );
+        break;
       case "empty":
         messages.push(
           "edits[".concat(
@@ -377,16 +391,6 @@ export function formatOutcomes(content: string, plan: PlanResult, edits: { oldTe
     }
   }
   return messages;
-}
-
-/** Truncate a diff to N changed lines; return a summary if larger. */
-export function summarizeOrTruncateDiff(diff: string, maxChangedLines = 20): string {
-  const changedLineCount = diff.split("\n").filter((l) => l.startsWith("+") || l.startsWith("-")).length;
-  if (changedLineCount <= maxChangedLines) {
-    return diff;
-  }
-  const firstChange = diff.split("\n").find((l) => l.startsWith("+"));
-  return `${changedLineCount} lines changed (too many to show inline). ${firstChange ?? ""}\nRe-read the file to verify.`.trim();
 }
 
 /** Count applied replacements for the success summary. */

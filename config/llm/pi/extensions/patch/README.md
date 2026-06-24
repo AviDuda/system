@@ -34,8 +34,15 @@ all via nested `withFileMutationQueue`.
 
 **dryRun** — preview matches + diff without writing.
 
-**Diff-as-result** — successful edits return a truncated diff in the result
-text (for LLM self-verification), not just the TUI.
+**Diff-as-result** — successful edits return the full diff in the result
+text (for LLM self-verification), plus the line each edit landed on
+(`edits[N] → line X`, with an `(anchored)` tag when an anchor disambiguated
+among near-identical sites). Not just the TUI.
+
+**No-op detection** — an edit whose `oldText` and `newText` are identical (a
+common paste-the-same-thing-on-both-sides typo) is flagged as a no-op and
+fails the batch atomically, instead of silently counting as applied. Catches
+the failure that inflates the applied-count and hides what actually changed.
 
 **Duplicate-line guard** — detects when the model includes surrounding unchanged
 lines in its replacement (would silently double on disk).
@@ -75,10 +82,10 @@ preview succeeds (all edits matched, a real write is pending).
   No pi imports.
 - `preview.ts` — diff preview for the permission gate (uses patch's own
   matcher, not pi's computeEditsDiff).
-- `match.test.ts` / `diagnostics.test.ts` — 95 tests covering the HarnessKit
+- `match.test.ts` / `diagnostics.test.ts` — tests covering the HarnessKit
   matrix (whitespace, Unicode, indentation, stale context) plus anchor,
-  replaceAll, overlap, byte-preservation, duplicate-line guard, and near-miss
-  detection.
+  replaceAll, overlap, byte-preservation, duplicate-line guard, near-miss
+  detection, and no-op detection.
 - `index.ts` — pi integration shell (tool registration, multi-file via nested
   withFileMutationQueue, atomic validate-all-first, path auto-lift, dryRun,
   post-exec diff, live preview in renderCall, self-contained error messages).

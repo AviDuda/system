@@ -246,6 +246,49 @@ describe("planAll", () => {
   });
 });
 
+describe("planAll: no-op detection", () => {
+  test("single edit with oldText === newText is flagged no-op (no replacement added)", () => {
+    const content = "let scale_factor = output_sf;\n";
+    const plan = planAll(content, [
+      { oldText: "let scale_factor = output_sf;", newText: "let scale_factor = output_sf;" },
+    ]);
+    expect(plan.outcomes[0]?.status).toBe("no-op");
+    expect(plan.replacements).toHaveLength(0);
+  });
+
+  test("no-op edit mixed with a real edit: no-op flagged, real edit still applied", () => {
+    // Regression for the reported footgun: a pasted-identical edit silently
+    // counted as applied because the whole-file guard saw net change from
+    // the sibling edit. The no-op must now be visible per-edit.
+    const content = "let scale_factor = output_sf;\nlet beta = 1.0;\n";
+    const plan = planAll(content, [
+      { oldText: "let scale_factor = output_sf;", newText: "let scale_factor = output_sf;" }, // no-op
+      { oldText: "let beta = 1.0;", newText: "let beta = 2.0;" }, // real change
+    ]);
+    expect(plan.outcomes[0]?.status).toBe("no-op");
+    expect(plan.outcomes[1]?.status).toBe("applied");
+    // Only the real edit produces a replacement.
+    expect(plan.replacements).toHaveLength(1);
+    expect(plan.replacements[0]?.editIndex).toBe(1);
+    // And applying the plan performs only the real change.
+    expect(applyPreservingOriginal(content, plan)).toBe("let scale_factor = output_sf;\nlet beta = 2.0;\n");
+  });
+
+  test("replaceAll with newText === oldText is no-op across all occurrences", () => {
+    const content = "TODO\nTODO\nTODO\n";
+    const plan = planAll(content, [{ oldText: "TODO", newText: "TODO", replaceAll: true }]);
+    expect(plan.outcomes[0]?.status).toBe("no-op");
+    expect(plan.replacements).toHaveLength(0);
+  });
+
+  test("a real change is NOT misflagged as no-op (exact space)", () => {
+    const content = "let beta = 1.0;\n";
+    const plan = planAll(content, [{ oldText: "let beta = 1.0;", newText: "let beta = 2.0;" }]);
+    expect(plan.outcomes[0]?.status).toBe("applied");
+    expect(plan.replacements).toHaveLength(1);
+  });
+});
+
 // ── applyPreservingOriginal: byte preservation ────────────────────────────
 
 describe("applyPreservingOriginal", () => {
