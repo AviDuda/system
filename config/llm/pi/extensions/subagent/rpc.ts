@@ -166,6 +166,17 @@ export function formatToolCall(
       const rawPath = (args.file_path || args.path || "...") as string;
       return themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath));
     }
+    case "patch": {
+      const top = (args.file_path || args.path) as string | undefined;
+      const edits = Array.isArray(args.edits) ? (args.edits as Array<{ path?: string }>) : [];
+      const paths = [
+        ...(top ? [top] : []),
+        ...edits.map((e) => e.path).filter((p): p is string => typeof p === "string"),
+      ];
+      const shown = paths.length > 0 ? paths.map(shortenPath).join(", ") : "...";
+      const count = edits.length > 1 ? themeFg("dim", ` (${edits.length} edits)`) : "";
+      return themeFg("muted", "patch ") + themeFg("accent", shown) + count;
+    }
     case "ls": {
       const rawPath = (args.path || ".") as string;
       return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));

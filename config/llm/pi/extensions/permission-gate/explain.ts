@@ -17,22 +17,23 @@ export function describeToolCall(toolName: string, input: Record<string, unknown
     const content = typeof input.content === "string" ? input.content : "";
     return `write to ${input.path}:\n${content}`;
   }
-  if (toolName === "edit") {
-    if (rawDiff) return `edit ${input.path}:\n${rawDiff}`;
+  if (toolName === "edit" || toolName === "patch") {
+    if (rawDiff) return `${toolName} ${input.path}:\n${rawDiff}`;
     if (input.edits && Array.isArray(input.edits)) {
-      const edits = input.edits as Array<{ oldText?: string; newText?: string }>;
+      const edits = input.edits as Array<{ oldText?: string; newText?: string; path?: string }>;
       const summary = edits
         .map((e, i) => {
           const old = typeof e.oldText === "string" ? e.oldText : "";
           const nw = typeof e.newText === "string" ? e.newText : "";
-          return `edit ${i + 1}: "${old}" -> "${nw}"`;
+          const at = typeof e.path === "string" ? ` @ ${e.path}` : "";
+          return `${toolName} ${i + 1}: "${old}" -> "${nw}"${at}`;
         })
         .join("\n");
-      return `edit ${input.path} (${edits.length} edits):\n${summary}`;
+      return `${toolName} ${input.path} (${edits.length} edits):\n${summary}`;
     }
     const old = typeof input.oldText === "string" ? input.oldText : "";
     const nw = typeof input.newText === "string" ? input.newText : "";
-    return `edit ${input.path}: "${old}" -> "${nw}"`;
+    return `${toolName} ${input.path}: "${old}" -> "${nw}"`;
   }
   return `${toolName}: ${JSON.stringify(input).slice(0, 500)}`;
 }
@@ -131,7 +132,7 @@ export function blockReason(note: string, explanation: ExplanationResult | null,
   const verb =
     toolName === "bash"
       ? "The command was NOT executed."
-      : toolName === "edit"
+      : toolName === "edit" || toolName === "patch"
         ? "The file was NOT modified."
         : toolName === "write"
           ? "The file was NOT written."

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverStartupLocalFiles, extractPath, getDirectoryChain } from "./loader.js";
+import { discoverStartupLocalFiles, extractPath, extractPaths, getDirectoryChain } from "./loader.js";
 
 // Use /tmp to avoid parent-walk hitting real AGENTS.local.md in the project tree
 const TEST_DIR = join(tmpdir(), `agents-loader-test-${process.pid}`);
@@ -52,6 +52,44 @@ describe("extractPath", () => {
 
   test("returns undefined when ls has no path", () => {
     expect(extractPath("ls", {})).toBeUndefined();
+  });
+});
+
+describe("extractPaths", () => {
+  test("patch: collects top-level + per-edit paths (multi-file)", () => {
+    const result = extractPaths("patch", {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "src/b.ts" },
+      ],
+    });
+    expect(result).toEqual([
+      { path: "src/a.ts", isDirectory: false },
+      { path: "src/b.ts", isDirectory: false },
+    ]);
+  });
+
+  test("patch: per-edit path overrides top-level", () => {
+    const result = extractPaths("patch", {
+      path: "src/default.ts",
+      edits: [{ oldText: "a", newText: "b", path: "src/actual.ts" }],
+    });
+    expect(result).toEqual([{ path: "src/actual.ts", isDirectory: false }]);
+  });
+
+  test("patch: falls back to top-level when edit has no path", () => {
+    const result = extractPaths("patch", { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] });
+    expect(result).toEqual([{ path: "src/a.ts", isDirectory: false }]);
+  });
+
+  test("patch: returns [] when no path resolvable", () => {
+    expect(extractPaths("patch", { edits: [{ oldText: "a", newText: "b" }] })).toEqual([]);
+  });
+
+  test("single-path tools return a one-element array", () => {
+    expect(extractPaths("read", { path: "src/foo.ts" })).toEqual([{ path: "src/foo.ts", isDirectory: false }]);
+    expect(extractPaths("ls", { path: "src" })).toEqual([{ path: "src", isDirectory: true }]);
   });
 });
 

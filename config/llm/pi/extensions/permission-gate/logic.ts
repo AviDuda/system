@@ -5,6 +5,7 @@
 
 import { execSync } from "node:child_process";
 import { isAbsolute, relative, resolve } from "node:path";
+import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 
 // ── Types ──
 
@@ -231,6 +232,12 @@ export function resolveFilePath(path: string, cwd: string): string {
   return isAbsolute(cleaned) ? cleaned : resolve(cwd, cleaned);
 }
 
+/** Resolve all file paths a mutating tool targets to absolute paths. patch
+ * may carry per-edit paths (multi-file) overriding the top-level path. */
+export function collectTargetPaths(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
+  return collectToolPaths(toolName, input).map((p) => resolveFilePath(p, cwd));
+}
+
 /** Match a path against a glob pattern. Supports * and **. */
 export function matchGlob(path: string, pattern: string): boolean {
   // Split on ** first to handle it separately
@@ -372,11 +379,36 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
   const override = state.toolOverrides[toolName];
   if (override === "allow") {
     // Still check sensitive files even with tool override
-    if ((toolName === "write" || toolName === "edit") && input.path) {
-      const filePath = resolveFilePath(input.path as string, cwd);
+    if (EDIT_LIKE_TOOLS.includes(toolName)) {
       const projectRoot = state.gitRoot ?? cwd;
+      for (const filePath of collectTargetPaths(toolName, input, cwd)) {
+        const rel = relative(projectRoot, filePath);
+        if (isSensitivePath(rel)) {
+          return {
+            action: "confirm",
+            confirmType: "sensitive",
+            displayPath: relative(cwd, filePath) || filePath,
+          };
+        }
+      }
+    }
+    return { action: "allow" };
+  }
+
+  // Write/edit tools
+  if (EDIT_LIKE_TOOLS.includes(toolName)) {
+    const paths = collectTargetPaths(toolName, input, cwd);
+    const projectRoot = state.gitRoot ?? cwd;
+
+    // Malformed input (no resolvable path): confirm rather than guess.
+    if (paths.length === 0) {
+      return { action: "confirm", confirmType: "write", displayPath: toolName };
+    }
+
+    // Sensitive files: confirm unless that specific path is explicitly allowed.
+    for (const filePath of paths) {
       const rel = relative(projectRoot, filePath);
-      if (isSensitivePath(rel)) {
+      if (isSensitivePath(rel) && !isPathAllowed(filePath, cwd, state)) {
         return {
           action: "confirm",
           confirmType: "sensitive",
@@ -384,51 +416,32 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
         };
       }
     }
-    return { action: "allow" };
-  }
 
-  // Write/edit tools
-  if (toolName === "write" || toolName === "edit") {
-    const filePath = resolveFilePath(input.path as string, cwd);
-    const projectRoot = state.gitRoot ?? cwd;
-    const rel = relative(projectRoot, filePath);
-    const relDisplay = relative(cwd, filePath) || filePath;
-
-    // Sensitive files: always confirm (in careful and trust-project)
-    if (isSensitivePath(rel)) {
-      if (isPathAllowed(filePath, cwd, state)) {
-        return { action: "allow" };
-      }
-      return {
-        action: "confirm",
-        confirmType: "sensitive",
-        displayPath: relDisplay,
-      };
-    }
-
-    // Path already allowed?
-    if (isPathAllowed(filePath, cwd, state)) {
+    // All target paths already allowed?
+    if (paths.every((p) => isPathAllowed(p, cwd, state))) {
       return { action: "allow" };
     }
 
     // Careful: confirm everything
     if (state.mode === "careful") {
+      const first = paths[0] ?? "";
       return {
         action: "confirm",
         confirmType: "write",
-        displayPath: relDisplay,
+        displayPath: relative(cwd, first) || first,
       };
     }
 
-    // Trust project: allow in-project, confirm outside
+    // Trust project: allow only if ALL targets are in-project
     if (state.mode === "trust-project") {
-      if (isInsideDir(filePath, projectRoot)) {
+      const outside = paths.find((p) => !isInsideDir(p, projectRoot));
+      if (!outside) {
         return { action: "allow" };
       }
       return {
         action: "confirm",
         confirmType: "outside-project",
-        displayPath: relDisplay,
+        displayPath: relative(cwd, outside) || outside,
       };
     }
   }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   cacheKey,
+  collectTargetPaths,
   createInitialState,
   decide,
   type GateState,
@@ -326,6 +327,52 @@ describe("resolveFilePath", () => {
   });
 });
 
+// ── collectTargetPaths ──
+
+describe("collectTargetPaths", () => {
+  test("write/edit: single top-level path", () => {
+    expect(collectTargetPaths("write", { path: "src/a.ts" }, "/project")).toEqual(["/project/src/a.ts"]);
+    expect(collectTargetPaths("edit", { path: "src/a.ts" }, "/project")).toEqual(["/project/src/a.ts"]);
+  });
+
+  test("patch: collects top-level + per-edit paths (multi-file)", () => {
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "src/b.ts" },
+      ],
+    };
+    expect(collectTargetPaths("patch", input, "/project")).toEqual(["/project/src/a.ts", "/project/src/b.ts"]);
+  });
+
+  test("patch: per-edit path overrides top-level", () => {
+    const input = {
+      path: "src/default.ts",
+      edits: [{ oldText: "a", newText: "b", path: "src/actual.ts" }],
+    };
+    expect(collectTargetPaths("patch", input, "/project")).toEqual(["/project/src/actual.ts"]);
+  });
+
+  test("patch: falls back to top-level when edit has no path", () => {
+    const input = {
+      path: "src/a.ts",
+      edits: [{ oldText: "a", newText: "b" }],
+    };
+    expect(collectTargetPaths("patch", input, "/project")).toEqual(["/project/src/a.ts"]);
+  });
+
+  test("patch: strips leading @", () => {
+    const input = { path: "@src/a.ts", edits: [{ oldText: "a", newText: "b" }] };
+    expect(collectTargetPaths("patch", input, "/project")).toEqual(["/project/src/a.ts"]);
+  });
+
+  test("returns empty when no path resolvable", () => {
+    expect(collectTargetPaths("patch", { edits: [{ oldText: "a", newText: "b" }] }, "/project")).toEqual([]);
+    expect(collectTargetPaths("write", {}, "/project")).toEqual([]);
+  });
+});
+
 // ── isPathAllowed / isBashAllowed ──
 
 describe("isPathAllowed", () => {
@@ -543,6 +590,92 @@ describe("decide", () => {
   test("sensitive file allowed if in allowedPaths", () => {
     const state = stateWith({ mode: "careful", allowedPaths: [".env"] });
     expect(decide("write", { path: ".env" }, cwd, state).action).toBe("allow");
+  });
+
+  // ── patch (multi-file path handling) ──
+
+  test("patch treated as write-like (not unknown)", () => {
+    const state = stateWith({ mode: "careful" });
+    const d = decide("patch", { path: "src/main.ts", edits: [{ oldText: "a", newText: "b" }] }, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.confirmType).toBe("write");
+  });
+
+  test("patch: trust-project allows all in-project edits", () => {
+    const state = stateWith({ mode: "trust-project" });
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "src/b.ts" },
+      ],
+    };
+    expect(decide("patch", input, cwd, state).action).toBe("allow");
+  });
+
+  test("patch: trust-project confirms when ANY per-edit path is outside project", () => {
+    const state = stateWith({ mode: "trust-project" });
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "/tmp/out.ts" },
+      ],
+    };
+    const d = decide("patch", input, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.confirmType).toBe("outside-project");
+  });
+
+  test("patch: sensitive per-edit path is caught even with safe top-level path", () => {
+    // The security-critical case: top-level path is benign, but one edit
+    // targets a sensitive file via per-edit path. Must not slip through.
+    const state = stateWith({ mode: "trust-project" });
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "x", newText: "y", path: ".env" },
+      ],
+    };
+    const d = decide("patch", input, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.confirmType).toBe("sensitive");
+  });
+
+  test("patch: tool override still checks sensitive per-edit paths", () => {
+    const state = stateWith({ mode: "careful", toolOverrides: { patch: "allow" } });
+    expect(decide("patch", { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] }, cwd, state).action).toBe(
+      "allow",
+    );
+    const d = decide("patch", { path: "src/a.ts", edits: [{ oldText: "a", newText: "b", path: ".env" }] }, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.confirmType).toBe("sensitive");
+  });
+
+  test("patch: all per-edit paths allowed → allow", () => {
+    const state = stateWith({ mode: "careful", allowedPaths: ["src/a.ts", "src/b.ts"] });
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "src/b.ts" },
+      ],
+    };
+    expect(decide("patch", input, cwd, state).action).toBe("allow");
+  });
+
+  test("patch: one of several paths not allowed → confirm", () => {
+    const state = stateWith({ mode: "careful", allowedPaths: ["src/a.ts"] });
+    const input = {
+      path: "src/a.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "src/b.ts" },
+      ],
+    };
+    const d = decide("patch", input, cwd, state);
+    expect(d.action).toBe("confirm");
   });
 });
 

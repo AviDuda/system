@@ -13,9 +13,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isEditToolResult, isWriteToolResult } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import {
   type CodeAction,
   closeFile,
@@ -533,39 +533,51 @@ export default function (pi: ExtensionAPI) {
   // ── Auto-diagnostics on edit/write ──
 
   pi.on("tool_result", async (event, ctx) => {
-    if (!isEditToolResult(event) && !isWriteToolResult(event)) return;
-
-    // Extract the file path from tool input
-    const filePath = event.input.path as string | undefined;
-    if (!filePath) return;
+    const toolName = event.toolName;
+    // LSP diagnostics only make sense after a file-mutating tool. The shared
+    // set covers write/edit + the custom `patch` tool so diagnostics run after
+    // patch too (else the reactive `}}`/`;;` catching silently skips it).
+    if (!EDIT_LIKE_TOOLS.includes(toolName)) return;
+    // Only `write` can create a file; edit/patch require oldText to match.
+    const isWrite = toolName === "write";
 
     // Don't run diagnostics if the edit itself failed
     if (event.isError) return;
 
-    // Detect if this file is new to the LSP (not yet opened by any server).
-    // Write tool creates files but doesn't distinguish create vs overwrite.
-    // If no server has this file open, it's new -- use longer timeout and
-    // send workspace/didChangeWatchedFiles so servers re-index.
-    const isNewFile = isWriteToolResult(event) && !isFileOpenInAnyClient(filePath, ctx.cwd);
+    // Collect target paths via the shared helper (patch may be multi-file).
+    const paths = collectToolPaths(toolName, event.input as Record<string, unknown>);
+    if (paths.length === 0) return;
 
-    try {
-      const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
-      if (!result || result.messages.length === 0) return;
-
-      // Append diagnostics to the tool result so the LLM sees them
-      const diagText = `\n\n[LSP diagnostics (${result.server}): ${result.summary}]\n${result.messages.join("\n")}`;
-      const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
-
-      // Notify the user in the UI
-      const level = result.errored ? "error" : "warning";
-      ctx.ui.notify(`LSP: ${result.summary}\n${result.messages.join("\n")}`, level);
-
-      return {
-        content: [{ type: "text" as const, text: existingText + diagText }],
-      };
-    } catch {
-      // Non-fatal: don't break the edit/write flow
+    // Run diagnostics per path and accumulate. Only write can create new files.
+    const multi = paths.length > 1;
+    const diagParts: string[] = [];
+    let anyErrored = false;
+    for (const filePath of paths) {
+      const isNewFile = isWrite && !isFileOpenInAnyClient(filePath, ctx.cwd);
+      try {
+        const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
+        if (!result || result.messages.length === 0) continue;
+        if (result.errored) anyErrored = true;
+        const label = multi ? ` ${path.relative(ctx.cwd, path.resolve(ctx.cwd, filePath))}` : "";
+        diagParts.push(
+          `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
+        );
+      } catch {
+        // Non-fatal per file: continue with the rest
+      }
     }
+
+    if (diagParts.length === 0) return;
+    const diagText = `\n\n${diagParts.join("\n\n")}`;
+    const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
+
+    // Notify the user in the UI
+    const level = anyErrored ? "error" : "warning";
+    ctx.ui.notify(`LSP: ${diagParts.join("\n\n")}`, level);
+
+    return {
+      content: [{ type: "text" as const, text: existingText + diagText }],
+    };
   });
 
   // ── LSP tool ──

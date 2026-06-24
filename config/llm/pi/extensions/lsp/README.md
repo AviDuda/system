@@ -5,7 +5,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 ## What it does
 
 1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, workspace symbol search, rename, code actions, and restart (the tool's action enum has the full set, including `type_definition`, `implementation`, `workspace_symbol`, `restart`, and `status`)
-2. **Auto-diagnostics** — after every edit/write, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
+2. **Auto-diagnostics** — after every edit/write/patch, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
 4. **Multi-root support** — automatically roots LSP servers at the correct project root for files outside the session cwd (e.g., rust-analyzer rooted at the Cargo.toml ancestor, not the session dir). Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist.
 5. **Workspace symbol search** — `workspace_symbol` action searches across all active LSP servers by symbol name, returning matches from the entire project (not just one file)

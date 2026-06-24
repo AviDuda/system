@@ -42,6 +42,19 @@ describe("describeToolCall", () => {
     expect(result).toBe('edit file.ts: "" -> ""');
   });
 
+  test("patch uses toolName in summary and includes per-edit path", () => {
+    const result = describeToolCall("patch", {
+      path: "file.ts",
+      edits: [
+        { oldText: "a", newText: "b" },
+        { oldText: "c", newText: "d", path: "other.ts" },
+      ],
+    });
+    expect(result).toContain("patch file.ts (2 edits)");
+    expect(result).toContain('patch 1: "a" -> "b"');
+    expect(result).toContain('patch 2: "c" -> "d" @ other.ts');
+  });
+
   test("unknown tool uses JSON", () => {
     const result = describeToolCall("custom", { foo: "bar" });
     expect(result).toContain("custom:");

@@ -1,0 +1,503 @@
+/**
+ * patch — a more forgiving file edit tool.
+ *
+ * Three-stage matching (exact → normalized → closest-match diagnostics),
+ * anchor-based disambiguation, replaceAll, multi-file, dryRun, and rich
+ * diagnostics. All matching logic is in match.ts / diagnostics.ts (pure, no pi
+ * imports, fully tested). This file is the thin pi integration shell.
+ */
+
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { generateDiffString, renderDiff, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { Box, Spacer, Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { detectBoundaryDuplication, formatOutcomes, summarizeOrTruncateDiff } from "./diagnostics";
+import {
+  applyPreservingOriginal,
+  detectLineEnding,
+  type Edit,
+  normalizeToLF,
+  planAll,
+  restoreLineEndings,
+  stripBom,
+} from "./match";
+import { computePatchPreview, type PatchPreview } from "./preview";
+
+// ── Schema ─────────────────────────────────────────────────────────────────
+
+const editSchema = Type.Object(
+  {
+    oldText: Type.String({
+      description:
+        "Exact text to replace. Matching is tolerant: it also accepts normalized variants (arrows → ASCII, tab↔space, smart quotes/dashes, trailing whitespace). Must be unique unless anchor/replaceAll is used.",
+    }),
+    newText: Type.String({
+      description: "Replacement text. On a normalized match, indentation is auto-adjusted to the file.",
+    }),
+    path: Type.Optional(
+      Type.String({ description: "File path for this edit. Overrides the top-level path (multi-file)." }),
+    ),
+    anchor: Type.Optional(
+      Type.String({
+        description:
+          "Unique nearby text. When oldText matches multiple times, the occurrence nearest this anchor is used. Self-validating — copy a real string from the file.",
+      }),
+    ),
+    replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence of oldText (default false)." })),
+  },
+  { additionalProperties: false },
+);
+
+const patchSchema = Type.Object(
+  {
+    path: Type.String({ description: "Path to the file to edit (relative or absolute). Can also be set per-edit." }),
+    edits: Type.Array(editSchema, {
+      description:
+        "One or more replacements. All edits are validated before any file is written (atomic). If any edit fails, nothing is written and every failure is reported so you can fix them all in one retry.",
+    }),
+    dryRun: Type.Optional(
+      Type.Boolean({
+        description:
+          "If true, report what would change without writing. Returns match status, occurrences, and a preview diff.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+// ── Argument preparation (path auto-lift + legacy fold) ───────────────────
+
+interface EditArg {
+  oldText?: string;
+  newText?: string;
+  path?: string;
+  anchor?: string;
+  replaceAll?: boolean;
+}
+
+interface PatchArgs {
+  path?: string;
+  edits?: EditArg[];
+  oldText?: string;
+  newText?: string;
+  dryRun?: boolean;
+}
+
+/** Shape returned by prepareArguments (validated by the schema after). */
+type PreparedArgs = {
+  path: string;
+  edits: { oldText: string; newText: string; path?: string; anchor?: string; replaceAll?: boolean }[];
+  dryRun?: boolean;
+};
+
+/**
+ * Lifts a `path` accidentally nested inside edits[] up to the top level, and
+ * folds the legacy single-edit shape (top-level oldText/newText) into edits[].
+ * Models frequently mis-place path.
+ */
+function prepareArguments(input: unknown): PreparedArgs {
+  if (!input || typeof input !== "object") return input as PreparedArgs;
+  const args = { ...(input as PatchArgs) };
+
+  // Parse stringified edits (some models send JSON strings).
+  if (typeof args.edits === "string") {
+    try {
+      const parsed = JSON.parse(args.edits);
+      if (Array.isArray(parsed)) args.edits = parsed as EditArg[];
+    } catch {
+      /* keep as-is */
+    }
+  }
+
+  // Legacy single-edit fold: top-level oldText/newText → edits[0].
+  if (typeof args.oldText === "string" && typeof args.newText === "string") {
+    const edits = Array.isArray(args.edits) ? [...args.edits] : [];
+    args.edits = [...edits, { oldText: args.oldText, newText: args.newText }];
+    delete args.oldText;
+    delete args.newText;
+  }
+
+  // Path auto-lift: if path only present inside edits, lift the first one.
+  if (typeof args.path !== "string" && Array.isArray(args.edits)) {
+    const nested = args.edits.find((e) => typeof e?.path === "string");
+    if (nested?.path) args.path = nested.path;
+  }
+
+  // Cast loosely: the schema re-validates oldText/newText/path after this runs.
+  return args as unknown as PreparedArgs;
+}
+
+// ── Path resolution ────────────────────────────────────────────────────────
+
+function resolvePath(rawPath: string, cwd: string): string {
+  const stripped = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  return resolve(cwd, stripped);
+}
+
+// ── Per-file processing ────────────────────────────────────────────────────
+
+interface FileResult {
+  displayPath: string;
+  newContent: string;
+  diff: string;
+  firstChangedLine: number | undefined;
+  /** Distinct edits applied to this file. */
+  editCount: number;
+  /** Total occurrences replaced (editCount counts replaceAll as one edit). */
+  occurrenceCount: number;
+}
+
+interface FileFailure {
+  displayPath: string;
+  messages: string[];
+}
+
+function groupByFile(
+  edits: Edit[],
+  topLevelPath: string,
+  cwd: string,
+): Map<string, { displayPath: string; edits: Edit[] }> {
+  const groups = new Map<string, { displayPath: string; edits: Edit[] }>();
+  for (const edit of edits) {
+    const rawPath = edit.path ?? topLevelPath;
+    const abs = resolvePath(rawPath, cwd);
+    const existing = groups.get(abs);
+    if (existing) {
+      existing.edits.push(edit);
+    } else {
+      groups.set(abs, { displayPath: rawPath, edits: [edit] });
+    }
+  }
+  return groups;
+}
+
+interface ProcessOutcome {
+  results: FileResult[];
+  failures: FileFailure[];
+}
+
+/** Read + plan all files. Does NOT write — caller writes only if no failures. */
+async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[] }>): Promise<ProcessOutcome> {
+  const results: FileResult[] = [];
+  const failures: FileFailure[] = [];
+
+  for (const [absPath, { displayPath, edits }] of groups) {
+    let buffer: Buffer;
+    try {
+      buffer = await readFile(absPath);
+    } catch (error) {
+      const msg = error instanceof Error && "code" in error ? `Error code: ${String(error.code)}` : String(error);
+      failures.push({ displayPath, messages: [`Could not read file: ${displayPath}. ${msg}`] });
+      continue;
+    }
+
+    const rawContent = buffer.toString("utf-8");
+    const { bom, text } = stripBom(rawContent);
+    const ending = detectLineEnding(text);
+    const content = normalizeToLF(text);
+
+    const plan = planAll(content, edits);
+    const messages: string[] = [];
+
+    // Duplicate-line guard on each applied replacement.
+    for (const outcome of plan.outcomes) {
+      if (outcome.status !== "applied") continue;
+      for (const hit of outcome.hits) {
+        const rep = plan.replacements.find((r) => r.editIndex === outcome.editIndex);
+        if (!rep) continue;
+        const dup = detectBoundaryDuplication(content, hit, rep.newText);
+        if (dup) {
+          messages.push(
+            `edits[${outcome.editIndex}]: replacement ${dup.edge}-edge duplicates line ${dup.neighborLine} (${JSON.stringify(dup.text)}). Do NOT include surrounding unchanged lines — only the lines being changed.`,
+          );
+        }
+      }
+    }
+
+    messages.push(...formatOutcomes(content, plan, edits));
+
+    if (messages.length > 0 || plan.replacements.length === 0) {
+      failures.push({
+        displayPath,
+        messages: messages.length > 0 ? messages : ["No matching edits — nothing to apply."],
+      });
+      continue;
+    }
+
+    const newContent = applyPreservingOriginal(content, plan);
+    // No-net-change guard: every edit matched but newText produces identical
+    // content (e.g. oldText === newText, or newText differs texturally but
+    // normalizes to the same bytes). Without this, the tool reports a false
+    // success — the exact "misleading it-worked" failure patch exists to prevent.
+    if (newContent === content) {
+      failures.push({
+        displayPath,
+        messages: [
+          "The edits produced no change: newText is identical to oldText (after normalization) for every edit. Nothing was written. If you intended a change, verify oldText and newText actually differ.",
+        ],
+      });
+      continue;
+    }
+    const { diff, firstChangedLine } = generateDiffString(content, newContent);
+    const applied = plan.outcomes.filter((o) => o.status === "applied");
+    results.push({
+      displayPath,
+      newContent: bom + restoreLineEndings(newContent, ending),
+      diff,
+      firstChangedLine,
+      editCount: applied.length,
+      occurrenceCount: plan.replacements.length,
+    });
+  }
+
+  return { results, failures };
+}
+
+/** Acquire all file queues (nested) for atomic multi-file mutation. */
+async function withQueues<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
+  if (paths.length === 0) return fn();
+  const [first, ...rest] = paths;
+  if (!first) return fn();
+  return withFileMutationQueue(first, () => withQueues(rest, fn));
+}
+
+function buildSuccessText(results: FileResult[]): string {
+  const edits = results.reduce((sum, r) => sum + r.editCount, 0);
+  const occurrences = results.reduce((sum, r) => sum + r.occurrenceCount, 0);
+  const header = `Applied ${edits} edit(s) (${occurrences} occurrence(s)) across ${results.length} file(s). Files written.`;
+  const parts = results.map((r) => `--- ${r.displayPath} ---\n${summarizeOrTruncateDiff(r.diff)}`);
+  return [header, ...parts].join("\n\n");
+}
+
+// ── Live diff preview (renderCall) ──────────────────────────────────────────
+// Ports the built-in `edit` tool's streaming preview so the diff shows in the
+// chat BEFORE the permission gate fires (the user wants to see it in main chat,
+// not only in the gate dialog). Uses patch's OWN matcher (computePatchPreview)
+// so normalized matches (arrows, tab↔space) preview correctly — pi's
+// computeEditsDiff would show nothing for those.
+
+interface PatchCallComponent extends Box {
+  preview?: { diff: string } | { error: string } | undefined;
+  previewArgsKey?: string;
+  previewPending?: boolean;
+}
+
+function getPatchCallComponent(state: Record<string, unknown>, lastComponent: unknown): PatchCallComponent {
+  if (lastComponent instanceof Box) {
+    const component = lastComponent as PatchCallComponent;
+    state.callComponent = component;
+    return component;
+  }
+  const cached = state.callComponent as PatchCallComponent | undefined;
+  if (cached) return cached;
+  const component = new Box(0, 0, (t) => t) as PatchCallComponent;
+  state.callComponent = component;
+  return component;
+}
+
+function patchCallLabel(args: { path?: unknown; edits?: unknown; dryRun?: unknown }, theme: Theme): string {
+  const paths = new Set<string>();
+  if (typeof args.path === "string") paths.add(args.path);
+  if (Array.isArray(args.edits)) {
+    for (const edit of args.edits) {
+      if (edit && typeof edit.path === "string") paths.add(edit.path);
+    }
+  }
+  const editCount = Array.isArray(args.edits) ? args.edits.length : 0;
+  const dryRun = args.dryRun === true;
+  const label = theme.fg("toolTitle", theme.bold(dryRun ? "patch (dry run) " : "patch "));
+  const pathStr = theme.fg("accent", [...paths].join(", "));
+  const count = theme.fg("muted", ` (${editCount} edit${editCount !== 1 ? "s" : ""})`);
+  return `${label}${pathStr}${count}`;
+}
+
+function buildPatchCallComponent(
+  component: PatchCallComponent,
+  args: Parameters<typeof patchCallLabel>[0],
+  theme: Theme,
+): PatchCallComponent {
+  component.clear();
+  component.addChild(new Text(patchCallLabel(args, theme), 0, 0));
+  if (component.preview) {
+    component.addChild(new Spacer(1));
+    const body =
+      "error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+    component.addChild(new Text(body, 0, 0));
+  }
+  return component;
+}
+
+// ── Extension ──────────────────────────────────────────────────────────────
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "patch",
+    label: "Patch",
+    description:
+      "Edit one or more files using tolerant text replacement. Matching accepts normalized variants (Unicode arrows/symbols → ASCII, tab↔space, smart quotes/dashes, trailing whitespace) so edits don't fail on invisible-byte differences. On failure, returns closest matches and occurrence line numbers so you can fix everything in one retry. Supports anchor-based disambiguation, replaceAll, multi-file edits, and dryRun.",
+    promptSnippet:
+      "patch: Edit files with tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
+    promptGuidelines: [
+      "Prefer patch over edit for all file edits. It tolerates Unicode/whitespace differences and gives better diagnostics on failure.",
+      "patch tolerates invisible-byte drift. You can copy oldText from the file as-is — exact match is tried first. If exact fails, the tool normalizes arrows (→ ⇒), smart quotes, em-dashes, tab↔space, and trailing whitespace automatically.",
+      "When patch reports multiple occurrences, use `anchor` (a unique nearby string from the file) to pick the right one. Anchor is self-validating — you can verify it exists before sending. Use `replaceAll: true` for all occurrences. Do not guess line numbers.",
+      "All edits in one patch call are validated before any file is written. If any edit fails, nothing is written and every failure is reported — fix them all in one retry, no re-read needed.",
+      "Use `path` per-edit to edit multiple files in one call. The top-level `path` is the default; per-edit `path` overrides it. All files are edited atomically (all-or-nothing).",
+      "Use `dryRun: true` to preview matches and the diff without writing.",
+      "Include only the lines being changed plus minimal context for uniqueness in oldText. Do not include surrounding unchanged lines — the duplicate-line guard will catch this and reject the edit.",
+    ],
+    parameters: patchSchema,
+    prepareArguments,
+
+    async execute(_toolCallId, input, signal, _onUpdate, ctx) {
+      const dryRun = input.dryRun === true;
+      const edits = (input.edits ?? []) as Edit[];
+      if (edits.length === 0) {
+        throw new Error("patch requires at least one edit in edits[].");
+      }
+      const topLevelPath = input.path;
+      if (typeof topLevelPath !== "string") {
+        throw new Error("patch requires a top-level `path` (or set `path` inside each edit).");
+      }
+
+      const cwd = ctx.cwd;
+      const groups = groupByFile(edits, topLevelPath, cwd);
+      const paths = [...groups.keys()];
+
+      const throwIfAborted = () => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
+
+      const outcome = await withQueues(paths, async () => {
+        throwIfAborted();
+        return planFiles(groups);
+      });
+
+      if (outcome.failures.length > 0) {
+        const totalFiles = groups.size;
+        const failedFiles = outcome.failures.length;
+        const allMessages = outcome.failures.flatMap((f) => f.messages.map((m) => `${f.displayPath}: ${m}`));
+        throw new Error(
+          [
+            `patch failed: ${failedFiles} of ${totalFiles} file(s) had errors.`,
+            "patch is atomic (all-or-nothing): it validates EVERY edit before writing any, so NONE were applied — including the edits that matched. The files are unchanged.",
+            "Fix the errors below and call patch again with the corrected edits. Edits that already matched will match again on retry — you do not need to re-read the file.",
+            "",
+            ...allMessages,
+          ].join("\n"),
+        );
+      }
+
+      if (!dryRun) {
+        await writeResults(groups, outcome.results, signal);
+      }
+
+      const text = buildSuccessText(outcome.results);
+      const firstDiff = outcome.results[0]?.diff ?? "";
+      const firstChangedLine = outcome.results[0]?.firstChangedLine;
+
+      return {
+        content: [{ type: "text" as const, text: dryRun ? `[dry run] ${text}` : text }],
+        details: {
+          diff: firstDiff,
+          firstChangedLine,
+          dryRun,
+          fileCount: outcome.results.length,
+        },
+      };
+    },
+
+    renderCall(args, theme, context) {
+      const component = getPatchCallComponent(context.state as Record<string, unknown>, context.lastComponent);
+      const previewInput =
+        typeof args.path === "string" && Array.isArray(args.edits)
+          ? { path: args.path, edits: args.edits as Edit[] }
+          : null;
+      const argsKey = previewInput ? JSON.stringify(previewInput) : undefined;
+
+      // New args → drop stale preview.
+      if (component.previewArgsKey !== argsKey) {
+        component.preview = undefined;
+        component.previewArgsKey = argsKey;
+        component.previewPending = false;
+      }
+
+      // Once args are complete, compute the diff asynchronously (reads files).
+      if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
+        component.previewPending = true;
+        const requestKey = argsKey;
+        void computePatchPreview(previewInput.path, previewInput.edits, context.cwd)
+          .then((result: PatchPreview | undefined) => {
+            if (component.previewArgsKey !== requestKey) return; // a newer call superseded us
+            component.preview = result ? { diff: result.diff } : { error: "(no preview: edits did not match)" };
+            component.previewPending = false;
+            context.invalidate();
+          })
+          .catch(() => {
+            if (component.previewArgsKey !== requestKey) return;
+            component.preview = { error: "(preview unavailable)" };
+            component.previewPending = false;
+            context.invalidate();
+          });
+      }
+
+      return buildPatchCallComponent(component, args, theme);
+    },
+
+    renderResult(result, options, theme, context) {
+      const isError = context?.isError ?? false;
+      if (isError) {
+        const errorText = result.content
+          .filter((c) => c.type === "text")
+          .map((c) => (c.type === "text" ? c.text : ""))
+          .join("\n");
+        return new Text(theme.fg("error", errorText), 0, 0);
+      }
+
+      const details = result.details as { dryRun?: boolean; fileCount?: number; diff?: string } | undefined;
+      const expanded = (options as { expanded?: boolean } | undefined)?.expanded ?? false;
+      const summary = theme.fg(
+        "muted",
+        `${details?.fileCount ?? 1} file(s) changed${details?.dryRun ? " (dry run)" : ""}`,
+      );
+
+      if (!expanded) {
+        return new Text(summary, 0, 0);
+      }
+
+      // Suppress the diff block when the live preview already showed the SAME
+      // diff (same args → same edits → same output). Without this, the diff
+      // appears twice: once in the renderCall preview, once here. The preview
+      // is keyed by args; if the result's args still match the preview's args
+      // and the diff string is identical, the preview block already has it.
+      const callComponent = (context.state as { callComponent?: PatchCallComponent }).callComponent;
+      const preview = callComponent?.preview;
+      const previewMatches = preview && !("error" in preview) && preview.diff === details?.diff;
+      if (previewMatches) {
+        return new Text(summary, 0, 0);
+      }
+
+      if (!details?.diff) {
+        return new Text(summary, 0, 0);
+      }
+
+      return new Text(`${summary}\n${renderDiff(details.diff)}`, 0, 0);
+    },
+  });
+}
+
+/** Write results to their resolved absolute paths. */
+async function writeResults(
+  groups: Map<string, { displayPath: string; edits: Edit[] }>,
+  results: FileResult[],
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  for (const [absPath, group] of groups) {
+    if (signal?.aborted) throw new Error("Operation aborted");
+    const result = results.find((r) => r.displayPath === group.displayPath);
+    if (!result) continue;
+    await writeFile(absPath, result.newContent, "utf-8");
+  }
+}

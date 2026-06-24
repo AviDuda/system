@@ -20,7 +20,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractAtMentions } from "../shared/at-mentions";
-import { discoverAgentsFiles, discoverStartupLocalFiles, extractPath } from "./loader.js";
+import { type DiscoveredFile, discoverAgentsFiles, discoverStartupLocalFiles, extractPaths } from "./loader.js";
 
 export default function agentsLoaderExtension(pi: ExtensionAPI) {
   let loadedRealpaths = new Set<string>();
@@ -102,10 +102,13 @@ export default function agentsLoaderExtension(pi: ExtensionAPI) {
 
   // Discover agents files in subdirectories on file access
   pi.on("tool_result", async (event, ctx) => {
-    const extracted = extractPath(event.toolName, event.input as Record<string, unknown>);
-    if (!extracted || !cwd) return;
+    const extracted = extractPaths(event.toolName, event.input as Record<string, unknown>);
+    if (extracted.length === 0 || !cwd) return;
 
-    const discovered = discoverAgentsFiles(extracted.path, cwd, loadedRealpaths, extracted.isDirectory);
+    let discovered: DiscoveredFile[] = [];
+    for (const ext of extracted) {
+      discovered = discovered.concat(discoverAgentsFiles(ext.path, cwd, loadedRealpaths, ext.isDirectory));
+    }
     if (discovered.length === 0) return;
 
     const names = discovered.map((f) => f.relativePath).join(", ");

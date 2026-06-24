@@ -12,6 +12,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **journal** | Journal/notes injection at session start, env var overrides |
 | **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |
+| **patch** | Tolerant file editing with Unicode/whitespace normalization, anchor disambiguation, multi-file, closest-match diagnostics, atomic all-or-nothing |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
 | **sidecar** | `/sidecar-models` command -- pick models for sidecar roles (explain, draft, vision) |
 | **stats** | Live throughput readouts in the footer, per-message annotations, `/stats` totals |

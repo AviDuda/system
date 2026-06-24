@@ -1,0 +1,93 @@
+# patch
+
+A more forgiving file edit tool. Three-stage matching tolerates
+Unicode/whitespace drift and gives rich diagnostics on failure.
+
+## Why
+
+The built-in `edit` fails on invisible-byte differences (Unicode arrows,
+tab↔space, indentation drift) and gives opaque diagnostics on failure ("Could
+not find the exact text"). This burns agent turns — a single failed edit cuts
+recovery probability by a third (SWE-agent NeurIPS 2024 data).
+
+## What's different
+
+**Matching** — three-stage cascade (consensus across Codex, OpenCode, Octofs):
+1. Exact whole-string match (tried first — zero cost when the model is precise)
+2. Normalized fuzzy match (arrows → ASCII, tab↔space, smart quotes/dashes,
+   special spaces, trailing whitespace) with indentation auto-adjust
+3. Closest-match diagnostics (never applies — just reports)
+
+**Diagnostics** — on failure, returns the closest match with similarity % and
+line number, plus occurrence lines with surrounding context (grep -C style).
+When multiple exact matches exist, also reports **normalized-equal occurrences**
+with different whitespace (near-misses the exact match missed). All edits in a
+call are validated before any file is written (atomic), and every failure is
+reported so the model fixes all in one retry.
+
+**Disambiguation** — `anchor` (a unique nearby string, self-validating) picks
+the right occurrence; `replaceAll` for all of them. No line numbers required
+(models are bad at counting).
+
+**Multi-file** — set `path` per-edit to target different files; atomic across
+all via nested `withFileMutationQueue`.
+
+**dryRun** — preview matches + diff without writing.
+
+**Diff-as-result** — successful edits return a truncated diff in the result
+text (for LLM self-verification), not just the TUI.
+
+**Duplicate-line guard** — detects when the model includes surrounding unchanged
+lines in its replacement (would silently double on disk).
+
+## Parameters
+
+| Param | Required | Description |
+|-------|----------|-------------|
+| `path` | yes (top-level) | File to edit; overridden per-edit |
+| `edits[]` | yes | `{ oldText, newText, path?, anchor?, replaceAll? }` |
+| `dryRun` | no | Report without writing |
+
+## Correctness invariants
+
+- **Original bytes preserved.** Normalized matches widen to whole lines and
+  rewrite only touched line groups; all other lines keep their original bytes.
+  Unicode in untouched regions is never mangled.
+- **Atomic application.** Validate-all-first; if any edit fails, nothing is
+  written across any file.
+- **No staleness gate.** `old_string` is the consistency check; the per-file
+  mutation queue handles concurrent edits. A gate would cause false positives
+  (formatter touches an unrelated region → forced re-read).
+
+## Permission gate integration
+
+The permission gate skips confirmation for doomed edits (preview fails, edits
+don't match) and `dryRun` — the tool will throw diagnostics naturally, no
+point asking the user to approve. Only shows the confirm dialog when the
+preview succeeds (all edits matched, a real write is pending).
+
+## Files
+
+- `match.ts` — pure matching engine (cascade, anchor, replaceAll, overlap
+  detection, byte preservation). No pi imports.
+- `diagnostics.ts` — pure diagnostics (closest match, occurrence context with
+  `>>` markers, near-miss detection, duplicate-line guard, message formatting).
+  No pi imports.
+- `preview.ts` — diff preview for the permission gate (uses patch's own
+  matcher, not pi's computeEditsDiff).
+- `match.test.ts` / `diagnostics.test.ts` — 95 tests covering the HarnessKit
+  matrix (whitespace, Unicode, indentation, stale context) plus anchor,
+  replaceAll, overlap, byte-preservation, duplicate-line guard, and near-miss
+  detection.
+- `index.ts` — pi integration shell (tool registration, multi-file via nested
+  withFileMutationQueue, atomic validate-all-first, path auto-lift, dryRun,
+  post-exec diff, live preview in renderCall, self-contained error messages).
+
+## Related
+
+- `shared/edit-tools.ts` — `EDIT_LIKE_TOOLS` + `collectToolPaths` for wiring
+  patch into sibling extensions (LSP diagnostics, permission gate, agents-loader).
+- `permission-gate` — diff preview uses `patch/preview.ts` for accurate
+  tolerant-matching previews.
+- `lsp/index.ts` — runs diagnostics after patch edits (LSP warnings/errors
+  appended to tool result).

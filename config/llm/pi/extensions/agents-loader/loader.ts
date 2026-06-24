@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { collectToolPaths } from "../shared/edit-tools";
 
 export const AGENTS_FILENAMES = ["AGENTS.md", "AGENTS.local.md", "CLAUDE.md", "CLAUDE.local.md"];
 export const LOCAL_ONLY_FILENAMES = ["AGENTS.local.md", "CLAUDE.local.md"];
@@ -14,20 +15,18 @@ export interface ExtractedPath {
   isDirectory: boolean;
 }
 
-/** Extract file path from tool input, if any */
+/** Extract all file paths from tool input. patch may target multiple files via
+ * per-edit `path` (overriding the top-level); other tools expose a single path.
+ * Path extraction itself is delegated to the shared helper so the patch
+ * multi-file logic lives in one place. */
+export function extractPaths(toolName: string, input: Record<string, unknown>): ExtractedPath[] {
+  const isDirectory = toolName === "ls" || toolName === "find" || toolName === "grep";
+  return collectToolPaths(toolName, input).map((path) => ({ path, isDirectory }));
+}
+
+/** Extract the first file path from tool input, if any (convenience wrapper). */
 export function extractPath(toolName: string, input: Record<string, unknown>): ExtractedPath | undefined {
-  switch (toolName) {
-    case "read":
-    case "write":
-    case "edit":
-      return input.path ? { path: input.path as string, isDirectory: false } : undefined;
-    case "ls":
-    case "find":
-    case "grep":
-      return input.path ? { path: input.path as string, isDirectory: true } : undefined;
-    default:
-      return undefined;
-  }
+  return extractPaths(toolName, input)[0];
 }
 
 /**

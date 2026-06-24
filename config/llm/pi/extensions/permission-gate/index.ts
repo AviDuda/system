@@ -28,6 +28,16 @@ type ComputeEditsDiffFn = (
 
 let _computeEditsDiff: ComputeEditsDiffFn | undefined;
 
+// patch's preview is a sibling extension; its tolerant matching differs from
+// pi's, so we use patch's own diff computation (not computeEditsDiff) to avoid
+// a misleading empty preview for normalized matches (arrows, tab↔space).
+type ComputePatchPreviewFn = (
+  topPath: string,
+  edits: Array<{ oldText?: string; newText?: string; path?: string; anchor?: string; replaceAll?: boolean }>,
+  cwd: string,
+) => Promise<{ diff: string; firstChangedLine?: number } | undefined>;
+let _computePatchPreview: ComputePatchPreviewFn | undefined;
+
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
   type ConfirmResult,
@@ -251,7 +261,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         }
 
         // Tool overrides
-        const overrideTools = ["edit", "write", "bash"];
+        const overrideTools = ["edit", "patch", "write", "bash"];
         msg += "\nTool rules:\n";
         for (const t of overrideTools) {
           const setting = state.toolOverrides[t] ?? "confirm";
@@ -288,6 +298,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           "Done",
           `Toggle auto-classify (${state.autoClassify})`,
           "Toggle edit tool (allow/confirm)",
+          "Toggle patch tool (allow/confirm)",
           "Toggle write tool (allow/confirm)",
           "Toggle bash tool (allow/confirm)",
           `Toggle explain (${explainEnabled ? "on" : "off"})`,
@@ -327,6 +338,9 @@ export default function permissionGate(pi: ExtensionAPI) {
         } else if (choice === "Toggle edit tool (allow/confirm)") {
           state.toolOverrides.edit = state.toolOverrides.edit === "allow" ? undefined : "allow";
           ctx.ui.notify(`edit: ${state.toolOverrides.edit ?? "confirm"}`, "info");
+        } else if (choice === "Toggle patch tool (allow/confirm)") {
+          state.toolOverrides.patch = state.toolOverrides.patch === "allow" ? undefined : "allow";
+          ctx.ui.notify(`patch: ${state.toolOverrides.patch ?? "confirm"}`, "info");
         } else if (choice === "Toggle write tool (allow/confirm)") {
           state.toolOverrides.write = state.toolOverrides.write === "allow" ? undefined : "allow";
           ctx.ui.notify(`write: ${state.toolOverrides.write ?? "confirm"}`, "info");
@@ -411,6 +425,24 @@ export default function permissionGate(pi: ExtensionAPI) {
           }
         }
         return { lines, rawDiff: result.diff, firstChangedLine };
+      }
+      if (toolName === "patch" && input.edits && Array.isArray(input.edits)) {
+        const path = typeof input.path === "string" ? input.path : "";
+        const edits = input.edits as Array<{
+          oldText?: string;
+          newText?: string;
+          path?: string;
+          anchor?: string;
+          replaceAll?: boolean;
+        }>;
+        if (!_computePatchPreview) {
+          const mod = await import("../patch/preview");
+          _computePatchPreview = mod.computePatchPreview as ComputePatchPreviewFn;
+        }
+        const result = await _computePatchPreview(path, edits, cwd);
+        if (!result) return undefined;
+        const styled = renderDiff(result.diff);
+        return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
       }
       if (toolName === "write") {
         const content = typeof input.content === "string" ? input.content : "";
@@ -533,18 +565,28 @@ export default function permissionGate(pi: ExtensionAPI) {
     // RPC mode subagents use ctx.ui.confirm()/select()/input() which emit
     // extension_ui_request events. The subagent extension relays these to the
     // parent's TUI and sends back extension_ui_response on stdin.
+    const input = event.input as Record<string, unknown>;
+
+    // Compute diff/preview early -- used by the patch bypass, auto-classify,
+    // and the confirm dialog. Cheap (file read + matching); needed anyway.
+    const diffBody = await computeDiffBody(event.toolName, input, ctx.cwd);
+    const rawDiff = diffBody?.rawDiff;
+    const detailsBody = diffBody ? undefined : computeDetailsBody(event.toolName, input);
+
+    // For patch: skip confirmation when dryRun or when no useful preview was
+    // produced (edits don't match, file unreadable, partial failure — the tool
+    // will throw its own diagnostics, no write happens). This MUST run before
+    // the hasUI check so it works in non-interactive mode (-p) too.
+    if (event.toolName === "patch") {
+      const isDryRun = (input as Record<string, unknown>).dryRun === true;
+      if (isDryRun || !diffBody) {
+        return undefined;
+      }
+    }
+
     if (!ctx.hasUI) {
       return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
     }
-
-    const input = event.input as Record<string, unknown>;
-
-    // Compute diff early -- used by both classify (sidecar description) and the dialog (visual preview)
-    const diffBody = await computeDiffBody(event.toolName, input, ctx.cwd);
-    const rawDiff = diffBody?.rawDiff;
-
-    // Compute details for non-diff tools (subagent, web_search, etc.)
-    const detailsBody = diffBody ? undefined : computeDetailsBody(event.toolName, input);
 
     // Auto-classify: call sidecar before showing dialog
     if (state.autoClassify === "on" && hasRole("explain")) {
