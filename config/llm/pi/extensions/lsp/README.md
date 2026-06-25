@@ -191,7 +191,7 @@ When the agent provides a `symbol` parameter, the extension resolves the exact c
 1. **Semantic** (when `line` is NOT specified): fetches `textDocument/documentSymbol` and searches the symbol tree by name. Uses `selectionRange` — the precise name span at the declaration site. Most reliable for "find where X is defined."
 2. **Textual** (when `line` IS specified): word-boundary regex match on the given line. Finds the symbol at the usage site, not the declaration. Required for `references`, `hover`, `type_definition` at a specific usage.
 
-When `line` is omitted, semantic resolution is used (finds the declaration). When `line` is provided, textual resolution is used (finds the usage at that line). The `source` field in position info (`via semantic` / `via textual`) tells the agent which path was used.
+When `line` is omitted, semantic resolution is used (finds the declaration). When `line` is provided, textual resolution is used first (finds the usage at that line). If textual resolution fails (symbol not on that line), the tool expands outward from the given line to find the nearest textual match. Semantic resolution is only used as a last resort when the symbol doesn't appear anywhere in the file textually (e.g., macro expansion or renamed import).
 
 Word-boundary matching (`\b`) prevents false matches where a symbol name appears inside another identifier (e.g., `get` won't match `getApiKey`).
 

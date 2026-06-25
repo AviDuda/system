@@ -423,9 +423,8 @@ export function resolveSymbolPosition(
     // Strategy 2: Textual match on specific line
     if (line !== undefined) {
       const targetLine = fileLines[line - 1];
-      if (!targetLine) return { line: line - 1, character: 0, found: false };
 
-      const matches = findWordMatches(targetLine, symbol);
+      const matches = targetLine ? findWordMatches(targetLine, symbol) : [];
       const occ = occurrence ?? 1;
 
       if (matches.length > 0 && occ <= matches.length) {
@@ -436,6 +435,44 @@ export function resolveSymbolPosition(
           occurrenceCount: matches.length,
           source: "textual",
         };
+      }
+
+      // Strategy 2b: Line is imprecise (symbol not on this line) — expand
+      // outward from the given line to find the nearest textual match. More
+      // predictable than semantic resolution (which can jump to a wrong symbol
+      // when multiple share a name) and better than scanning from line 0
+      // (which picks the first occurrence, not the nearest). Common case:
+      // agent off by one, or pointing at a blank line after the declaration.
+      if (matches.length === 0) {
+        const maxDelta = Math.max(line - 1, fileLines.length - line);
+        for (let d = 1; d <= maxDelta; d++) {
+          for (const offset of [line - 1 - d, line - 1 + d]) {
+            if (offset < 0 || offset >= fileLines.length) continue;
+            const nearMatches = findWordMatches(fileLines[offset], symbol);
+            if (nearMatches.length > 0) {
+              return {
+                line: offset,
+                character: nearMatches[0],
+                found: true,
+                occurrenceCount: nearMatches.length,
+                source: "textual",
+              };
+            }
+          }
+        }
+      }
+
+      // Strategy 2c: Symbol not found textually anywhere in the file. Last
+      // resort: semantic resolution from the symbol tree. This handles the
+      // case where the symbol name in the tree differs from its textual
+      // representation (e.g., renamed import, macro expansion). Risk: if
+      // multiple symbols share a name, picks the first in tree order, which
+      // may not be what the agent intended.
+      if (documentSymbols && documentSymbols.length > 0) {
+        const semantic = findInSymbolTree(documentSymbols, symbol);
+        if (semantic) {
+          return { line: semantic.line, character: semantic.character, found: true, source: "semantic" };
+        }
       }
 
       return { line: line - 1, character: 0, found: false, occurrenceCount: matches.length };

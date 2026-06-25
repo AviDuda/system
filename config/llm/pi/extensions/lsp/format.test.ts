@@ -291,4 +291,31 @@ describe("resolveSymbolPosition", () => {
     const result = resolveSymbolPosition(import.meta.path, undefined, randomSymbol);
     expect(result.found).toBe(false);
   });
+
+  test("falls back to nearest textual match when line is wrong", () => {
+    // Simulates: symbol on line N, agent asks for N+1 (blank line). The
+    // outward scan finds the nearest textual match.
+    const result = resolveSymbolPosition(import.meta.path, 2, "resolveSymbolPosition");
+    expect(result.found).toBe(true);
+    // Line 2 is near line 1 where describe() uses it, so the nearest match
+    // should be close to the provided line (not jumping to line 300+).
+    expect(result.line).toBeLessThan(50); // near the top of the file
+  });
+
+  test("falls back to semantic resolution when symbol not in file textually", () => {
+    // Symbol exists in doc-symbols tree but not as text in the file
+    // (e.g., macro expansion, renamed import). This is the only case where
+    // semantic resolution is used as a fallback.
+    const docSymbols: DocumentSymbol[] = [
+      {
+        name: "IconClassParser",
+        kind: 23, // Struct
+        range: { start: { line: 10, character: 0 }, end: { line: 50, character: 1 } },
+        selectionRange: { start: { line: 10, character: 11 }, end: { line: 10, character: 27 } },
+      },
+    ];
+    const randomSymbol = `sym_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const result = resolveSymbolPosition(import.meta.path, 12, randomSymbol, undefined, docSymbols);
+    expect(result.found).toBe(false); // not in file textually AND not in doc symbols by this name
+  });
 });

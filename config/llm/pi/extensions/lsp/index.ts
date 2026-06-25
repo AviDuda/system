@@ -806,7 +806,10 @@ export default function (pi: ExtensionAPI) {
             resolved.occurrenceCount && resolved.occurrenceCount > 1
               ? ` (occurrence ${occurrence ?? 1} of ${resolved.occurrenceCount})`
               : "";
-          posInfo = ` (symbol "${symbol}" at ${displayLine}:${resolved.character + 1} via ${method}${occInfo})`;
+          // Hint when the resolved line differs from what the agent asked for.
+          // The agent should know the fallback happened so it can calibrate trust.
+          const fallbackHint = line !== undefined && displayLine !== line ? ` (resolved from nearby line ${line})` : "";
+          posInfo = ` (symbol "${symbol}" at ${displayLine}:${resolved.character + 1} via ${method}${occInfo}${fallbackHint})`;
         } else if (line !== undefined) {
           // Symbol specified + line specified, but not found on that line
           const occInfo = resolved.occurrenceCount === 0 ? " — symbol not found on this line" : "";
@@ -835,7 +838,7 @@ export default function (pi: ExtensionAPI) {
               return text(`No definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
-            return text(`Found ${locs.length} definition(s):\n${lines.join("\n")}`);
+            return text(`Found ${locs.length} definition(s)${posInfo}:\n${lines.join("\n")}`);
           }
 
           case "type_definition": {
@@ -849,7 +852,7 @@ export default function (pi: ExtensionAPI) {
               return text(`No type definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
-            return text(`Found ${locs.length} type definition(s):\n${lines.join("\n")}`);
+            return text(`Found ${locs.length} type definition(s)${posInfo}:\n${lines.join("\n")}`);
           }
 
           case "implementation": {
@@ -863,7 +866,7 @@ export default function (pi: ExtensionAPI) {
               return text(`No implementation found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
             const lines = locs.map((l) => formatLocationWithContext(l, ctx.cwd));
-            return text(`Found ${locs.length} implementation(s):\n${lines.join("\n")}`);
+            return text(`Found ${locs.length} implementation(s)${posInfo}:\n${lines.join("\n")}`);
           }
 
           case "references": {
@@ -885,7 +888,8 @@ export default function (pi: ExtensionAPI) {
               lines.push(`  ... ${rest.length} additional reference(s)`);
               lines.push(...rest.map((l) => `  ${formatLocation(l, ctx.cwd)}`));
             }
-            return text(`Found ${locs.length} reference(s):\n${lines.join("\n")}`);
+            // Include posInfo when fallback resolved to a different line
+            return text(`Found ${locs.length} reference(s)${posInfo}:\n${lines.join("\n")}`);
           }
 
           case "hover": {
@@ -897,7 +901,11 @@ export default function (pi: ExtensionAPI) {
               const ctx = readLocationContext(abs, displayLine, 2).join("\n");
               return text(`No hover information${posInfo}. Context around line ${displayLine}:\n${ctx}`);
             }
-            return text(extractHoverText(raw.contents));
+            const hoverText = extractHoverText(raw.contents);
+            if (line !== undefined && displayLine !== line) {
+              return text(`${posInfo}\n${hoverText}`);
+            }
+            return text(hoverText);
           }
 
           case "symbols": {
