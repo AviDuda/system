@@ -69,6 +69,213 @@ export function contextLines(content: string, aroundLine: number, context: numbe
   return out;
 }
 
+// ── Char-level diff (surfaces exact differing codepoints) ─────────────────
+
+/** A single contiguous differing hunk between two lines. `expected` is from
+ * oldText, `actual` from the file. Either may be empty (pure insert/delete). */
+export interface CharDiff {
+  expected: string;
+  actual: string;
+}
+
+/** Cap LCS table size; longer lines fall back to common prefix/suffix (still
+ * informative, avoids O(n*m) blowup on minified/very-long lines). */
+const MAX_LCS_LEN = 400;
+
+/**
+ * Char-level diff between two lines, grouped into contiguous differing hunks.
+ * Uses a bounded LCS so the common case (one substituted/inserted/deleted rune)
+ * is reported precisely — including invisible Unicode (arrows, dashes, smart
+ * quotes, non-breaking space, zero-width chars). Diagnosis only.
+ *
+ * Why this exists: the closest-match diagnostic used to say "1 line differs in
+ * text" and leave the agent to eyeball which bytes. Normalization handles most
+ * invisible differences silently; when it can't bridge a pair (e.g. ASCII 'x'
+ * vs U+00D7 '×' — × normalizes to '*', not 'x') or another diff blocks the
+ * normalized match, naming the exact conflicting codepoint closes the gap.
+ */
+export function diffRunes(a: string, b: string): CharDiff[] {
+  if (a === b) return [];
+  const aa = Array.from(a);
+  const bb = Array.from(b);
+  if (aa.length > MAX_LCS_LEN || bb.length > MAX_LCS_LEN) {
+    const span = prefixSuffixSpan(aa, bb);
+    return span ? [span] : [];
+  }
+  return lcsHunks(aa, bb);
+}
+
+/** Common-prefix/suffix fallback: the single span between the shared ends.
+ * The suffix bound is independent of `pre` (pre + suf can exceed half the
+ * string), so a difference at the center of equal-length strings is found. */
+function prefixSuffixSpan(aa: string[], bb: string[]): CharDiff | null {
+  let pre = 0;
+  const minPre = Math.min(aa.length, bb.length);
+  while (pre < minPre && aa[pre] === bb[pre]) pre++;
+  let suf = 0;
+  while (suf < aa.length - pre && suf < bb.length - pre && aa[aa.length - 1 - suf] === bb[bb.length - 1 - suf]) suf++;
+  const expected = aa.slice(pre, aa.length - suf).join("");
+  const actual = bb.slice(pre, bb.length - suf).join("");
+  if (expected === "" && actual === "") return null;
+  return { expected, actual };
+}
+
+/** LCS-based diff → list of differing hunks (adjacent del+ins coalesced into
+ * one substitution hunk). Splits by code point (Array.from) so surrogate
+ * pairs/emoji aren't torn apart. */
+function lcsHunks(aa: string[], bb: string[]): CharDiff[] {
+  const m = aa.length;
+  const n = bb.length;
+  const dp = new Uint32Array((m + 1) * (n + 1));
+  const at = (i: number, j: number) => i * (n + 1) + j;
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[at(i, j)] = aa[i] === bb[j] ? dp[at(i + 1, j + 1)] + 1 : Math.max(dp[at(i + 1, j)], dp[at(i, j + 1)]);
+    }
+  }
+  const hunks: CharDiff[] = [];
+  let exp = "";
+  let act = "";
+  const flush = () => {
+    if (exp !== "" || act !== "") {
+      hunks.push({ expected: exp, actual: act });
+      exp = "";
+      act = "";
+    }
+  };
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (aa[i] === bb[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (dp[at(i + 1, j)] >= dp[at(i, j + 1)]) {
+      exp += aa[i];
+      i++;
+    } else {
+      act += bb[j];
+      j++;
+    }
+  }
+  while (i < m) {
+    exp += aa[i];
+    i++;
+  }
+  while (j < n) {
+    act += bb[j];
+    j++;
+  }
+  flush();
+  return hunks;
+}
+
+// ── Rune description (name the invisibles; hex the rest) ───────────────────
+
+/** Names ONLY for runes whose literal glyph carries no information — zero-width
+ * / format chars and space-variants (which render as a blank). Visible
+ * codepoints (×, em-dash, smart quotes, bullet, arrows, …) are intentionally
+ * NOT named: their glyph + U+XXXX is enough to act on, and a name table for
+ * them would have to mirror match.ts's normalization exactly (drift risk) for
+ * marginal gain. Unnamed codepoints degrade gracefully — they still show their
+ * glyph and codepoint, just not a human name.
+ *
+ * Contract: this is the invisibles-only set. If match.ts grows a new invisible
+ * normalization, add its name here; forgetting only degrades the message to
+ * `whitespace (U+XXXX)`, never to a wrong match. */
+const NAMED_CODEPOINTS: Record<string, string> = {
+  // Zero-width / format (no glyph).
+  "\u00AD": "SOFT HYPHEN",
+  "\u200B": "ZERO WIDTH SPACE",
+  "\u200C": "ZERO WIDTH NON-JOINER",
+  "\u200D": "ZERO WIDTH JOINER",
+  "\u2060": "WORD JOINER",
+  "\uFEFF": "ZERO WIDTH NO-BREAK SPACE (BOM)",
+  // Space-variants (glyph is a blank — indistinguishable from a regular space).
+  "\u00A0": "NON-BREAKING SPACE",
+  "\u2002": "EN SPACE",
+  "\u2003": "EM SPACE",
+  "\u2004": "THREE-PER-EM SPACE",
+  "\u2005": "FOUR-PER-EM SPACE",
+  "\u2006": "SIX-PER-EM SPACE",
+  "\u2007": "FIGURE SPACE",
+  "\u2008": "PUNCTUATION SPACE",
+  "\u2009": "THIN SPACE",
+  "\u200A": "HAIR SPACE",
+  "\u202F": "NARROW NO-BREAK SPACE",
+  "\u205F": "MEDIUM MATHEMATICAL SPACE",
+  "\u3000": "IDEOGRAPHIC SPACE",
+};
+
+/** True when a rune needs annotation beyond a bare quoted literal: control
+ * chars, any whitespace (incl. invisible spaces), and any non-ASCII printable
+ * (whose glyph is an ASCII lookalike — × vs x, — vs -, “ vs "). */
+function isNotableRune(ch: string): boolean {
+  const cp = ch.codePointAt(0) ?? 0;
+  if (cp < 0x20 || cp === 0x7f) return true;
+  if (/\s/.test(ch)) return true;
+  return cp > 0x7e;
+}
+
+/** Describe one side of a differing hunk. Three tiers: printable ASCII → bare
+ * quoted literal ('x'); non-ASCII printable → glyph + codepoint ('×' (U+00D7));
+ * invisible (whitespace-variant, zero-width, control) → name + codepoint, no
+ * glyph (NON-BREAKING SPACE (U+00A0)). Runs of one rune compact to "4 spaces" /
+ * "2 tabs" so indentation differences stay readable. */
+function describeSide(s: string): string {
+  if (s === "") return "(nothing)";
+  const runes = Array.from(s);
+  if (!runes.some(isNotableRune)) {
+    return `'${escapeLiteral(s)}'`;
+  }
+  return describeRunes(runes);
+}
+
+function escapeLiteral(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+function describeRunes(runes: string[]): string {
+  const parts: string[] = [];
+  let i = 0;
+  while (i < runes.length) {
+    let j = i;
+    while (j < runes.length && runes[j] === runes[i]) j++;
+    const count = j - i;
+    const ch = runes[i];
+    if (ch === undefined) break;
+    parts.push(count > 1 ? compactRun(count, ch) : runeLabel(ch));
+    i = j;
+  }
+  return parts.join(", ");
+}
+
+function compactRun(count: number, ch: string): string {
+  if (ch === " ") return `${count} spaces`;
+  if (ch === "\t") return `${count} tabs`;
+  return `${count}x ${runeLabel(ch)}`;
+}
+
+function runeLabel(ch: string): string {
+  const cp = ch.codePointAt(0) ?? 0;
+  const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+  // Named invisibles (zero-width, space-variants): name them, no glyph.
+  const name = NAMED_CODEPOINTS[ch];
+  if (name !== undefined) return `${name} (U+${hex})`;
+  // Whitespace / control (unnamed): classify with codepoint.
+  if (ch === " ") return `space (U+${hex})`;
+  if (ch === "\t") return `tab (U+${hex})`;
+  if (/\s/.test(ch)) return `whitespace (U+${hex})`;
+  if (cp < 0x20 || cp === 0x7f) return `control char (U+${hex})`;
+  // Printable: ASCII bare, non-ASCII with codepoint (disambiguates lookalikes).
+  return cp <= 0x7e ? `'${escapeLiteral(ch)}'` : `'${ch}' (U+${hex})`;
+}
+
+/** Render a char-level hunk as "expected vs actual" with codepoint info. */
+export function describeCharDiff(d: CharDiff): string {
+  return `${describeSide(d.expected)} vs ${describeSide(d.actual)}`;
+}
+
 // ── Closest match (no-match diagnostic) ────────────────────────────────────
 
 export interface ClosestMatch {
@@ -78,6 +285,18 @@ export interface ClosestMatch {
   text: string;
   /** Structured breakdown of how oldText differs from this window. */
   diagnosis: LineDiffDiagnosis;
+}
+
+/** One differing line's char-level breakdown (whitespace or content), for
+ * surfacing the exact codepoints. `index` is 0-based within the oldText/window
+ * pair; callers add the window's start line for a file line number. */
+export interface LineDifference {
+  index: number;
+  /** "whitespace" if the line differs only in whitespace, "content" otherwise. */
+  kind: "whitespace" | "content";
+  /** Differing char hunks (usually one — the invisible rune). Empty when lines
+   * differ only in length (rare; classifyLines still counts the line). */
+  chars: CharDiff[];
 }
 
 /** How oldText differs from a closest-match window, classified by fixability.
@@ -92,6 +311,11 @@ export interface LineDiffDiagnosis {
   missingFromOldText: number;
   /** Lines in oldText but absent from the window (oldText too long). */
   extraInOldText: number;
+  /** Per-line breakdown for whitespace/content differing lines, naming the
+   * exact codepoints (esp. invisible Unicode) so the agent can fix without a
+   * re-read. Empty when no lines differ in content/whitespace (identical, or
+   * only line counts differ). */
+  lineDetails: LineDifference[];
 }
 
 /** Classify the line-level difference between oldText and a file window by
@@ -110,6 +334,7 @@ export function diagnoseLineDiff(oldText: string, windowContent: string): LineDi
   let contentDiffer = 0;
   let missingFromOldText = 0;
   let extraInOldText = 0;
+  const lineDetails: LineDifference[] = [];
 
   for (let i = 0; i < len; i++) {
     const o = oldLines[i];
@@ -122,11 +347,13 @@ export function diagnoseLineDiff(oldText: string, windowContent: string): LineDi
       // raw-identical — no difference, skip
     } else if (normalizeWhitespace(o) === normalizeWhitespace(w)) {
       whitespaceOnly++;
+      lineDetails.push({ index: i, kind: "whitespace", chars: diffRunes(o, w) });
     } else {
       contentDiffer++;
+      lineDetails.push({ index: i, kind: "content", chars: diffRunes(o, w) });
     }
   }
-  return { whitespaceOnly, contentDiffer, missingFromOldText, extraInOldText };
+  return { whitespaceOnly, contentDiffer, missingFromOldText, extraInOldText, lineDetails };
 }
 
 /** Strip trailing newline and split into lines for pairwise comparison. */
@@ -261,7 +488,8 @@ export function formatClosestMatches(matches: ClosestMatch[]): string {
     const pct = Math.round(m.similarity * 100);
     const preview = m.text.split("\n").slice(0, 4).join("\n");
     const more = m.text.split("\n").length > 4 ? "\n  ..." : "";
-    return `  ${idx + 1}. Lines ${m.line}-${m.line + m.text.split("\n").length - 1} (${pct}% similar — ${describeDiagnosis(m.diagnosis)})\n  ${preview}${more}`;
+    const details = formatLineDetails(m.diagnosis, m.line);
+    return `  ${idx + 1}. Lines ${m.line}-${m.line + m.text.split("\n").length - 1} (${pct}% similar — ${describeDiagnosis(m.diagnosis)})${details}\n  ${preview}${more}`;
   });
   const tip = allWhitespace
     ? "Tip: your content looks right — only whitespace differs. Re-copy the exact text from the file (watch tabs vs spaces, indentation)."
@@ -272,6 +500,25 @@ export function formatClosestMatches(matches: ClosestMatch[]): string {
 /** True when every difference is whitespace/indentation-only (content matches). */
 function isWhitespaceOnlyDiagnosis(d: LineDiffDiagnosis): boolean {
   return d.whitespaceOnly > 0 && d.contentDiffer === 0 && d.missingFromOldText === 0 && d.extraInOldText === 0;
+}
+
+/** Render the char-level breakdown for differing lines — the exact codepoints,
+ * including invisible Unicode (× vs x, em-dash vs --, NBSP, zero-width). `startLine`
+ * is the closest-match window's first line; lineDetails.index is 0-based within it.
+ * Capped at 3 lines so a wildly-mismatched window doesn't flood the message. */
+function formatLineDetails(d: LineDiffDiagnosis, startLine: number): string {
+  if (d.lineDetails.length === 0) return "";
+  const shown = d.lineDetails.slice(0, 3);
+  const rendered = shown.map((ld) => {
+    const fileLine = startLine + ld.index;
+    const charText = ld.chars.length > 0 ? ld.chars.map(describeCharDiff).join("; ") : "(line length differs)";
+    return `    line ${fileLine}: ${charText}`;
+  });
+  const extra =
+    d.lineDetails.length > shown.length
+      ? `\n    ... +${d.lineDetails.length - shown.length} more differing line(s)`
+      : "";
+  return `\n${rendered.join("\n")}${extra}`;
 }
 
 // ── Near-miss detection (normalized-equal occurrences the agent should know) ─

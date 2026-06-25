@@ -3,9 +3,11 @@ import {
   closestMatches,
   contextLines,
   countApplied,
+  describeCharDiff,
   describeDiagnosis,
   detectBoundaryDuplication,
   diagnoseLineDiff,
+  diffRunes,
   findNearMisses,
   formatClosestMatches,
   formatHitsWithContext,
@@ -111,6 +113,26 @@ describe("formatClosestMatches", () => {
     expect(text).toContain("whitespace");
     expect(text).toContain("content looks right");
   });
+  test("enriched output includes per-line codepoint breakdown", () => {
+    // oldText has ASCII 'x'; file has U+00D7 MULTIPLICATION SIGN.
+    // Exact match fails (normalization: ×→*, not x), closestMatch fires.
+    const content = "const area = 100 \u00D7 200;";
+    const matches = closestMatches(content, "const area = 100 x 200;");
+    expect(matches.length).toBeGreaterThan(0);
+    const text = formatClosestMatches(matches);
+    // The per-line char diff should name the codepoint difference.
+    expect(text).toContain("U+00D7");
+    expect(text).toContain("line 1:");
+  });
+  test("enriched output includes nbsp name in whitespace diff", () => {
+    // oldText has regular space; file has non-breaking space at the same spot.
+    const content = "a\u00A0b";
+    const matches = closestMatches(content, "a b");
+    expect(matches.length).toBeGreaterThan(0);
+    const text = formatClosestMatches(matches);
+    expect(text).toContain("NON-BREAKING SPACE");
+    expect(text).toContain("U+00A0");
+  });
 });
 
 // ── diagnoseLineDiff (LCS line-level diagnosis) ───────────────────────────
@@ -118,7 +140,13 @@ describe("formatClosestMatches", () => {
 describe("diagnoseLineDiff", () => {
   test("identical text → all zero", () => {
     const d = diagnoseLineDiff("a\nb\nc", "a\nb\nc");
-    expect(d).toEqual({ whitespaceOnly: 0, contentDiffer: 0, missingFromOldText: 0, extraInOldText: 0 });
+    expect(d).toEqual({
+      whitespaceOnly: 0,
+      contentDiffer: 0,
+      missingFromOldText: 0,
+      extraInOldText: 0,
+      lineDetails: [],
+    });
   });
 
   test("whitespace-only difference (tabs vs spaces)", () => {
@@ -154,27 +182,142 @@ describe("diagnoseLineDiff", () => {
     expect(d.whitespaceOnly).toBeGreaterThan(0);
     expect(d.contentDiffer).toBeGreaterThan(0);
   });
+
+  test("lineDetails names the exact differing rune (× vs x)", () => {
+    // oldText has ASCII 'x'; the file window has U+00D7 at the same spot.
+    const d = diagnoseLineDiff("1x", "1\u00D7");
+    expect(d.contentDiffer).toBe(1);
+    expect(d.lineDetails).toHaveLength(1);
+    const ld = d.lineDetails[0];
+    expect(ld?.kind).toBe("content");
+    expect(ld?.index).toBe(0);
+    expect(ld?.chars).toHaveLength(1);
+    expect(ld?.chars[0]?.expected).toBe("x");
+    expect(ld?.chars[0]?.actual).toBe("\u00D7");
+  });
+
+  test("lineDetails flags whitespace-only line (nbsp vs space)", () => {
+    const d = diagnoseLineDiff("a b", "a\u00A0b");
+    expect(d.whitespaceOnly).toBe(1);
+    expect(d.lineDetails[0]?.kind).toBe("whitespace");
+    expect(d.lineDetails[0]?.chars[0]?.actual).toBe("\u00A0");
+  });
+
+  test("lineDetails is empty when only line counts differ", () => {
+    const d = diagnoseLineDiff("foo\nbar", "foo\nbar\nbaz");
+    expect(d.missingFromOldText).toBe(1);
+    expect(d.lineDetails).toEqual([]);
+  });
 });
+
+const EMPTY_DETAILS = { lineDetails: [] };
 
 describe("describeDiagnosis", () => {
   test("empty → 'identical'", () => {
-    expect(describeDiagnosis({ whitespaceOnly: 0, contentDiffer: 0, missingFromOldText: 0, extraInOldText: 0 })).toBe(
-      "identical",
-    );
+    expect(
+      describeDiagnosis({
+        whitespaceOnly: 0,
+        contentDiffer: 0,
+        missingFromOldText: 0,
+        extraInOldText: 0,
+        ...EMPTY_DETAILS,
+      }),
+    ).toBe("identical");
   });
   test("whitespace-only → mentions whitespace, not content", () => {
-    const s = describeDiagnosis({ whitespaceOnly: 2, contentDiffer: 0, missingFromOldText: 0, extraInOldText: 0 });
+    const s = describeDiagnosis({
+      whitespaceOnly: 2,
+      contentDiffer: 0,
+      missingFromOldText: 0,
+      extraInOldText: 0,
+      ...EMPTY_DETAILS,
+    });
     expect(s).toContain("whitespace");
     expect(s).not.toContain("content");
   });
   test("lists each non-zero category", () => {
-    const s = describeDiagnosis({ whitespaceOnly: 1, contentDiffer: 2, missingFromOldText: 1, extraInOldText: 0 });
+    const s = describeDiagnosis({
+      whitespaceOnly: 1,
+      contentDiffer: 2,
+      missingFromOldText: 1,
+      extraInOldText: 0,
+      ...EMPTY_DETAILS,
+    });
     expect(s).toContain("1 line");
     expect(s).toContain("whitespace");
     expect(s).toContain("2 line");
     expect(s).toContain("actual text");
     expect(s).toContain("missing 1");
     expect(s).not.toContain("extra");
+  });
+});
+
+// ── diffRunes / describeCharDiff (per-codepoint naming) ──────────────────
+
+describe("diffRunes", () => {
+  test("identical → no hunks", () => {
+    expect(diffRunes("abc", "abc")).toEqual([]);
+  });
+  test("single substitution → one hunk", () => {
+    const hunks = diffRunes("1x", "1\u00D7");
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0]?.expected).toBe("x");
+    expect(hunks[0]?.actual).toBe("\u00D7");
+  });
+  test("pure insertion → empty expected", () => {
+    const hunks = diffRunes("ab", "a\u200Bb");
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0]?.expected).toBe("");
+    expect(hunks[0]?.actual).toBe("\u200B");
+  });
+  test("pure deletion → empty actual", () => {
+    const hunks = diffRunes("a\u200Bb", "ab");
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0]?.actual).toBe("");
+  });
+  test("splits by code point (surrogate pair stays whole)", () => {
+    const poop = "\uD83D\uDCA9"; // U+1F4A9 as a surrogate pair
+    const hunks = diffRunes("x", poop);
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0]?.actual).toBe(poop);
+  });
+  test("long lines fall back to prefix/suffix span without blowing up", () => {
+    const a = "a".repeat(500);
+    const b = `${"a".repeat(250)}X${"a".repeat(249)}`;
+    const hunks = diffRunes(a, b);
+    expect(hunks).toHaveLength(1);
+    // pre=250 ('a's), suf=249 (from the right) — one 'a' at position 250 is the hunk.
+    expect(hunks[0]?.expected).toBe("a");
+    expect(hunks[0]?.actual).toBe("X");
+  });
+});
+
+describe("describeCharDiff (invisibles named, visibles hexed, ASCII bare)", () => {
+  test("non-ASCII visible: glyph + codepoint, ASCII side bare", () => {
+    // The feedback's canonical example: ASCII x vs U+00D7.
+    expect(describeCharDiff({ expected: "x", actual: "\u00D7" })).toBe(`'x' vs '\u00D7' (U+00D7)`);
+  });
+  test("em-dash: glyph + codepoint, no human name", () => {
+    expect(describeCharDiff({ expected: "--", actual: "\u2014" })).toBe(`'--' vs '\u2014' (U+2014)`);
+  });
+  test("nbsp (invisible): named, no glyph", () => {
+    expect(describeCharDiff({ expected: " ", actual: "\u00A0" })).toBe("space (U+0020) vs NON-BREAKING SPACE (U+00A0)");
+  });
+  test("zero-width space (invisible): named", () => {
+    expect(describeCharDiff({ expected: "", actual: "\u200B" })).toBe("(nothing) vs ZERO WIDTH SPACE (U+200B)");
+  });
+  test("whitespace run compacts", () => {
+    expect(describeCharDiff({ expected: "  ", actual: "    " })).toBe("2 spaces vs 4 spaces");
+  });
+  test("tabs vs spaces compacts", () => {
+    expect(describeCharDiff({ expected: "\t\t", actual: "    " })).toBe("2 tabs vs 4 spaces");
+  });
+  test("printable ASCII only → bare literals, no codepoints", () => {
+    expect(describeCharDiff({ expected: "foo", actual: "bar" })).toBe("'foo' vs 'bar'");
+  });
+  test("unknown non-ASCII printable still gets a codepoint (graceful)", () => {
+    // U+FF21 FULLWIDTH LATIN CAPITAL LETTER A — not in the invisibles table.
+    expect(describeCharDiff({ expected: "A", actual: "\uFF21" })).toBe(`'A' vs '\uFF21' (U+FF21)`);
   });
 });
 
