@@ -38,6 +38,17 @@ all via nested `withFileMutationQueue`.
 
 **dryRun** — preview matches + diff without writing.
 
+**Insert modes** — `mode: "insertAfter"` / `"insertBefore"` treat `oldText` as a
+unique anchor and splice `newText` (new content only) at a line boundary
+after/before the matched block. The anchor is never re-emitted from newText, so
+its bytes and indentation are preserved byte-for-byte and there is no
+indentation-drift surface — this is the structural fix for the "paste the anchor
+into both oldText and newText" footgun that `replace` invites. newText is
+inserted verbatim (no auto-indent). Insert and replace cannot be mixed in one
+call (split into two). Supports `anchor`/`replaceAll` like replace. A
+duplicate-line guard flags newText that re-includes the anchor; opt out per-edit
+with `allowAnchorRepeat: true` for the legitimate "repeat and extend" idiom.
+
 **Diff-as-result** — successful edits return the full diff in the result
 text (for LLM self-verification), plus the line each edit landed on
 (`edits[N] → line X`, with an `(anchored)` tag when an anchor disambiguated
@@ -56,7 +67,7 @@ lines in its replacement (would silently double on disk).
 | Param | Required | Description |
 |-------|----------|-------------|
 | `path` | yes (top-level) | File to edit; overridden per-edit |
-| `edits[]` | yes | `{ oldText, newText, path?, anchor?, replaceAll? }` |
+| `edits[]` | yes | `{ oldText, newText, path?, anchor?, replaceAll?, mode?, allowAnchorRepeat? }` |
 | `dryRun` | no | Report without writing |
 
 ## Correctness invariants
@@ -92,7 +103,7 @@ match.
 ## Files
 
 - `match.ts` — pure matching engine (cascade, anchor, replaceAll, overlap
-  detection, byte preservation). No pi imports.
+  detection, byte preservation, **insert modes**). No pi imports.
 - `diagnostics.ts` — pure diagnostics (closest match, **char-level codepoint
   diff** via bounded LCS, three-tier rune rendering, occurrence context with `>>`
   markers, near-miss detection, duplicate-line guard, message formatting). No pi

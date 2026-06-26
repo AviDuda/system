@@ -7,7 +7,7 @@
  * this directly; the TUI gets its own colored rendering via renderDiff).
  */
 
-import type { MatchHit, PlannedReplacement, PlanResult } from "./match";
+import type { MatchHit, PlannedInsertion, PlannedReplacement, PlanResult } from "./match";
 import { normalizeForFuzzyMatch, normalizeToLF } from "./match";
 
 // ── Similarity (for closest-match diagnostics) ─────────────────────────────
@@ -593,6 +593,74 @@ function formatNearMisses(content: string, misses: NearMiss[]): string {
     .join("\n\n");
 }
 
+/** Largest k where a[0..k-1] == b[0..k-1] (trimmed lines already). */
+function leadingPrefixMatch(a: string[], b: string[]): number {
+  const n = Math.min(a.length, b.length);
+  let k = 0;
+  while (k < n && a[k] === b[k]) k++;
+  return k;
+}
+
+/** Largest k where a's last k lines == b's last k lines (both read tail-first). */
+function trailingSuffixMatch(a: string[], b: string[]): number {
+  const n = Math.min(a.length, b.length);
+  let k = 0;
+  while (k < n && a[a.length - 1 - k] === b[b.length - 1 - k]) k++;
+  return k;
+}
+
+/** Detect an insert-mode footgun: newText reproduces the anchor (oldText) such
+ * that inserting would duplicate it. Compares newText against the AGENT'S
+ * oldText (not the file) — the agent copy-pastes their own oldText into
+ * newText, so this stays robust to normalized differences (smart vs straight
+ * quotes) that would mask the dup in a file comparison. No line ranges needed.
+ *
+ * Two signals per mode:
+ *  - Block reproduction at the boundary-adjacent end (the observed failure:
+ *    agent pastes the whole anchor into newText). Flagged when the reproduced
+ *    run is the whole block OR >=2 lines. A single coincidental leading line
+ *    of a multi-line block is left to the diff (avoid false positives on
+ *    generic lines like a header or brace).
+ *  - Boundary-line repeat: newText's boundary-adjacent line equals the
+ *    anchor's boundary-adjacent line. Catches "repeat just the closing brace"
+ *    on multi-line anchors that the block check misses (the brace is the last
+ *    line, not the first).
+ *
+ * Best-effort (trimmed line compare). The caller gates this on the edit's
+ * allowAnchorRepeat flag (the legitimate "repeat and extend" idiom opts out). */
+export function detectInsertDuplication(ins: PlannedInsertion, oldText: string): string | null {
+  const oldLines = normalizeToLF(oldText)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const newLines = ins.newText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (oldLines.length === 0 || newLines.length === 0) return null;
+  const L = oldLines.length;
+  const esc = " If you intended to repeat the anchor, set allowAnchorRepeat: true.";
+
+  if (ins.mode === "insertAfter") {
+    const lead = leadingPrefixMatch(newLines, oldLines);
+    if (lead === L || lead >= 2) {
+      return `edits[${ins.editIndex}]: insertAfter newText reproduces the anchor block (first ${lead} of ${L} line(s) match oldText) — insert only NEW content (oldText is the anchor and stays in the file).${esc}`;
+    }
+    if (newLines[0] === oldLines[L - 1]) {
+      return `edits[${ins.editIndex}]: insertAfter newText starts with the anchor's last line — insert only NEW content.${esc}`;
+    }
+  } else {
+    const trail = trailingSuffixMatch(newLines, oldLines);
+    if (trail === L || trail >= 2) {
+      return `edits[${ins.editIndex}]: insertBefore newText reproduces the anchor block (last ${trail} of ${L} line(s) match oldText) — insert only NEW content.${esc}`;
+    }
+    if (newLines[newLines.length - 1] === oldLines[0]) {
+      return `edits[${ins.editIndex}]: insertBefore newText ends with the anchor's first line — insert only NEW content.${esc}`;
+    }
+  }
+  return null;
+}
+
 /** Build the per-edit outcome messages from a plan (no overlap-free successes). */
 export function formatOutcomes(content: string, plan: PlanResult, edits: { oldText: string }[]): string[] {
   const messages: string[] = [];
@@ -611,6 +679,14 @@ export function formatOutcomes(content: string, plan: PlanResult, edits: { oldTe
           "edits[".concat(
             String(outcome.editIndex),
             "]: oldText is empty. patch edits existing files by matching oldText; to create a new file, use the write tool.",
+          ),
+        );
+        break;
+      case "mixed-mode":
+        messages.push(
+          "edits[".concat(
+            String(outcome.editIndex),
+            "]: insert and replace modes cannot be mixed in one patch call. Split insert and replace edits into separate calls.",
           ),
         );
         break;

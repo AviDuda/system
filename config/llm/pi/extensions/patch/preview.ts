@@ -77,7 +77,7 @@ export async function computePatchPreview(
     // the permission gate knows to skip confirmation (the tool will throw its
     // own diagnostics; asking the user to approve a doomed edit wastes time).
     const hasDiagnostics = plan.outcomes.some((o) => o.status !== "applied");
-    if (hasDiagnostics || plan.replacements.length === 0) return undefined;
+    if (hasDiagnostics || (plan.replacements.length === 0 && plan.insertions.length === 0)) return undefined;
 
     const newContent = bom + restoreLineEndings(applyPreservingOriginal(content, plan), ending);
     const lfNew = normalizeToLF(newContent);

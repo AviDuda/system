@@ -32,6 +32,17 @@ export interface Edit {
   anchor?: string;
   /** Apply to all occurrences (intentional non-unique). */
   replaceAll?: boolean;
+  /** How to apply. "replace" (default) rewrites the matched block with newText.
+   * "insertAfter"/"insertBefore" treat oldText as a unique anchor and insert
+   * newText (new content ONLY) after/before the matched block at a line
+   * boundary. The anchor is never re-emitted, so its bytes are preserved and
+   * there is no indentation-drift surface; newText is inserted verbatim. */
+  mode?: "replace" | "insertAfter" | "insertBefore";
+  /** Insert-only. Allow newText to repeat the anchor line (default false). The
+   * insert dup-guard rejects newText that re-includes the anchor; set this for
+   * the legitimate "repeat and extend" idiom (e.g. append a line that happens
+   * to match the anchor). Ignored for replace mode. */
+  allowAnchorRepeat?: boolean;
 }
 
 export type MatchKind = "exact" | "normalized";
@@ -314,17 +325,31 @@ export interface PlannedReplacement {
   kind: MatchKind;
 }
 
+export interface PlannedInsertion {
+  editIndex: number;
+  /** 1-based original line to insert before (clamped to [1, totalLines+1];
+   * totalLines+1 = append at end). */
+  beforeLine: number;
+  /** Verbatim new content (LF-normalized). */
+  newText: string;
+  /** True when an anchor disambiguated the match. */
+  anchored: boolean;
+  mode: "insertAfter" | "insertBefore";
+}
+
 export type EditOutcome =
   | { editIndex: number; status: "applied"; hits: MatchHit[] }
   | { editIndex: number; status: "no-op"; hits: MatchHit[] }
   | { editIndex: number; status: "no-match" }
   | { editIndex: number; status: "ambiguous"; hits: MatchHit[] }
-  | { editIndex: number; status: "empty" };
+  | { editIndex: number; status: "empty" }
+  | { editIndex: number; status: "mixed-mode" };
 
 export interface PlanResult {
   /** The match space used for the whole batch. */
   space: "exact" | "normalized";
   replacements: PlannedReplacement[];
+  insertions: PlannedInsertion[];
   outcomes: EditOutcome[];
 }
 
@@ -347,6 +372,14 @@ function isNoOpReplacement(matchSpace: string, rep: { start: number; length: num
   return rep.newText === matchSpace.slice(rep.start, rep.start + rep.length);
 }
 
+/** Compute the 1-based original line to insert before, for a matched block.
+ * insertAfter → the line after the block; insertBefore → the block's first
+ * line. Clamped to [1, totalLines+1] (totalLines+1 = append at end). */
+function beforeLineFor(mode: "insertAfter" | "insertBefore", hit: MatchHit, totalLines: number): number {
+  const raw = mode === "insertAfter" ? hit.line + hit.lineCount : hit.line;
+  return Math.min(Math.max(raw, 1), totalLines + 1);
+}
+
 /**
  * Plan all edits against one file's content. Determines the batch's match space
  * (exact if all edits exact-match, else normalized for the whole batch),
@@ -363,8 +396,24 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
   const space: "exact" | "normalized" = useNormalized ? "normalized" : "exact";
   const matchSpace = space === "normalized" ? normalized : content;
 
+  // Mixed insert + replace in one call is rejected: composing normalized-space
+  // replacements (offset + line-group rebuild) with line-boundary insertions
+  // needs a unified applier not worth the complexity. Split into separate calls.
+  const hasInsert = edits.some((e) => e.mode === "insertAfter" || e.mode === "insertBefore");
+  const hasReplace = edits.some((e) => (e.mode ?? "replace") === "replace");
+  if (hasInsert && hasReplace) {
+    return {
+      space,
+      replacements: [],
+      insertions: [],
+      outcomes: edits.map((_, i) => ({ editIndex: i, status: "mixed-mode" as const })),
+    };
+  }
+
   const replacements: PlannedReplacement[] = [];
+  const insertions: PlannedInsertion[] = [];
   const outcomes: EditOutcome[] = [];
+  const fileLineCount = contentLines(content).length;
 
   for (let i = 0; i < edits.length; i++) {
     const edit = edits[i];
@@ -383,6 +432,66 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
     }
 
     const hits = occurrences.map((occ) => buildHit(content, space, occ));
+
+    // Insert modes: oldText is a unique anchor; newText (new content only) is
+    // spliced at a line boundary after/before the matched block. The anchor is
+    // never re-emitted from newText, so there's no indentation-drift surface.
+    if (edit.mode === "insertAfter" || edit.mode === "insertBefore") {
+      const mode = edit.mode;
+      const newRaw = normalizeToLF(edit.newText);
+      if (newRaw.length === 0) {
+        outcomes.push({ editIndex: i, status: "empty" });
+        continue;
+      }
+      if (edit.replaceAll) {
+        for (const hit of hits) {
+          insertions.push({
+            editIndex: i,
+            beforeLine: beforeLineFor(mode, hit, fileLineCount),
+            newText: newRaw,
+            anchored: false,
+            mode,
+          });
+        }
+        outcomes.push({ editIndex: i, status: "applied", hits });
+        continue;
+      }
+      if (occurrences.length > 1) {
+        if (edit.anchor) {
+          const anchorLines = findAnchorLines(content, edit.anchor);
+          if (anchorLines.length > 0) {
+            const chosen = nearestOccurrence(occurrences, anchorLines, matchSpace);
+            if (chosen) {
+              const hit = buildHit(content, space, chosen);
+              insertions.push({
+                editIndex: i,
+                beforeLine: beforeLineFor(mode, hit, fileLineCount),
+                newText: newRaw,
+                anchored: true,
+                mode,
+              });
+              outcomes.push({ editIndex: i, status: "applied", hits: [hit] });
+              continue;
+            }
+          }
+        }
+        outcomes.push({ editIndex: i, status: "ambiguous", hits });
+        continue;
+      }
+      const occ = occurrences[0];
+      if (occ) {
+        const hit = buildHit(content, space, occ);
+        insertions.push({
+          editIndex: i,
+          beforeLine: beforeLineFor(mode, hit, fileLineCount),
+          newText: newRaw,
+          anchored: Boolean(edit.anchor),
+          mode,
+        });
+        outcomes.push({ editIndex: i, status: "applied", hits: [hit] });
+      }
+      continue;
+    }
 
     // Build candidate replacements for this edit, then drop the no-op ones
     // (newText byte-identical to what's matched). An edit whose candidates
@@ -449,7 +558,7 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
     }
   }
 
-  return { space, replacements, outcomes };
+  return { space, replacements, insertions, outcomes };
 }
 
 function nearestOccurrence(
@@ -482,8 +591,12 @@ function nearestOccurrence(
  * verbatim from the original — so untouched regions keep their original bytes.
  */
 export function applyPreservingOriginal(content: string, plan: PlanResult): string {
-  const { space, replacements } = plan;
+  const { replacements, insertions } = plan;
+  // Insert-only path. Mixed insert+replace is rejected at plan time, so
+  // insertions.length > 0 implies replacements.length === 0.
+  if (insertions.length > 0) return applyInsertions(content, insertions);
   if (replacements.length === 0) return content;
+  const { space } = plan;
 
   if (space === "exact") {
     const sorted = [...replacements].sort((a, b) => b.start - a.start);
@@ -532,6 +645,42 @@ export function applyPreservingOriginal(content: string, plan: PlanResult): stri
   }
   result += originalLines.slice(lineIdx).join("");
   return result;
+}
+
+/**
+ * Apply insertions to original content by splicing each block at its line
+ * boundary. Pure line-based: works identically regardless of match space
+ * (insert-only plans have no normalized-space rebuild). Each insertion's
+ * newText is treated as complete lines (terminated with \n); appends at end
+ * get a separating newline when the last file line lacks one.
+ */
+function applyInsertions(content: string, insertions: PlannedInsertion[]): string {
+  if (insertions.length === 0) return content;
+  const lines = splitLinesWithEndings(content);
+  const total = lines.length;
+  // Group chunks by beforeLine, preserving plan order (editIndex then occurrence).
+  const byLine = new Map<number, string[]>();
+  for (const ins of insertions) {
+    const arr = byLine.get(ins.beforeLine);
+    if (arr) arr.push(ins.newText);
+    else byLine.set(ins.beforeLine, [ins.newText]);
+  }
+  const emit = (beforeLine: number): string => {
+    const chunks = byLine.get(beforeLine);
+    if (!chunks) return "";
+    return chunks.map((c) => (c.endsWith("\n") ? c : `${c}\n`)).join("");
+  };
+  let out = "";
+  for (let i = 0; i < total; i++) {
+    out += emit(i + 1);
+    out += lines[i] ?? "";
+  }
+  const tail = emit(total + 1);
+  if (tail) {
+    if (total > 0 && !lines[total - 1].endsWith("\n") && !tail.startsWith("\n")) out += "\n";
+    out += tail;
+  }
+  return out;
 }
 
 function replacementLineRange(baseLines: LineSpan[], r: PlannedReplacement): { startLine: number; endLine: number } {

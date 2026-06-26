@@ -13,7 +13,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { generateDiffString, renderDiff, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { detectBoundaryDuplication, formatOutcomes } from "./diagnostics";
+import { detectBoundaryDuplication, detectInsertDuplication, formatOutcomes } from "./diagnostics";
 import {
   applyPreservingOriginal,
   detectLineEnding,
@@ -48,6 +48,18 @@ const editSchema = Type.Object(
       }),
     ),
     replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence of oldText (default false)." })),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("replace"), Type.Literal("insertAfter"), Type.Literal("insertBefore")], {
+        description:
+          'How to apply. "replace" (default): newText rewrites the matched block. "insertAfter"/"insertBefore": oldText is a unique anchor; newText (NEW content only) is inserted after/before the matched block at a line boundary. Use insert to add content adjacent to existing code without re-typing the surrounding lines — the anchor stays in the file byte-for-byte and newText is inserted verbatim (no indentation-drift risk). Do not include the anchor line in newText. Insert and replace modes cannot be mixed in one call.',
+      }),
+    ),
+    allowAnchorRepeat: Type.Optional(
+      Type.Boolean({
+        description:
+          'Insert-only. Allow newText to repeat the anchor line (default false). Set true for the legitimate "repeat and extend" idiom (e.g. append a line that happens to match the anchor). Ignored for replace.',
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -152,7 +164,12 @@ interface FileResult {
   /** Where each applied edit landed (1-based lines), for verification.
    * Especially important for anchored edits: a mis-targeted match would
    * otherwise only surface in a possibly-truncated diff. */
-  appliedLocations: Array<{ editIndex: number; lines: number[]; anchored: boolean }>;
+  appliedLocations: Array<{
+    editIndex: number;
+    lines: number[];
+    anchored: boolean;
+    insert?: "insertAfter" | "insertBefore";
+  }>;
 }
 
 interface FileFailure {
@@ -221,10 +238,17 @@ async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[
         }
       }
     }
+    // Insert-mode guard: catch newText that re-includes the anchor.
+    // Opt out per-edit via allowAnchorRepeat (the legit repeat-and-extend idiom).
+    for (const ins of plan.insertions) {
+      if (edits[ins.editIndex]?.allowAnchorRepeat) continue;
+      const dup = detectInsertDuplication(ins, edits[ins.editIndex]?.oldText ?? "");
+      if (dup) messages.push(dup);
+    }
 
     messages.push(...formatOutcomes(content, plan, edits));
 
-    if (messages.length > 0 || plan.replacements.length === 0) {
+    if (messages.length > 0 || (plan.replacements.length === 0 && plan.insertions.length === 0)) {
       failures.push({
         displayPath,
         messages: messages.length > 0 ? messages : ["No matching edits — nothing to apply."],
@@ -250,18 +274,35 @@ async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[
     const appliedOutcomes = plan.outcomes.filter(
       (o): o is Extract<EditOutcome, { status: "applied" }> => o.status === "applied",
     );
-    const appliedLocations = appliedOutcomes.map((o) => ({
-      editIndex: o.editIndex,
-      lines: o.hits.map((h) => h.line),
-      anchored: Boolean(edits[o.editIndex]?.anchor),
-    }));
+    const appliedLocations: FileResult["appliedLocations"] = [];
+    for (const o of appliedOutcomes) {
+      const edit = edits[o.editIndex];
+      const mode = edit?.mode;
+      if (mode === "insertAfter" || mode === "insertBefore") {
+        for (const ins of plan.insertions) {
+          if (ins.editIndex !== o.editIndex) continue;
+          appliedLocations.push({
+            editIndex: o.editIndex,
+            lines: [ins.beforeLine],
+            anchored: ins.anchored,
+            insert: mode,
+          });
+        }
+      } else {
+        appliedLocations.push({
+          editIndex: o.editIndex,
+          lines: o.hits.map((h) => h.line),
+          anchored: Boolean(edit?.anchor),
+        });
+      }
+    }
     results.push({
       displayPath,
       newContent: bom + restoreLineEndings(newContent, ending),
       diff,
       firstChangedLine,
       editCount: appliedOutcomes.length,
-      occurrenceCount: plan.replacements.length,
+      occurrenceCount: plan.replacements.length + plan.insertions.length,
       appliedLocations,
     });
   }
@@ -285,6 +326,9 @@ function formatLocations(r: FileResult): string {
   return r.appliedLocations
     .map((loc) => {
       const tag = loc.anchored ? " (anchored)" : "";
+      if (loc.insert) {
+        return `  edits[${loc.editIndex}] → ${loc.insert} before line ${loc.lines[0]}${tag}`;
+      }
       return `  edits[${loc.editIndex}] → line${loc.lines.length === 1 ? "" : "s"} ${loc.lines.join(", ")}${tag}`;
     })
     .join("\n");
@@ -377,6 +421,7 @@ export default function (pi: ExtensionAPI) {
       "Use `path` per-edit to edit multiple files in one call. The top-level `path` is the default; per-edit `path` overrides it. All files are edited atomically (all-or-nothing).",
       "Use `dryRun: true` to preview matches and the diff without writing.",
       "Include only the lines being changed plus minimal context for uniqueness in oldText. Do not include surrounding unchanged lines — the duplicate-line guard will catch this and reject the edit.",
+      'Prefer `mode: "insertAfter"`/`"insertBefore"` over replace-when-you-only-mean-to-add: insert never re-types the anchor, so it cannot drift on indentation or invisible bytes. (See the `mode` parameter for mechanics.)',
     ],
     parameters: patchSchema,
     prepareArguments,

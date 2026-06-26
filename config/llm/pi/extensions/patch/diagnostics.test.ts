@@ -6,6 +6,7 @@ import {
   describeCharDiff,
   describeDiagnosis,
   detectBoundaryDuplication,
+  detectInsertDuplication,
   diagnoseLineDiff,
   diffRunes,
   findNearMisses,
@@ -15,10 +16,14 @@ import {
   numberedLines,
   similarity,
 } from "./diagnostics";
-import { type MatchHit, planAll } from "./match";
+import { type MatchHit, type PlannedInsertion, planAll } from "./match";
 
 function hit(line: number, lineCount = 1): MatchHit {
   return { line, lineCount, kind: "exact", fileIndent: "" };
+}
+
+function ins(beforeLine: number, newText: string, mode: PlannedInsertion["mode"] = "insertAfter"): PlannedInsertion {
+  return { editIndex: 0, beforeLine, newText, anchored: false, mode };
 }
 
 // ── similarity ─────────────────────────────────────────────────────────────
@@ -472,5 +477,94 @@ describe("countApplied", () => {
     const { edits, occurrences } = countApplied(plan.replacements);
     expect(edits).toBe(2);
     expect(occurrences).toBe(3); // 2 from replaceAll + 1
+  });
+});
+
+// ── detectInsertDuplication ────────────────────────────────────────────────
+
+describe("detectInsertDuplication", () => {
+  test("insertAfter: whole-block reproduction is flagged (the observed failure)", () => {
+    // newText = entire anchor + new content. The old boundary check missed this
+    // because newText's first line != anchor's last line. Block check catches it.
+    const oldText = "header line\nbody line\nclose";
+    const result = detectInsertDuplication(ins(2, "header line\nbody line\nclose\nNEW"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("reproduces the anchor block");
+  });
+
+  test("insertAfter: partial-block reproduction (>=2 lines) is flagged", () => {
+    const oldText = "first\nsecond\nthird";
+    const result = detectInsertDuplication(ins(2, "first\nsecond\nNEW"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("first 2 of 3");
+  });
+
+  test("insertAfter: boundary-line repeat is flagged (single-line case + closing brace)", () => {
+    // newText's first line == anchor's last line; lead < 2 so block check misses.
+    const oldText = "first\nsecond\n}";
+    const result = detectInsertDuplication(ins(2, "}\nNEW"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("anchor's last line");
+  });
+
+  test("insertAfter: clean newText returns null", () => {
+    expect(detectInsertDuplication(ins(2, "brand new content"), "anchor line\nsecond")).toBeNull();
+  });
+
+  test("insertAfter: single coincidental leading line is NOT flagged (left to the diff)", () => {
+    // One shared generic line (e.g. a blank or comment) shouldn't trip the guard.
+    expect(detectInsertDuplication(ins(2, "// shared\nREAL new"), "// shared\nbody")).toBeNull();
+  });
+
+  test("insertBefore: whole-block reproduction (trailing) is flagged", () => {
+    const oldText = "header\nbody\nclose";
+    const result = detectInsertDuplication(ins(1, "NEW\nheader\nbody\nclose", "insertBefore"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("reproduces the anchor block");
+    expect(result).toContain("last 3 of 3");
+  });
+
+  test("insertBefore: partial-block reproduction (>=2 trailing lines) is flagged", () => {
+    const oldText = "first\nsecond\nthird";
+    const result = detectInsertDuplication(ins(1, "NEW\nsecond\nthird", "insertBefore"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("last 2 of 3");
+  });
+
+  test("insertBefore: boundary-line repeat (anchor's first line) is flagged", () => {
+    const oldText = "first\nsecond\nthird";
+    const result = detectInsertDuplication(ins(1, "NEW\nfirst", "insertBefore"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("anchor's first line");
+  });
+
+  test("insertBefore: clean newText returns null", () => {
+    expect(detectInsertDuplication(ins(1, "prepended", "insertBefore"), "anchor line\nsecond")).toBeNull();
+  });
+
+  test("comparison is trim-tolerant (leading whitespace ignored)", () => {
+    // Two matching leading lines (after trim) → block reproduction flagged.
+    const oldText = "    alpha\n  beta";
+    const result = detectInsertDuplication(ins(2, "alpha\nbeta\nNEW"), oldText);
+    expect(result).not.toBeNull();
+    expect(result).toContain("first 2 of 2");
+  });
+
+  test("single shared leading line is NOT flagged (the >=2 threshold avoids false positives)", () => {
+    // One coincidental shared line is left to the diff, never flagged.
+    expect(detectInsertDuplication(ins(2, "anchor line\nx"), "anchor line\nsecond")).toBeNull();
+  });
+
+  test("NOT robust to oldText/file normalization differences (known limitation)", () => {
+    // The guard compares against the agent's oldText, not the file. If the agent
+    // reproduced the anchor in newText but with normalized differences (smart vs
+    // straight quotes) on line 1, the leading-prefix match breaks at that line and
+    // the block check misses it. This is the residual gap; a file comparison
+    // would reintroduce the robustness problem (smart != straight masks it there
+    // too). Documented, not fixed — the common failure (verbatim oldText paste)
+    // is caught.
+    const oldText = "one \u201Cq\u201D\ntwo\nthree";
+    const result = detectInsertDuplication(ins(2, "two\nthree\nNEW"), oldText);
+    expect(result).toBeNull();
   });
 });

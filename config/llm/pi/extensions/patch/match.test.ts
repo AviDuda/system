@@ -367,3 +367,126 @@ describe("adjustIndentation", () => {
     expect(adjustIndentation(newText, "  ")).toBe("  foo\n\n  bar");
   });
 });
+
+// ── insert modes (insertAfter / insertBefore) ───────────────────────────────
+
+describe("planAll / applyPreservingOriginal: insert modes", () => {
+  test("insertAfter inserts newText on the line after the anchor", () => {
+    const content = "alpha\nbeta\ngamma\n";
+    const plan = planAll(content, [{ oldText: "beta", newText: "BETA2", mode: "insertAfter" }]);
+    expect(plan.outcomes[0]?.status).toBe("applied");
+    expect(plan.insertions[0]?.beforeLine).toBe(3);
+    expect(applyPreservingOriginal(content, plan)).toBe("alpha\nbeta\nBETA2\ngamma\n");
+  });
+
+  test("insertBefore inserts newText on the anchor's first line", () => {
+    const content = "alpha\nbeta\ngamma\n";
+    const plan = planAll(content, [{ oldText: "beta", newText: "PRE", mode: "insertBefore" }]);
+    expect(plan.insertions[0]?.beforeLine).toBe(2);
+    expect(applyPreservingOriginal(content, plan)).toBe("alpha\nPRE\nbeta\ngamma\n");
+  });
+
+  test("insertBefore at line 1 prepends to the file", () => {
+    const content = "alpha\nbeta\n";
+    const plan = planAll(content, [{ oldText: "alpha", newText: "PRE", mode: "insertBefore" }]);
+    expect(plan.insertions[0]?.beforeLine).toBe(1);
+    expect(applyPreservingOriginal(content, plan)).toBe("PRE\nalpha\nbeta\n");
+  });
+
+  test("anchor bytes are preserved on a normalized match (the drift killer)", () => {
+    // File has smart quotes; oldText uses straight quotes -> normalized match.
+    const content = "one \u201Cq\u201D\ntwo\n";
+    const plan = planAll(content, [{ oldText: 'one "q"', newText: "INSERTED", mode: "insertAfter" }]);
+    expect(plan.space).toBe("normalized");
+    expect(applyPreservingOriginal(content, plan)).toBe("one \u201Cq\u201D\nINSERTED\ntwo\n");
+  });
+
+  test("newText indentation is verbatim — NOT auto-adjusted to the file", () => {
+    // Surrounding code is 4-space; newText is 2-space. Replace would re-base
+    // it; insert must leave it exactly as written.
+    const content = "fn foo() {\n    let x = 1;\n}\n";
+    const plan = planAll(content, [{ oldText: "    let x = 1;", newText: "  let y = 2;", mode: "insertAfter" }]);
+    expect(applyPreservingOriginal(content, plan)).toBe("fn foo() {\n    let x = 1;\n  let y = 2;\n}\n");
+  });
+
+  test("replaceAll inserts after every occurrence", () => {
+    const content = "x = 1\nx = 1\nx = 1\n";
+    const plan = planAll(content, [{ oldText: "x = 1", newText: "LOG", mode: "insertAfter", replaceAll: true }]);
+    expect(plan.insertions).toHaveLength(3);
+    expect(applyPreservingOriginal(content, plan)).toBe("x = 1\nLOG\nx = 1\nLOG\nx = 1\nLOG\n");
+  });
+
+  test("anchor disambiguates among multiple occurrences", () => {
+    const content = "function a() {\n  x = 1\n}\nfunction b() {\n  x = 1\n}\n";
+    const plan = planAll(content, [{ oldText: "x = 1", newText: "LOG", mode: "insertAfter", anchor: "function b()" }]);
+    expect(plan.outcomes[0]?.status).toBe("applied");
+    expect(plan.insertions[0]?.anchored).toBe(true);
+    expect(applyPreservingOriginal(content, plan)).toBe(
+      "function a() {\n  x = 1\n}\nfunction b() {\n  x = 1\nLOG\n}\n",
+    );
+  });
+
+  test("insertAfter appends at end when the anchor is the last line (no trailing newline)", () => {
+    const content = "alpha\nbeta";
+    const plan = planAll(content, [{ oldText: "beta", newText: "tail", mode: "insertAfter" }]);
+    expect(applyPreservingOriginal(content, plan)).toBe("alpha\nbeta\ntail\n");
+  });
+
+  test("insertAfter appends at end with a separating newline when file ends without one", () => {
+    const content = "alpha\nbeta\n";
+    const plan = planAll(content, [{ oldText: "beta", newText: "tail", mode: "insertAfter" }]);
+    expect(applyPreservingOriginal(content, plan)).toBe("alpha\nbeta\ntail\n");
+  });
+
+  test("mixed insert + replace in one call is rejected", () => {
+    const plan = planAll("a\nb\n", [
+      { oldText: "a", newText: "A" },
+      { oldText: "b", newText: "B", mode: "insertAfter" },
+    ]);
+    expect(plan.outcomes.every((o) => o.status === "mixed-mode")).toBe(true);
+    expect(plan.replacements).toHaveLength(0);
+    expect(plan.insertions).toHaveLength(0);
+  });
+
+  test("empty newText on an insert edit is flagged empty", () => {
+    const plan = planAll("alpha\nbeta\n", [{ oldText: "beta", newText: "", mode: "insertAfter" }]);
+    expect(plan.outcomes[0]?.status).toBe("empty");
+    expect(plan.insertions).toHaveLength(0);
+  });
+
+  test("no-match on an insert edit reports no-match", () => {
+    const plan = planAll("alpha\nbeta\n", [{ oldText: "zzz", newText: "x", mode: "insertAfter" }]);
+    expect(plan.outcomes[0]?.status).toBe("no-match");
+    expect(plan.insertions).toHaveLength(0);
+  });
+
+  test("ambiguous anchor occurrence without anchor/replaceAll reports ambiguous", () => {
+    const plan = planAll("x\nx\n", [{ oldText: "x", newText: "Y", mode: "insertAfter" }]);
+    expect(plan.outcomes[0]?.status).toBe("ambiguous");
+    expect(plan.insertions).toHaveLength(0);
+  });
+});
+
+// ── Edit.allowAnchorRepeat (plumbing through planAll) ───────────────────────
+
+describe("planAll: allowAnchorRepeat plumbing", () => {
+  test("replace mode ignores allowAnchorRepeat (no effect on application)", () => {
+    // The flag is insert-only; replace must work the same whether or not it's set.
+    const content = "alpha\nbeta\n";
+    const withFlag = planAll(content, [{ oldText: "alpha", newText: "ALPHA", allowAnchorRepeat: true }]);
+    const without = planAll(content, [{ oldText: "alpha", newText: "ALPHA" }]);
+    expect(applyPreservingOriginal(content, withFlag)).toBe("ALPHA\nbeta\n");
+    expect(applyPreservingOriginal(content, withFlag)).toBe(applyPreservingOriginal(content, without));
+  });
+
+  test("insert mode still applies the insertion when allowAnchorRepeat is set", () => {
+    // The guard runs in index.ts (gated on the flag); planAll itself just
+    // threads the field through. Insertion is planned regardless.
+    const content = "anchor\nsecond\n";
+    const plan = planAll(content, [
+      { oldText: "anchor", newText: "anchor\nextra", mode: "insertAfter", allowAnchorRepeat: true },
+    ]);
+    expect(plan.outcomes[0]?.status).toBe("applied");
+    expect(plan.insertions).toHaveLength(1);
+  });
+});
