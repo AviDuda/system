@@ -35,7 +35,8 @@ const editSchema = Type.Object(
         "Exact text to replace. Matching is tolerant: it also accepts normalized variants (arrows → ASCII, tab↔space, smart quotes/dashes, trailing whitespace). Must be unique unless anchor/replaceAll is used.",
     }),
     newText: Type.String({
-      description: "Replacement text. On a normalized match, indentation is auto-adjusted to the file.",
+      description:
+        "Replacement text. Your newText (including its indentation) replaces the matched block — copy the exact indentation you want to see. Indentation is auto-adjusted to the file only when the matched block shares one indent level; for mixed-indent blocks (e.g. a function signature plus its indented body, or a numbered list) newText's indentation is used verbatim.",
     }),
     path: Type.Optional(
       Type.String({ description: "File path for this edit. Overrides the top-level path (multi-file)." }),
