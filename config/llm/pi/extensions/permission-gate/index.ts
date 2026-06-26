@@ -470,6 +470,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     diffBody?: DiffBody,
     detailsBody?: DetailsBody,
   ): Promise<{ block: true; reason: string } | undefined> {
+    pi.appendEntry("permission_gate", { event: "pending_confirmation", toolCallId: event.toolCallId });
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
       const command = decision.displayPath ?? "";
