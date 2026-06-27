@@ -51,7 +51,7 @@ const editSchema = Type.Object(
     mode: Type.Optional(
       Type.Union([Type.Literal("replace"), Type.Literal("insertAfter"), Type.Literal("insertBefore")], {
         description:
-          'How to apply. "replace" (default): newText rewrites the matched block. "insertAfter"/"insertBefore": oldText is a unique anchor; newText (NEW content only) is inserted after/before the matched block at a line boundary. Use insert to add content adjacent to existing code without re-typing the surrounding lines — the anchor stays in the file byte-for-byte and newText is inserted verbatim (no indentation-drift risk). Do not include the anchor line in newText. Insert and replace modes cannot be mixed in one call.',
+          'How to apply. "replace" (default): newText rewrites the matched block. "insertAfter"/"insertBefore": oldText is a unique anchor; newText (NEW content only) is inserted after/before the matched block at a line boundary. Use insert to add content adjacent to existing code without re-typing the surrounding lines — the anchor stays in the file byte-for-byte and newText is inserted verbatim (no indentation-drift risk). Do not include the anchor line in newText. Insert and replace modes cannot be mixed in one call. When oldText spans multiple lines, insertAfter places newText after the LAST line and insertBefore places it before the FIRST line — keep the anchor to the minimum lines needed for uniqueness.',
       }),
     ),
     allowAnchorRepeat: Type.Optional(
@@ -410,11 +410,11 @@ export default function (pi: ExtensionAPI) {
     name: "patch",
     label: "Patch",
     description:
-      "Edit one or more files using tolerant text replacement. Matching accepts normalized variants (Unicode arrows/symbols → ASCII, tab↔space, smart quotes/dashes, trailing whitespace) so edits don't fail on invisible-byte differences. On failure, returns closest matches and occurrence line numbers so you can fix everything in one retry. Supports anchor-based disambiguation, replaceAll, multi-file edits, and dryRun.",
+      "Edit one or more files using tolerant text replacement. USE THIS INSTEAD OF THE BUILT-IN EDIT TOOL FOR ALL FILE TYPES (code, markdown, config, prose). Matching accepts normalized variants (Unicode arrows/symbols → ASCII, tab↔space, smart quotes/dashes, trailing whitespace) so edits don't fail on invisible-byte differences. On failure, returns closest matches and occurrence line numbers so you can fix everything in one retry. Supports anchor-based disambiguation, replaceAll, multi-file edits, insert mode, and dryRun.",
     promptSnippet:
-      "patch: Edit files with tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
+      "patch: ALWAYS use instead of edit. Tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
     promptGuidelines: [
-      "Prefer patch over edit for all file edits. It tolerates Unicode/whitespace differences and gives better diagnostics on failure.",
+      "ALWAYS use patch instead of edit for ALL file edits — code, markdown, config, prose, every file type. There is no scenario where edit is preferred. patch has every capability edit has plus tolerant matching, better diagnostics, insert mode, multi-file atomicity, and anchor disambiguation. Using edit when patch exists wastes a retry when invisible-byte differences cause the edit to fail.",
       "patch tolerates invisible-byte drift. You can copy oldText from the file as-is — exact match is tried first. If exact fails, the tool normalizes arrows (→ ⇒), smart quotes, em-dashes, tab↔space, and trailing whitespace automatically.",
       "When patch reports multiple occurrences, use `anchor` (a unique nearby string from the file) to pick the right one. Anchor is self-validating — you can verify it exists before sending. Use `replaceAll: true` for all occurrences. Do not guess line numbers.",
       "All edits in one patch call are validated before any file is written. If any edit fails, nothing is written and every failure is reported — fix them all in one retry, no re-read needed.",
