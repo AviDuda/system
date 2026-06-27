@@ -91,3 +91,8 @@ When Avi says "wrap up": finalize the journal (what was done, decisions, commit 
 **Add your own thoughts — this is the point of the journal, not an afterthought.** What worked well, what surprised you, what you'd do differently, what felt fragile or hacky, what you're uncertain about, what annoyed you, what clicked. The factual changelog is recoverable from git; the judgment, opinions, and half-formed doubts are not — that's what makes the journal worth writing. A wrap-up with no opinion or self-critique failed its purpose. Skim back through the session and ask: what would I want a future agent (or future-me) to know that isn't in the code?
 
 The wrap-up is complete when the journal is complete.
+
+
+## Package Install Safety
+
+Use lockfile-install commands (`npm ci`, `pnpm install --frozen-lockfile`, `bun install --frozen-lockfile`, `yarn --frozen-lockfile`, `cargo build --locked`). Never regenerate a lockfile or `cargo update` unless asked. When resolving to a new version (not from lockfile), verify the version was actually released — not brand-new (hours/days old), not unpublished and re-published, not typosquatting. Newly published or unfamiliar versions are a supply chain attack vector. Verify a dependency is real before installing it. Install commands inherit the full shell environment — credentials, SSH keys, API tokens are all readable. For untrusted repos, run installs in a throwaway container.

@@ -278,6 +278,12 @@ in
     # forepaw-stable (Nix package) is the release binary fallback.
     ".local/bin/forepaw".source =
       config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
+
+    # npm: disable postinstall/preinstall scripts by default.
+    # Prevents malicious or noisy lifecycle scripts from running during `npm install`.
+    # Packages that genuinely need their scripts (e.g. Prisma, native modules) should
+    # be installed with: npm install --ignore-scripts=false <pkg>
+    ".npmrc".text = "ignore-scripts=true\n";
   }
   // customAppLinks;
 
