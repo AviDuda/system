@@ -13,9 +13,9 @@
  * event hooks, context nudge, compaction reminder.
  */
 
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildJournalContext, getRecentNotes, loadJournalConfig } from "../shared/journal-context";
+import { buildJournalContext, getRecentNotes, loadJournalConfig, loadProjectMeta } from "../shared/journal-context";
 
 /** Context usage fraction (0-1) above which the agent gets a journal nudge. */
 const CONTEXT_NUDGE_THRESHOLD = 0.7;
@@ -33,14 +33,18 @@ export default function journalExtension(pi: ExtensionAPI) {
 
     if (process.env.LLM_VANILLA !== "1" && process.env.NO_JOURNAL !== "1") {
       const projectName = basename(cwd);
+      const projectDir = join(config.notesDir, projectName);
+      const meta = await loadProjectMeta(projectDir);
       const result = await getRecentNotes(config.notesDir, projectName);
       pi.events.emit("journal:loaded", { projectName, notes: result.notes });
 
       if (result.exists) {
         const t = ctx.ui.theme;
         const notesPath = result.path;
+        const desc = meta?.description ? ` — ${meta.description}` : "";
+        const path = meta?.path ? ` ${meta.path}` : "";
         const parts: string[] = [
-          `${t.fg("mdHeading", "[Journal]")} ${t.fg("dim", `${result.notes.length} notes`)} ${t.fg("dim", `file://${notesPath}`)}`,
+          `${t.fg("mdHeading", "[Journal]")} ${t.fg("dim", `${projectName}${desc}${path}`)} ${t.fg("dim", `${result.notes.length} notes`)} ${t.fg("dim", `file://${notesPath}`)}`,
         ];
         if (result.notes.length > 0) {
           parts.push(result.notes.map((n) => t.fg("dim", `  ${n.filename}`)).join("\n"));

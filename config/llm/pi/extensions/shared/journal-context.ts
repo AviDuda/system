@@ -17,7 +17,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -25,6 +25,28 @@ import { parseArgs } from "node:util";
 const FILENAME_LIST_CURRENT = 30;
 /** Max recent filenames to list per other project. */
 const FILENAME_LIST_OTHER = 5;
+
+/** Only files matching this pattern are treated as journal entries. */
+const JOURNAL_FILE_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-.+\.md$/;
+
+function isJournalFile(filename: string): boolean {
+  return JOURNAL_FILE_RE.test(filename);
+}
+
+export interface ProjectMeta {
+  description?: string;
+  path?: string;
+}
+
+export async function loadProjectMeta(projectDir: string): Promise<ProjectMeta | null> {
+  const metaPath = join(projectDir, "meta.json");
+  if (!existsSync(metaPath)) return null;
+  try {
+    return JSON.parse(await readFile(metaPath, "utf-8")) as ProjectMeta;
+  } catch {
+    return null;
+  }
+}
 
 export interface JournalConfig {
   notesDir: string;
@@ -56,24 +78,20 @@ export async function getRecentNotes(notesDir: string, projectName: string): Pro
   const projectNotes = join(notesDir, projectName);
 
   if (!existsSync(projectNotes)) {
-    await mkdir(projectNotes, { recursive: true });
     return { exists: false, path: projectNotes, notes: [], allFilenames: [], todo: null };
   }
 
   const files = await readdir(projectNotes);
-  const mdFiles = files
-    .filter((f) => f.endsWith(".md") && f !== "TODO.md")
-    .sort()
-    .reverse();
+  const journalFiles = files.filter(isJournalFile).sort().reverse();
 
   const todoPath = join(projectNotes, "TODO.md");
   const todo = existsSync(todoPath) ? await readFile(todoPath, "utf-8") : null;
 
-  if (mdFiles.length === 0) {
+  if (journalFiles.length === 0) {
     return { exists: true, path: projectNotes, notes: [], allFilenames: [], todo };
   }
 
-  const recentFiles = mdFiles.slice(0, 3);
+  const recentFiles = journalFiles.slice(0, 3);
   const notes = await Promise.all(
     recentFiles.map(async (filename) => {
       const content = await readFile(join(projectNotes, filename), "utf-8");
@@ -81,7 +99,7 @@ export async function getRecentNotes(notesDir: string, projectName: string): Pro
     }),
   );
 
-  return { exists: true, path: projectNotes, notes, allFilenames: mdFiles, todo };
+  return { exists: true, path: projectNotes, notes, allFilenames: journalFiles, todo };
 }
 
 async function getOtherProjectFilenames(notesDir: string, projectName: string): Promise<string[]> {
@@ -89,24 +107,33 @@ async function getOtherProjectFilenames(notesDir: string, projectName: string): 
   if (!existsSync(projectNotes)) return [];
 
   const files = await readdir(projectNotes);
-  return files
-    .filter((f) => f.endsWith(".md") && f !== "TODO.md")
-    .sort()
-    .reverse()
-    .slice(0, FILENAME_LIST_OTHER);
+  return files.filter(isJournalFile).sort().reverse().slice(0, FILENAME_LIST_OTHER);
 }
 
 async function getOtherProjectSummaries(notesDir: string, currentProject: string): Promise<string | null> {
   if (!existsSync(notesDir)) return null;
 
   const dirs = await readdir(notesDir, { withFileTypes: true });
-  const projects: Array<{ name: string; filenames: string[]; mostRecent: string }> = [];
+  const projects: Array<{
+    name: string;
+    description: string | null;
+    path: string | null;
+    filenames: string[];
+    mostRecent: string;
+  }> = [];
 
   for (const dir of dirs) {
     if (!dir.isDirectory() || dir.name === currentProject) continue;
     const filenames = await getOtherProjectFilenames(notesDir, dir.name);
     if (filenames.length === 0) continue;
-    projects.push({ name: dir.name, filenames, mostRecent: filenames[0] });
+    const meta = await loadProjectMeta(join(notesDir, dir.name));
+    projects.push({
+      name: dir.name,
+      description: meta?.description ?? null,
+      path: meta?.path ?? null,
+      filenames,
+      mostRecent: filenames[0],
+    });
   }
 
   if (projects.length === 0) return null;
@@ -116,7 +143,9 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
 
   const lines = projects.map((p) => {
     const names = p.filenames.join(", ");
-    return `  ${p.name}: ${names}`;
+    const desc = p.description ? ` — ${p.description}` : "";
+    const path = p.path ? ` [${p.path}]` : "";
+    return `  ${p.name}${desc}${path}: ${names}`;
   });
   return `Other project journals (recent entries):\n${lines.join("\n")}`;
 }
@@ -150,6 +179,8 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
   instructions += `\n\n${config.journalReminder}`;
 
   const projectName = basename(cwd);
+  const projectDir = join(config.notesDir, projectName);
+  const meta = await loadProjectMeta(projectDir);
   const result = await getRecentNotes(config.notesDir, projectName);
 
   const metaParts: string[] = [];
@@ -158,12 +189,28 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
   if (result.notes.length === 0) {
     let noNotes = `No previous session notes for ${projectName}.\nNotes directory: ${result.path}/\n`;
     if (!result.exists) {
-      noNotes += "(Directory was just created)\n";
+      noNotes += "(Directory does not exist yet — it will be created when the first journal entry is written)\n";
+    }
+    const metaPath = join(projectDir, "meta.json");
+    if (!existsSync(metaPath)) {
+      noNotes += `\nNo meta.json found. Create ${metaPath} with {"description": "...", "path": "~/..."} to help other sessions understand this project.`;
     }
     noNotes += `\n${config.noNotesReminder}`;
     metaParts.push(noNotes);
   } else {
-    metaParts.push(`Previous session notes for ${projectName}:`);
+    const desc = meta?.description ? ` — ${meta.description}` : "";
+    const path = meta?.path ? ` [${meta.path}]` : "";
+    metaParts.push(`Previous session notes for ${projectName}${desc}${path}:`);
+    const metaPath = join(projectDir, "meta.json");
+    if (!existsSync(metaPath)) {
+      metaParts.push(
+        `No meta.json found. Create ${metaPath} with {"description": "...", "path": "~/..."} to help other sessions understand this project.`,
+      );
+    } else if (!meta?.description || !meta?.path) {
+      metaParts.push(`meta.json is missing fields. Update ${metaPath} to include both "description" and "path".`);
+    } else {
+      metaParts.push(`If the description or path in meta.json seems wrong, update ${metaPath}.`);
+    }
 
     if (result.todo) {
       metaParts.push(`<file name="${result.path}/TODO.md">\n${result.todo}\n</file>`);
