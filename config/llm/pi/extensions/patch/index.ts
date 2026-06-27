@@ -13,7 +13,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { generateDiffString, renderDiff, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { detectBoundaryDuplication, detectInsertDuplication, formatOutcomes } from "./diagnostics";
+import { findDuplicationIssues, formatOutcomes } from "./diagnostics";
 import {
   applyPreservingOriginal,
   detectLineEnding,
@@ -224,26 +224,11 @@ async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[
     const plan = planAll(content, edits);
     const messages: string[] = [];
 
-    // Duplicate-line guard on each applied replacement.
-    for (const outcome of plan.outcomes) {
-      if (outcome.status !== "applied") continue;
-      for (const hit of outcome.hits) {
-        const rep = plan.replacements.find((r) => r.editIndex === outcome.editIndex);
-        if (!rep) continue;
-        const dup = detectBoundaryDuplication(content, hit, rep.newText);
-        if (dup) {
-          messages.push(
-            `edits[${outcome.editIndex}]: replacement ${dup.edge}-edge duplicates line ${dup.neighborLine} (${JSON.stringify(dup.text)}). Do NOT include surrounding unchanged lines — only the lines being changed.`,
-          );
-        }
-      }
-    }
-    // Insert-mode guard: catch newText that re-includes the anchor.
-    // Opt out per-edit via allowAnchorRepeat (the legit repeat-and-extend idiom).
-    for (const ins of plan.insertions) {
-      if (edits[ins.editIndex]?.allowAnchorRepeat) continue;
-      const dup = detectInsertDuplication(ins, edits[ins.editIndex]?.oldText ?? "");
-      if (dup) messages.push(dup);
+    // Duplicate-line guard on each applied replacement + insert duplication.
+    // Uses the shared findDuplicationIssues so the same checks run in the
+    // preview (preview.ts) — adding a new guard here automatically covers both.
+    for (const issue of findDuplicationIssues(content, plan, edits)) {
+      messages.push(issue.message);
     }
 
     messages.push(...formatOutcomes(content, plan, edits));

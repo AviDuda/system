@@ -12,6 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { generateDiffString } from "@earendil-works/pi-coding-agent";
+import { findDuplicationIssues } from "./diagnostics";
 import {
   applyPreservingOriginal,
   detectLineEnding,
@@ -78,6 +79,12 @@ export async function computePatchPreview(
     // own diagnostics; asking the user to approve a doomed edit wastes time).
     const hasDiagnostics = plan.outcomes.some((o) => o.status !== "applied");
     if (hasDiagnostics || (plan.replacements.length === 0 && plan.insertions.length === 0)) return undefined;
+
+    // Boundary duplication / insert duplication: these are caught at
+    // execution time in planFiles, but we need to catch them here too so
+    // the preview doesn't show a diff for a doomed edit. Without this the
+    // permission gate shows a diff, the user approves, and the tool rejects.
+    if (findDuplicationIssues(content, plan, groupEdits).length > 0) return undefined;
 
     const newContent = bom + restoreLineEndings(applyPreservingOriginal(content, plan), ending);
     const lfNew = normalizeToLF(newContent);

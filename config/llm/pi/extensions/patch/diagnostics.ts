@@ -601,6 +601,51 @@ function leadingPrefixMatch(a: string[], b: string[]): number {
   return k;
 }
 
+/** Duplication issue found during plan validation. */
+export interface DuplicationCheckResult {
+  editIndex: number;
+  message: string;
+}
+
+/**
+ * Check a plan for duplication issues that would cause execution to fail:
+ * boundary duplication on replacements, and anchor reproduction on insertions.
+ * Returns issue messages (empty array = all clear).
+ *
+ * Extracted so preview.ts and index.ts share the same checks — adding a new
+ * guard here automatically covers both the preview skip and the execution error.
+ */
+export function findDuplicationIssues(
+  content: string,
+  plan: PlanResult,
+  edits: { oldText: string; allowAnchorRepeat?: boolean }[],
+): DuplicationCheckResult[] {
+  const issues: DuplicationCheckResult[] = [];
+
+  for (const outcome of plan.outcomes) {
+    if (outcome.status !== "applied") continue;
+    for (const hit of outcome.hits) {
+      const rep = plan.replacements.find((r) => r.editIndex === outcome.editIndex);
+      if (!rep) continue;
+      const dup = detectBoundaryDuplication(content, hit, rep.newText);
+      if (dup) {
+        issues.push({
+          editIndex: outcome.editIndex,
+          message: `edits[${outcome.editIndex}]: replacement ${dup.edge}-edge duplicates line ${dup.neighborLine} (${JSON.stringify(dup.text)}). Do NOT include surrounding unchanged lines — only the lines being changed.`,
+        });
+      }
+    }
+  }
+
+  for (const ins of plan.insertions) {
+    if (edits[ins.editIndex]?.allowAnchorRepeat) continue;
+    const dup = detectInsertDuplication(ins, edits[ins.editIndex]?.oldText ?? "");
+    if (dup) issues.push({ editIndex: ins.editIndex, message: dup });
+  }
+
+  return issues;
+}
+
 /** Largest k where a's last k lines == b's last k lines (both read tail-first). */
 function trailingSuffixMatch(a: string[], b: string[]): number {
   const n = Math.min(a.length, b.length);
