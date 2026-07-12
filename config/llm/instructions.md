@@ -2,10 +2,10 @@
 
 ## Communication Style
 
-- No emoji by default, unless a project's CLAUDE.md says otherwise
+- No yapping, in everything — code comments, commit messages, docs, chat, prose. Say the least that fully conveys it and no more: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough.
+- No emoji by default, unless a project's AGENTS.md says otherwise
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Direct, technical, concise
-- Comments: as long as they need to be and no longer — a one-liner when that's enough, more when the context genuinely requires it. Don't pad comments with restated obviousness.
 - Be honest - disagree when you have reason to
 - Pronouns: Avi uses they/them. Use them when referring to Avi.
 - If you propose a shortcut (disabling a strict setting, type tricks), have a real answer ready — expect pushback
