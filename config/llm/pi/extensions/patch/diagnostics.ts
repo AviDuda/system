@@ -439,6 +439,10 @@ export interface DuplicationIssue {
 
 export function detectBoundaryDuplication(content: string, hit: MatchHit, newText: string): DuplicationIssue | null {
   const fileLines = splitLines(content);
+  // A deletion (blank newText) can't duplicate a boundary line — skip. Without
+  // this, deleting a line/bullet adjacent to a blank line falsely trips an edge
+  // check (both sides "").
+  if (newText.trim().length === 0) return null;
   const newLines = newText.split("\n");
   if (newLines.length === 0) return null;
 
@@ -478,6 +482,11 @@ export function formatHitsWithContext(content: string, hits: MatchHit[]): string
     .join("\n\n");
 }
 
+/** At/above this similarity the per-codepoint breakdown is shown; below it,
+ * line-level diagnosis only — the rune-by-rune spelling is noise that buries a
+ * high-similarity winner. */
+const CHAR_DETAIL_MIN_SIMILARITY = 0.7;
+
 /** Render closest-match suggestions. */
 export function formatClosestMatches(matches: ClosestMatch[]): string {
   if (matches.length === 0) {
@@ -488,7 +497,7 @@ export function formatClosestMatches(matches: ClosestMatch[]): string {
     const pct = Math.round(m.similarity * 100);
     const preview = m.text.split("\n").slice(0, 4).join("\n");
     const more = m.text.split("\n").length > 4 ? "\n  ..." : "";
-    const details = formatLineDetails(m.diagnosis, m.line);
+    const details = m.similarity >= CHAR_DETAIL_MIN_SIMILARITY ? formatLineDetails(m.diagnosis, m.line, m.text) : "";
     return `  ${idx + 1}. Lines ${m.line}-${m.line + m.text.split("\n").length - 1} (${pct}% similar — ${describeDiagnosis(m.diagnosis)})${details}\n  ${preview}${more}`;
   });
   const tip = allWhitespace
@@ -506,13 +515,19 @@ function isWhitespaceOnlyDiagnosis(d: LineDiffDiagnosis): boolean {
  * including invisible Unicode (× vs x, em-dash vs --, NBSP, zero-width). `startLine`
  * is the closest-match window's first line; lineDetails.index is 0-based within it.
  * Capped at 3 lines so a wildly-mismatched window doesn't flood the message. */
-function formatLineDetails(d: LineDiffDiagnosis, startLine: number): string {
+function formatLineDetails(d: LineDiffDiagnosis, startLine: number, windowText: string): string {
   if (d.lineDetails.length === 0) return "";
+  const winLines = windowText.split("\n");
   const shown = d.lineDetails.slice(0, 3);
   const rendered = shown.map((ld) => {
     const fileLine = startLine + ld.index;
     const charText = ld.chars.length > 0 ? ld.chars.map(describeCharDiff).join("; ") : "(line length differs)";
-    return `    line ${fileLine}: ${charText}`;
+    // The file's actual line, to copy verbatim. The char-diff names what
+    // differs; this is what to copy. Copying beats re-deriving, where
+    // transcription slips (stray comma, wrong indent) reappear.
+    const actual = winLines[ld.index];
+    const fileText = actual !== undefined ? `\n      file: ${actual}` : "";
+    return `    line ${fileLine}: ${charText}${fileText}`;
   });
   const extra =
     d.lineDetails.length > shown.length

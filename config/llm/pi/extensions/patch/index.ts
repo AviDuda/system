@@ -432,7 +432,18 @@ export default function (pi: ExtensionAPI) {
 
       const outcome = await withQueues(paths, async () => {
         throwIfAborted();
-        return planFiles(groups);
+        const planned = await planFiles(groups);
+        // Write under the queue: concurrent same-file patch calls must not
+        // interleave writes. Holding the queue across plan+write means a second
+        // caller's plan sees the first's write (its oldText may then cleanly
+        // fail to match → retry) instead of both planning against the original
+        // and writing unsynchronized. Atomicity preserved: nothing is written
+        // unless every file's plan succeeded.
+        if (planned.failures.length === 0 && !dryRun) {
+          throwIfAborted();
+          await writeResults(groups, planned.results, signal);
+        }
+        return planned;
       });
 
       if (outcome.failures.length > 0) {
@@ -448,10 +459,6 @@ export default function (pi: ExtensionAPI) {
             ...allMessages,
           ].join("\n"),
         );
-      }
-
-      if (!dryRun) {
-        await writeResults(groups, outcome.results, signal);
       }
 
       const text = buildSuccessText(outcome.results);

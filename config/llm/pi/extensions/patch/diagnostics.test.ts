@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type ClosestMatch,
   closestMatches,
   contextLines,
   countApplied,
@@ -137,6 +138,34 @@ describe("formatClosestMatches", () => {
     const text = formatClosestMatches(matches);
     expect(text).toContain("NON-BREAKING SPACE");
     expect(text).toContain("U+00A0");
+  });
+
+  test("surfaces the actual file line to copy (trailing-comma regression)", () => {
+    // File has `...` (no comma); oldText has `...,`. The differing line's actual
+    // text must be shown verbatim so the agent copies it instead of re-deriving
+    // (re-deriving is where the stray comma gets reintroduced).
+    const content = "# h\n{\n  config,\n  lib,\n  ...\n}:";
+    const oldText = "# h\n{\n  config,\n  lib,\n  ...,\n}:";
+    const text = formatClosestMatches(closestMatches(content, oldText));
+    expect(text).toContain("file:");
+    expect(text).toMatch(/file:\s+\.+\s*$/m); // the file's `...`, no trailing comma
+  });
+
+  test("char-level detail only for close matches, not low-similarity ones", () => {
+    const mkMatch = (sim: number): ClosestMatch => ({
+      line: 1,
+      similarity: sim,
+      text: "alpha\nbeta",
+      diagnosis: {
+        whitespaceOnly: 0,
+        contentDiffer: 1,
+        missingFromOldText: 0,
+        extraInOldText: 0,
+        lineDetails: [{ index: 0, kind: "content", chars: [{ expected: "a", actual: "b" }] }],
+      },
+    });
+    expect(formatClosestMatches([mkMatch(0.95)])).toContain("line 1:");
+    expect(formatClosestMatches([mkMatch(0.5)])).not.toContain("line 1:");
   });
 });
 
@@ -445,6 +474,14 @@ describe("detectBoundaryDuplication", () => {
   test("no duplication returns null", () => {
     const content = "line A\nline B\nline C";
     expect(detectBoundaryDuplication(content, hit(2, 1), "line B CHANGED")).toBeNull();
+  });
+
+  test("allows deletion (blank newText) even when a neighbor is blank", () => {
+    // Deleting a bullet/line in a blank-separated list: newText is empty and
+    // the neighbor line is also "" — must not trip the before-edge check.
+    const content = "keep\n\ndelete me\n\nkeep too";
+    expect(detectBoundaryDuplication(content, hit(3, 1), "")).toBeNull();
+    expect(detectBoundaryDuplication(content, hit(3, 1), "   ")).toBeNull();
   });
 
   test("catches lone closing brace duplication (the doubled-brace case)", () => {
