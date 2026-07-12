@@ -34,11 +34,11 @@ run = "darwin-rebuild --flake \".#${FLAKE_HOST:-$(hostname)}\" build"
 
 [tasks.fmt]
 description = "Format nix files"
-run = "nixfmt *.nix **/*.nix"
+run = "fd -e nix -X nixfmt"
 
 [tasks.fmt-check]
 description = "Check nix formatting"
-run = "nixfmt --check *.nix **/*.nix"
+run = "fd -e nix -X nixfmt --check"
 
 [tasks.check]
 description = "Run checks"

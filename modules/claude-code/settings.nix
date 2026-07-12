@@ -25,20 +25,23 @@ let
     hooks = {
       # Runs at session start - injects journal context split across hooks
       # to stay under the 10K char per-hook output limit
-      SessionStart = builtins.map (part: {
-        hooks = [
-          {
-            type = "command";
-            command = "${hookScriptsPath}/session-start.sh ${part}";
-          }
-        ];
-      }) [
-        "instructions"
-        "metadata"
-        "journal:0"
-        "journal:1"
-        "journal:2"
-      ];
+      SessionStart =
+        builtins.map
+          (part: {
+            hooks = [
+              {
+                type = "command";
+                command = "${hookScriptsPath}/session-start.sh ${part}";
+              }
+            ];
+          })
+          [
+            "instructions"
+            "metadata"
+            "journal:0"
+            "journal:1"
+            "journal:2"
+          ];
       # Runs before context compaction - reminder to journal
       PreCompact = [
         {
