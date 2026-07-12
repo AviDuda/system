@@ -3,13 +3,14 @@
   config,
   lib,
   pkgs,
+  android-skills,
   ...
 }:
 let
   isDarwin = pkgs.stdenvNoCC.isDarwin;
 
   # Shared LLM constants (used by Claude Code, OpenCode, pi)
-  shared = import ./llm-shared.nix { inherit config; };
+  shared = import ./llm-shared.nix { inherit config android-skills; };
   inherit (shared)
     notesDir
     noNotesReminder
@@ -24,8 +25,15 @@ let
   # Shared journal config consumed by pi extension and OpenCode plugin at runtime.
   # Avoids __PLACEHOLDER__ substitution -- extensions read JSON directly.
   journalConfig = builtins.toJSON {
-    inherit notesDir noNotesReminder journalReminder compactionReminder
-      journalSkipMessage vanillaMessage globalInstructions;
+    inherit
+      notesDir
+      noNotesReminder
+      journalReminder
+      compactionReminder
+      journalSkipMessage
+      vanillaMessage
+      globalInstructions
+      ;
   };
 
   opencodeConfigDir = "${config.xdg.configHome}/opencode";

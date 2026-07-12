@@ -24,6 +24,12 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Android agent skills (upstream repo). flake=false: consumed as a source
+    # path only (skills are symlinked to ~/.{pi,claude,opencode}/skills/), not built.
+    android-skills = {
+      url = "github:android/skills";
+      flake = false;
+    };
   };
 
   outputs =
@@ -84,6 +90,7 @@
                 home-manager.extraSpecialArgs = {
                   inherit pkgs-unstable;
                   inherit (config) systemFlakeDir;
+                  android-skills = inputs.android-skills;
                 };
               }
             )
@@ -115,6 +122,7 @@
                 home-manager.extraSpecialArgs = {
                   inherit pkgs-unstable;
                   inherit (config) systemFlakeDir;
+                  android-skills = inputs.android-skills;
                 };
               }
             )
@@ -124,7 +132,7 @@
     in
     {
       # nix fmt
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixpkgs-fmt);
+      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
 
       darwinConfigurations."procyonid-trailblazer" = mkDarwinHost {
         machine = ./machines/procyonid-trailblazer;

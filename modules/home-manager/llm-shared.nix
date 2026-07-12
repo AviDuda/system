@@ -1,5 +1,5 @@
 # Shared constants for LLM agent configuration (Claude Code, OpenCode, pi)
-{ config }:
+{ config, android-skills }:
 let
   homeDir = config.home.homeDirectory;
 
@@ -16,6 +16,15 @@ let
     {
       name = "forepaw";
       source = "${homeDir}/dev/personal/forepaw/.agents/skills/forepaw";
+    }
+    # Android CLI skill, sourced from the upstream android/skills repo (flake
+    # input, pinned in flake.lock; update via `nix flake update android-skills`).
+    # Avoids `android init` / `android skills add`, which spray copies into every
+    # detected agent dir and clash with these managed symlinks. Target is a store
+    # path, so the symlink always resolves on every machine (no init needed).
+    {
+      name = "android-cli";
+      source = "${android-skills}/devtools/android-cli";
     }
   ];
 in

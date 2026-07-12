@@ -22,7 +22,7 @@ Task runner: [mise](https://mise.jdx.dev/). Run from `~/system` directory, or us
 
 | Command | Description |
 |---------|-------------|
-| `mise fmt` | Format all .nix files (nixpkgs-fmt) |
+| `mise fmt` | Format all .nix files (nixfmt) |
 | `mise fmt-check` | Check formatting without changing files |
 | `mise gc` | Garbage collect store (default: 60 days) |
 | `mise gc -- 30` | Garbage collect older than 30 days |
