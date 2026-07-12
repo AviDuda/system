@@ -31,11 +31,34 @@
     };
 
     taps = [
-      { name = "anomalyco/tap"; trusted = true; }
-      { name = "f/mcptools"; trusted = true; }
-      { name = "steamre/tools"; trusted = true; }
-      { name = "stripe/stripe-cli"; trusted = true; }
-      { name = "ungive/music-presence"; trusted = true; }
+      {
+        name = "android/tap";
+        trusted = true;
+      }
+      {
+        name = "anomalyco/tap";
+        trusted = true;
+      }
+      {
+        name = "f/mcptools";
+        trusted = true;
+      }
+      {
+        name = "lzhgus/tap";
+        trusted = true;
+      }
+      {
+        name = "steamre/tools";
+        trusted = true;
+      }
+      {
+        name = "stripe/stripe-cli";
+        trusted = true;
+      }
+      {
+        name = "ungive/music-presence";
+        trusted = true;
+      }
     ];
 
     # Most CLI tools are in nixpkgs - see modules/home-manager/personal/pkgs.nix
@@ -84,6 +107,10 @@
         greedy = true;
       }
       {
+        name = "android/tap/android-cli"; # Android developer CLI tools
+        greedy = true;
+      }
+      {
         name = "another-redis-desktop-manager"; # Redis GUI
         greedy = true;
       }
@@ -105,6 +132,10 @@
       }
       {
         name = "calibre"; # E-book manager
+        greedy = true;
+      }
+      {
+        name = "capso"; # Screenshot / video capture tool
         greedy = true;
       }
       {
@@ -188,10 +219,6 @@
         greedy = true;
       }
       {
-        name = "linear-linear"; # Issue tracker
-        greedy = true;
-      }
-      {
         name = "lm-studio"; # Local LLM
         greedy = true;
       }
@@ -233,10 +260,6 @@
       }
       {
         name = "raycast"; # App launcher
-        greedy = true;
-      }
-      {
-        name = "shottr"; # Screenshot tool
         greedy = true;
       }
       {
