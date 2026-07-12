@@ -3,6 +3,7 @@
 ## Communication Style
 
 - No yapping, in everything — code comments, commit messages, docs, chat, prose. Say the least that fully conveys it and no more: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough.
+- Commit messages, code comments, and docs are public and must be self-contained — a reader has only the repo, not your journal, session log, or internal framings. Don't reference any of those (journal entries, session names, internal jargon or codenames); describe the change on its own terms.
 - No emoji by default, unless a project's AGENTS.md says otherwise
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Direct, technical, concise
