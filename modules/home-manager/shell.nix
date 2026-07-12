@@ -31,8 +31,8 @@ let
     nixpkgs-check-version() {
       for pkg in "$@"; do
         echo "$pkg:"
-        echo "  stable:   $(nix eval --json nixpkgs#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
-        echo "  unstable: $(nix eval --json github:NixOS/nixpkgs/nixpkgs-unstable#$pkg --apply 'p:{version=p.version;darwin=builtins.elem"aarch64-darwin"p.meta.platforms;}' 2>/dev/null || echo 'not found')"
+        echo "  stable:   $(nix eval --json nixpkgs#$pkg --apply 'p:{version=p.version;darwin=builtins.elem "aarch64-darwin" p.meta.platforms;}' 2>/dev/null || echo 'not found')"
+        echo "  unstable: $(nix eval --json github:NixOS/nixpkgs/nixpkgs-unstable#$pkg --apply 'p:{version=p.version;darwin=builtins.elem "aarch64-darwin" p.meta.platforms;}' 2>/dev/null || echo 'not found')"
         brew_ver=$(brew info --json=v2 "$pkg" 2>/dev/null | jq -r '.formulae[0].versions.stable // empty')
         echo "  homebrew: ''${brew_ver:-not found}"
         echo "  history:  https://repology.org/project/$pkg/history"
