@@ -254,6 +254,7 @@ in
         ripgrep # Search tool
         shellcheck # Shell script linter
         scc # Code complexity analyzer
+        tirith # Pre-execution command security (homograph URLs, pipe-to-shell, exfil, known-bad packages)
         tree # Directory tree viewer
         typst # Modern typesetting system (Markdown/LaTeX alternative for PDF)
         watch # Execute a command periodically
