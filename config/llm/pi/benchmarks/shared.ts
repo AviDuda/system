@@ -25,7 +25,7 @@ import {
   getProviders as getBuiltinProviders,
   getEnvApiKey,
   type KnownProvider,
-} from "@earendil-works/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // ── Config types ──
