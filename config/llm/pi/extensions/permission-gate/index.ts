@@ -13,6 +13,10 @@ import {
   type ExtensionUIContext,
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
+// patch's preview (sibling extension): use patch's OWN matcher so normalized
+// edits (arrows, tab↔space) preview correctly. Static import — a dynamic one
+// was version-fragile, and its failure silently allowed every patch (fail-open).
+import { computePatchPreview } from "../patch/preview";
 
 // Deep import: pi doesn't export edit-diff from its package exports map.
 // Use import.meta.resolve to find the package entry, then derive the internal path.
@@ -28,15 +32,12 @@ type ComputeEditsDiffFn = (
 
 let _computeEditsDiff: ComputeEditsDiffFn | undefined;
 
-// patch's preview is a sibling extension; its tolerant matching differs from
-// pi's, so we use patch's own diff computation (not computeEditsDiff) to avoid
-// a misleading empty preview for normalized matches (arrows, tab↔space).
-type ComputePatchPreviewFn = (
-  topPath: string,
-  edits: Array<{ oldText?: string; newText?: string; path?: string; anchor?: string; replaceAll?: boolean }>,
-  cwd: string,
-) => Promise<{ diff: string; firstChangedLine?: number } | undefined>;
-let _computePatchPreview: ComputePatchPreviewFn | undefined;
+/** Preview couldn't be computed (load/computation failure). Distinct from
+ *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */
+type PatchPreviewUnavailable = { unavailable: true; reason: string };
+function isPatchPreviewUnavailable(r: unknown): r is PatchPreviewUnavailable {
+  return r != null && typeof r === "object" && "unavailable" in r;
+}
 
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
@@ -438,7 +439,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     toolName: string,
     input: Record<string, unknown>,
     cwd: string,
-  ): Promise<DiffBody | undefined> {
+  ): Promise<DiffBody | PatchPreviewUnavailable | undefined> {
     try {
       if (toolName === "edit" && input.edits && Array.isArray(input.edits)) {
         const path = typeof input.path === "string" ? input.path : "";
@@ -472,14 +473,16 @@ export default function permissionGate(pi: ExtensionAPI) {
           anchor?: string;
           replaceAll?: boolean;
         }>;
-        if (!_computePatchPreview) {
-          const mod = await import("../patch/preview");
-          _computePatchPreview = mod.computePatchPreview as ComputePatchPreviewFn;
+        try {
+          const result = await computePatchPreview(path, edits as Parameters<typeof computePatchPreview>[1], cwd);
+          // undefined = genuinely doomed (tool will reject, safe to skip). A
+          // throw = computation failure → `unavailable` → gate confirms.
+          if (!result) return undefined;
+          const styled = renderDiff(result.diff);
+          return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
+        } catch {
+          return { unavailable: true, reason: "patch preview computation failed" };
         }
-        const result = await _computePatchPreview(path, edits, cwd);
-        if (!result) return undefined;
-        const styled = renderDiff(result.diff);
-        return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
       }
       if (toolName === "write") {
         const content = typeof input.content === "string" ? input.content : "";
@@ -650,18 +653,29 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     // Compute diff/preview early -- used by the patch bypass, auto-classify,
     // and the confirm dialog. Cheap (file read + matching); needed anyway.
-    const diffBody = await computeDiffBody(event.toolName, input, ctx.cwd);
+    const diffResult = await computeDiffBody(event.toolName, input, ctx.cwd);
+    // Fail CLOSED: `unavailable` (preview failed) → confirm without a diff;
+    // `undefined` (doomed edit) → skip. Only doomed edits skip confirmation.
+    let diffBody: DiffBody | undefined;
+    let patchPreviewUnavailable = false;
+    if (isPatchPreviewUnavailable(diffResult)) {
+      patchPreviewUnavailable = true;
+      diffBody = undefined;
+    } else {
+      diffBody = diffResult;
+    }
     const rawDiff = diffBody?.rawDiff;
     const detailsBody = diffBody ? undefined : computeDetailsBody(event.toolName, input);
 
-    // For patch: skip confirmation when dryRun or when no useful preview was
-    // produced (edits don't match, file unreadable, partial failure — the tool
-    // will throw its own diagnostics, no write happens). This MUST run before
-    // the hasUI check so it works in non-interactive mode (-p) too.
+    // patch: skip only dry runs + doomed edits (no write happens). If preview
+    // was unavailable, fall through to confirm without a diff — never allow.
+    // Runs before the hasUI check so dryRun/doomed skip works in -p mode.
     if (event.toolName === "patch") {
       const isDryRun = (input as Record<string, unknown>).dryRun === true;
-      if (isDryRun || !diffBody) {
-        return undefined;
+      if (isDryRun) return undefined;
+      if (!patchPreviewUnavailable && !diffBody) return undefined; // doomed edit
+      if (patchPreviewUnavailable) {
+        ctx.ui.notify("patch preview unavailable — confirming without diff", "warning");
       }
     }
 
