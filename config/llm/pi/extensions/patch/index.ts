@@ -51,7 +51,7 @@ const editSchema = Type.Object(
     mode: Type.Optional(
       Type.Union([Type.Literal("replace"), Type.Literal("insertAfter"), Type.Literal("insertBefore")], {
         description:
-          'How to apply. "replace" (default): newText rewrites the matched block. "insertAfter"/"insertBefore": oldText is a unique anchor; newText (NEW content only) is inserted after/before the matched block at a line boundary. Use insert to add content adjacent to existing code without re-typing the surrounding lines — the anchor stays in the file byte-for-byte and newText is inserted verbatim (no indentation-drift risk). Do not include the anchor line in newText. Insert and replace modes cannot be mixed in one call. When oldText spans multiple lines, insertAfter places newText after the LAST line and insertBefore places it before the FIRST line — keep the anchor to the minimum lines needed for uniqueness.',
+          'How to apply. "replace" (default): newText rewrites the matched block. "insertAfter"/"insertBefore": oldText is a unique anchor; newText is the NEW content spliced at the line boundary after/before the anchor. The anchor stays in the file byte-for-byte — do NOT repeat it inside newText (the duplicate-line guard rejects this). newText is inserted verbatim with no auto-indent (no indentation-drift risk). Use the minimum unique anchor (one line if unique); multi-line anchors push insertion past the target — insertAfter lands after the LAST matched line, insertBefore before the FIRST. Insert and replace modes cannot be mixed in one call. Example: to add a status line after a header, oldText="### Header", newText="**Status:** ..." — newText contains only the new line, not the anchor.',
       }),
     ),
     allowAnchorRepeat: Type.Optional(
@@ -400,13 +400,9 @@ export default function (pi: ExtensionAPI) {
       "patch: ALWAYS use instead of edit. Tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
     promptGuidelines: [
       "ALWAYS use patch instead of edit for ALL file edits — code, markdown, config, prose, every file type. There is no scenario where edit is preferred. patch has every capability edit has plus tolerant matching, better diagnostics, insert mode, multi-file atomicity, and anchor disambiguation. Using edit when patch exists wastes a retry when invisible-byte differences cause the edit to fail.",
-      "patch tolerates invisible-byte drift. You can copy oldText from the file as-is — exact match is tried first. If exact fails, the tool normalizes arrows (→ ⇒), smart quotes, em-dashes, tab↔space, and trailing whitespace automatically.",
-      "When patch reports multiple occurrences, use `anchor` (a unique nearby string from the file) to pick the right one. Anchor is self-validating — you can verify it exists before sending. Use `replaceAll: true` for all occurrences. Do not guess line numbers.",
-      "All edits in one patch call are validated before any file is written. If any edit fails, nothing is written and every failure is reported — fix them all in one retry, no re-read needed.",
-      "Use `path` per-edit to edit multiple files in one call. The top-level `path` is the default; per-edit `path` overrides it. All files are edited atomically (all-or-nothing).",
-      "Use `dryRun: true` to preview matches and the diff without writing.",
-      "Include only the lines being changed plus minimal context for uniqueness in oldText. Do not include surrounding unchanged lines — the duplicate-line guard will catch this and reject the edit.",
-      'Prefer `mode: "insertAfter"`/`"insertBefore"` over replace-when-you-only-mean-to-add: insert never re-types the anchor, so it cannot drift on indentation or invisible bytes. (See the `mode` parameter for mechanics.)',
+      "Do not guess line numbers — patch has no line-based parameters. Use `anchor` (a unique nearby string) or `replaceAll` to disambiguate when oldText matches multiple times.",
+      "Include only the lines being changed plus minimal context for uniqueness in oldText. Do not pad with surrounding unchanged lines — the duplicate-line guard rejects this.",
+      'Prefer `mode: "insertAfter"`/`"insertBefore"` over replace-when-you-only-mean-to-add: insert cannot drift on indentation or invisible bytes.',
     ],
     parameters: patchSchema,
     prepareArguments,
