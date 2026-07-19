@@ -172,6 +172,7 @@ in
         mediainfo # Media file metadata
         mermaid-cli # Diagrams as code
         miller # CSV/JSON swiss-army knife
+        mkcert # Certificate generator
         openal # 3D audio library
         optipng # PNG optimizer
         opus-tools # Opus encoder/decoder
