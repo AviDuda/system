@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { DetectedLinter } from "./linters";
-import { biomeOffsetToPosition, KNOWN_LINTERS, lintersForFile, parseBiomeOutput, parseGolangciOutput } from "./linters";
+import {
+  biomeOffsetToPosition,
+  findLinterByExtension,
+  KNOWN_LINTERS,
+  lintersForFile,
+  parseBiomeOutput,
+  parseGolangciOutput,
+  readLinterOverrides,
+} from "./linters";
 
 // ── Known linters ──
 
@@ -270,5 +281,57 @@ describe("parseGolangciOutput", () => {
   test("handles null Issues", () => {
     const diags = parseGolangciOutput(JSON.stringify({}), "/tmp/main.go");
     expect(diags).toHaveLength(0);
+  });
+});
+
+describe("findLinterByExtension", () => {
+  test("returns null when no root marker is present up the tree (binary alone is not enough)", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-lint-"));
+    try {
+      const file = path.join(tmp, "x.ts");
+      fs.writeFileSync(file, "");
+      // No biome.json anywhere up the tree → biome must NOT be detected, even if
+      // the binary happens to be on PATH. A globally-installed linter shouldn't
+      // fire in a project that doesn't configure it.
+      expect(findLinterByExtension(file, tmp)).toBeNull();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readLinterOverrides", () => {
+  test("parses enabled + disabled; missing file = empty", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-lint-"));
+    try {
+      expect(readLinterOverrides(tmp)).toEqual({ enabled: new Set(), disabled: new Set() });
+      fs.mkdirSync(path.join(tmp, ".lsp"));
+      fs.writeFileSync(
+        path.join(tmp, ".lsp", "linters.json"),
+        JSON.stringify({ enabled: ["biome"], disabled: ["golangci-lint"], ignored: 1 }),
+      );
+      expect(readLinterOverrides(tmp)).toEqual({
+        enabled: new Set(["biome"]),
+        disabled: new Set(["golangci-lint"]),
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findLinterByExtension overrides", () => {
+  test("disabled suppresses a linter even when its marker is present", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-lint-"));
+    try {
+      fs.writeFileSync(path.join(tmp, "biome.json"), "{}"); // marker present
+      fs.mkdirSync(path.join(tmp, ".lsp"));
+      fs.writeFileSync(path.join(tmp, ".lsp", "linters.json"), JSON.stringify({ disabled: ["biome"] }));
+      const file = path.join(tmp, "x.ts");
+      fs.writeFileSync(file, "");
+      expect(findLinterByExtension(file, tmp)).toBeNull();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

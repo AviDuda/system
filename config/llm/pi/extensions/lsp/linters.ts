@@ -10,7 +10,8 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { type Diagnostic, resolveCommand } from "./client";
+import { type Diagnostic, findProjectRoot, resolveCommand } from "./client";
+import { findDevcontainerRoot } from "./devcontainer";
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +93,46 @@ export const KNOWN_LINTERS: Record<string, LinterConfig> = {
 
 // ── Detection ──
 
+/** Per-project linter overrides from `.lsp/linters.json` at the devcontainer root (git root). */
+export interface LinterOverrides {
+  /** Force-run these linters even without a root marker present. */
+  enabled: Set<string>;
+  /** Suppress these linters even when a root marker IS present. */
+  disabled: Set<string>;
+}
+
+/**
+ * Read `.lsp/linters.json` (`{ "enabled": [...], "disabled": [...] }`) from the
+ * devcontainer root (git root) when present, else cwd. Same `.lsp/` location
+ * convention as servers. Returns empty sets when absent or unparseable.
+ */
+export function readLinterOverrides(cwd: string): LinterOverrides {
+  const base = findDevcontainerRoot(cwd) ?? cwd;
+  const asSet = (v: unknown): Set<string> =>
+    Array.isArray(v) ? new Set(v.filter((n): n is string => typeof n === "string")) : new Set<string>();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(base, ".lsp", "linters.json"), "utf-8")) as {
+      enabled?: unknown;
+      disabled?: unknown;
+    };
+    return { enabled: asSet(parsed.enabled), disabled: asSet(parsed.disabled) };
+  } catch {
+    return { enabled: new Set(), disabled: new Set() };
+  }
+}
+
+/**
+ * Decide whether a linter should run, applying `.lsp/linters.json` overrides on
+ * top of the default marker gate: `disabled` wins, then `enabled`, else the
+ * marker presence decides.
+ */
+function isLinterWanted(name: string, cwd: string, hasMarker: boolean): boolean {
+  const { enabled, disabled } = readLinterOverrides(cwd);
+  if (disabled.has(name)) return false;
+  if (enabled.has(name)) return true;
+  return hasMarker;
+}
+
 /** Detect linters available for a project by checking root markers + PATH. */
 export function detectLinters(cwd: string): DetectedLinter[] {
   const detected: DetectedLinter[] = [];
@@ -105,7 +146,7 @@ export function detectLinters(cwd: string): DetectedLinter[] {
         return false;
       }
     });
-    if (!hasMarker) continue;
+    if (!isLinterWanted(name, cwd, hasMarker)) continue;
 
     const resolved = resolveCommand(config.command, cwd);
     if (!resolved) continue;
@@ -116,12 +157,19 @@ export function detectLinters(cwd: string): DetectedLinter[] {
   return detected;
 }
 
-/** Find a linter for a file extension, ignoring root markers. For lazy detection. */
+/**
+ * Find a linter for a file extension by walking up from the file to the nearest
+ * root marker. The marker (e.g. `biome.json`) — not just a binary on PATH — is
+ * what says the project actually uses this linter by default; override that with
+ * `.lsp/linters.json` `enabled` (force) or `disabled` (suppress).
+ */
 export function findLinterByExtension(filePath: string, cwd: string): DetectedLinter | null {
   const ext = path.extname(filePath).toLowerCase();
 
   for (const [name, config] of Object.entries(KNOWN_LINTERS)) {
     if (!config.fileTypes.includes(ext)) continue;
+    const hasMarker = !!findProjectRoot(filePath, config.rootMarkers);
+    if (!isLinterWanted(name, cwd, hasMarker)) continue;
 
     const resolved = resolveCommand(config.command, cwd);
     if (!resolved) continue;

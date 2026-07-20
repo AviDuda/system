@@ -21,7 +21,8 @@ import type {
   TextEdit,
   WorkspaceEdit,
 } from "./client";
-import { uriToFile } from "./client";
+import { translateLocationUri, uriToFile } from "./client";
+import type { PathMap } from "./devcontainer";
 
 // ── Diagnostics ──
 
@@ -92,14 +93,18 @@ export function formatLocation(loc: Location, cwd: string): string {
  * both forms into Location[], preferring targetSelectionRange (the precise
  * symbol range) over targetRange (the full declaration range) when available.
  */
-export function normalizeLocations(result: unknown): Location[] {
+export function normalizeLocations(result: unknown, map: PathMap | null = null): Location[] {
   if (!result) return [];
   const raw = Array.isArray(result) ? result : [result];
+  const tr = (uri: string) => (map ? translateLocationUri(uri, map) : uri);
   return raw.flatMap((loc) => {
-    if (loc && typeof loc === "object" && "uri" in loc) return [loc as Location];
+    if (loc && typeof loc === "object" && "uri" in loc) {
+      const l = loc as Location;
+      return [{ uri: tr(l.uri), range: l.range }];
+    }
     if (loc && typeof loc === "object" && "targetUri" in loc) {
       const link = loc as LocationLink;
-      return [{ uri: link.targetUri, range: link.targetSelectionRange ?? link.targetRange }];
+      return [{ uri: tr(link.targetUri), range: link.targetSelectionRange ?? link.targetRange }];
     }
     return [];
   });

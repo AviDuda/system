@@ -5,10 +5,12 @@
  * Auto-detection: checks root markers in cwd, then verifies binary is on PATH.
  */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ServerConfig } from "./client";
 import { hasRootMarkers, resolveCommand } from "./client";
+import { findDevcontainerRoot } from "./devcontainer";
 
 /** Calculate tsserver memory limit: 1/8 of system RAM, min 4096 MB */
 export function getTsServerMemory(): number {
@@ -184,13 +186,36 @@ export interface DetectedServer {
 }
 
 /**
+ * Read `.lsp/servers.json` `{ "disabled": ["nixd", ...] }` from the devcontainer
+ * root (git root) when present, else cwd. Servers don't need an `enabled` list —
+ * they lazy-start by file extension — so only `disabled` is honored. Mirrors the
+ * `.lsp/linters.json` mechanism.
+ */
+export function readDisabledServers(cwd: string): Set<string> {
+  const base = findDevcontainerRoot(cwd) ?? cwd;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(base, ".lsp", "servers.json"), "utf-8")) as {
+      disabled?: unknown;
+    };
+    if (Array.isArray(parsed.disabled)) {
+      return new Set(parsed.disabled.filter((n): n is string => typeof n === "string"));
+    }
+  } catch {
+    // no file or parse error
+  }
+  return new Set();
+}
+
+/**
  * Detect which LSP servers are available for a given directory.
  * Checks root markers first, then verifies the binary exists.
  */
 export function detectServers(cwd: string): DetectedServer[] {
+  const disabled = readDisabledServers(cwd);
   const detected: DetectedServer[] = [];
 
   for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
+    if (disabled.has(name)) continue;
     if (!hasRootMarkers(cwd, config.rootMarkers)) continue;
 
     // Check if binary exists
@@ -218,9 +243,11 @@ export function serversForFile(filePath: string, detected: DetectedServer[]): De
  */
 export function findServerByExtension(filePath: string, cwd: string): DetectedServer | null {
   const ext = path.extname(filePath).toLowerCase();
+  const disabled = readDisabledServers(cwd);
 
   for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
     if (!config.fileTypes.includes(ext)) continue;
+    if (disabled.has(name)) continue;
 
     const resolved = resolveCommand(config.command, cwd);
     if (!resolved) continue;

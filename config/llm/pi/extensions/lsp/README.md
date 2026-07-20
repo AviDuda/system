@@ -14,6 +14,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 8. **Cold server gating** — if a server times out on auto-diagnostics or a `symbols` call, it's marked cold and skipped for 5s to avoid blocking edits. Linters always run (they're fast CLI calls).
 9. **Code actions** — `codeAction` lists available refactorings/fixes at a position, `codeActionApply` executes one by its index. Supports `codeAction/resolve` for deferred edits.
 10. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
+11. **Devcontainer support** — when a project has a running `.devcontainer/`, language servers can run inside it (with host↔container path translation), so the host doesn't need the project's dependencies. See [Devcontainer support](#devcontainer-support).
 
 ## Supported servers
 
@@ -49,15 +50,7 @@ src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable
 
 ## Symbols
 
-The `symbols` action renders `textDocument/documentSymbol` as a compact skeleton — top-level declarations with line ranges, so the agent can `read` with `offset`/`limit` for just the symbol it needs instead of the whole file.
-
-**Container/body filter.** `documentSymbol` returns a scope tree; tsserver includes every local `const` and `.map()` callback inside function bodies, swamping the signal. `formatDocumentSymbol` only recurses into containers (Module, Class, Struct, Interface, Enum, Namespace, Object, Package) — body kinds (Function, Method, Property, Field, Constant, Variable) render as leaves. This is the scope-tree → declaration-tree conversion. Language-agnostic by design: the container/body axis holds across servers even when their SymbolKind sets differ, and it only ever drops body-locals, never declarations. (A no-op for Rust since rust-analyzer emits no body locals; for TS it collapses ~350 lines of scope-tree noise to ~50.)
-
-**Line ranges.** Every symbol carries its full-extent range (`sym.range`, covering doc comments and decorators, not just the name span): `@ line 42` single-line, `@ lines 243-802` multi-line. LSP's `range.end` is exclusive — a closing brace at a line boundary (character 0) is handled so ranges are read-ready (`read file.ts offset=243 limit=560`). When the server populates `sym.detail` (rust-analyzer always does — real signatures), it's appended after the range.
-
-**Cold-server graceful handling.** The first `symbols` call on an unanalyzed file (common right after session start, before edits warm the server) hits the 10s timeout. Instead of surfacing a raw error that looks like a bug, the action marks the server cold (same `coldServers` map auto-diagnostics uses) and returns a message telling the agent to retry immediately or fall back to `read` — not "retry in N seconds", which agents have no concept of and would translate to a blind `sleep`. A successful symbols call clears the cold mark.
-
-Example output (TS, after filter):
+The `symbols` action renders `textDocument/documentSymbol` as a compact declaration skeleton with line ranges, so the agent can `read` with `offset`/`limit` for just the symbol it needs.
 
 ```
 [?] rpc.ts (implicit module) (Module) @ lines 1-802
@@ -65,10 +58,17 @@ Example output (TS, after filter):
   [I] UsageStats (Interface) @ lines 42-50
     [p] input (Property) @ line 43
   [F] runSingleAgent (Function) @ lines 243-802
-  [F] writeRpcCommand (Function) @ lines 237-241
 ```
 
-**Agent steering.** A `promptGuideline` directs the agent to call `lsp symbols` before `read` on capable-server languages (e.g. Rust, TS/JS, C#, Go), explicitly excluding weak servers (e.g. nixd, bash-language-server). Scoped deliberately — over-steering backfires, and the filter can't save a server whose `documentSymbol` shape is fundamentally wrong (nixd emits every leaf value as a symbol).
+<details>
+<summary>Filtering, line ranges, cold-server handling</summary>
+
+- **Container/body filter** — only containers (Module/Class/Struct/Interface/Enum/Namespace/Object/Package) recurse; body kinds (Function/Method/Property/Field/Constant/Variable) are leaves. Collapses tsserver's per-callback scope-tree noise (~350 → ~50 lines). No-op for Rust.
+- **Line ranges** — full extent (doc comments, decorators), read-ready: `@ line 42` / `@ lines 243-802`; LSP's exclusive `range.end` at a line boundary is handled.
+- **Cold server** — first call on an unanalyzed file may hit the 10s timeout; returns "retry immediately / fall back to read" (not a raw error), marks the server cold, clears on success.
+- A `promptGuideline` steers the agent to call `symbols` before `read` on capable-server languages, excluding weak ones (nixd, bash-language-server).
+
+</details>
 
 ## Workspace Symbol Search
 
@@ -90,17 +90,7 @@ The `workspace_symbol` action searches for symbols across the entire project by 
 
 ## Multi-root Support
 
-When working on files outside the session cwd, the extension automatically roots LSP servers at the correct project root.
-
-**How it works:**
-1. For each file, `findProjectRoot` walks up from the file's directory looking for root markers (Cargo.toml, package.json, go.mod, etc.)
-2. If a server is already running for that root, it's reused
-3. Otherwise, a new server instance is spawned rooted at the project root
-4. Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist (e.g., one rust-analyzer for `~/dev/project-a/` and another for `~/dev/project-b/`)
-
-**Example scenario:** Session cwd is `~/config/` (Nix config). Agent opens `~/projects/myapp/src/lib.rs` — rust-analyzer starts rooted at `~/projects/myapp/`, not `~/config/`. All LSP features work correctly (diagnostics, go-to-definition, symbols, etc.).
-
-**Status display:** The `/lsp` command shows both session-cwd servers and dynamically-started servers from other roots.
+For files outside the session cwd, `findProjectRoot` walks up to the nearest root marker (Cargo.toml, package.json, go.mod, …) and roots the server there. Clients are keyed `serverName::rootPath`, so multiple instances coexist (e.g. one rust-analyzer per project). `lsp status` shows servers at other roots too.
 
 ## Files
 
@@ -118,30 +108,55 @@ When working on files outside the session cwd, the extension automatically roots
 | linters.test.ts | Tests for linter configs, biome/golangci-lint output parsing |
 | client.test.ts | Tests for project root detection |
 
-## Per-project LSP settings (`.lsp/` directory)
+## Per-project configuration (`.lsp/` directory)
 
-Projects can override server `initializationOptions` via a `.lsp/<server-name>.json` file in the project root. Settings are deep-merged with server defaults from `KNOWN_SERVERS` (project settings take priority).
+`.lsp/` lives at the project root, or the devcontainer/git root when one exists (so a single `.lsp/` covers the whole repo even when a server root is a subdirectory). All files are JSON; `_comment` and `_meta` are reserved.
 
-### Example
+### `.lsp/<server>.json` — per-server settings + container install
+
+Deep-merged into the server's `initializationOptions`. Reserved keys: `_comment`/`_meta` (stripped), `_container` (force a compose service; devcontainer mode), `_containerInstall` (shell command(s) to install the server in the container if missing — see [Devcontainer support](#devcontainer-support)).
 
 ```json
 // .lsp/rust-analyzer.json
 {
-  "_comment": "Dioxus RSX proc macros generate untypeable code (TemplateNode/TemplateAttribute mismatches). rustc compiles clean, rust-analyzer does not.",
-  "procMacro": {
-    "ignored": {
-      "dioxus-core-macro": ["rsx", "component"]
-    }
-  }
+  "_comment": "RSX proc macros generate untypeable code; rustc compiles clean, rust-analyzer does not.",
+  "procMacro": { "ignored": { "dioxus-core-macro": ["rsx", "component"] } }
 }
 ```
 
-### Reserved fields
+### `.lsp/devcontainer.json` — project-wide devcontainer overrides
 
-- `_comment` — string or array of strings (inline documentation, stripped before sending to server)
-- `_meta` — arbitrary object (reserved for future use, stripped before sending)
+- `disabled` (bool) — force host-side servers even when a devcontainer is running.
+- `extraMaps` (`[{ "host": "...", "container": "..." }]`) — additional host↔container path mappings beyond the auto-detected bind mount.
 
-Both are stripped recursively at all nesting levels.
+### `.lsp/linters.json` — enable/disable linters
+
+```jsonc
+{ "enabled": ["biome"], "disabled": ["golangci-lint"] }
+```
+
+A linter runs only where its root marker is present by default. `enabled` forces it without the marker; `disabled` suppresses it. Priority: `disabled` > `enabled` > marker.
+
+### `.lsp/servers.json` — disable servers
+
+```jsonc
+{ "disabled": ["nixd"] }
+```
+
+Suppresses servers per-project. Servers don't need an `enabled` list — they lazy-start by file extension.
+
+## Devcontainer support
+
+When a project has a running `.devcontainer/`, language servers can run **inside the container** (with host↔container path translation) so the host doesn't need the project's dependencies — e.g. a named volume hiding `node_modules` from the host would otherwise leave a host-side tsserver unable to resolve any imports.
+
+Auto-detected when `.devcontainer/` exists and a container with the server binary is running; falls back to host otherwise. Override: `.lsp/devcontainer.json` `{ "disabled": true }`, `.lsp/<server>.json` `_container` (force a service), `_containerInstall` (install the binary in the container if missing).
+
+<details>
+<summary>How it works</summary>
+
+On first use, the extension scans running containers and picks the one that bind-mounts the project root and has (or can install) the binary — probing each, so multi-service devcontainers work, not just the `service` in `devcontainer.json`. The server is spawned via `docker exec -i <container> bash -lc 'exec "$@"'`, URIs are translated both directions across the wire, and `processId` is sent as null (some servers crash monitoring it). `_containerInstall` runs as the container user (prefix `sudo` if it can't write the install prefix, e.g. `npm`'s global dir); if undeclared, a warning shows via `ctx.ui.notify` and it falls back to host for the session. `lsp status` / `/lsp` annotate each server with `[host]` or `[container:<name>]`.
+
+</details>
 
 ## Adding new servers
 
@@ -155,18 +170,18 @@ The server binary must be on PATH. Install via nix in `modules/home-manager/defa
 
 ## Adding new linters
 
-Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBiome` / `runGolangciLint` for examples. Linters use `child_process.execFile` (not `Bun.spawn` -- pi runs in Node, not Bun).
+Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBiome` / `runGolangciLint` for examples. Linters use `child_process.execFile` (not `Bun.spawn` -- pi runs in Node, not Bun). A linter runs only where its root marker is present (override via `.lsp/linters.json`).
 
 ## Code actions
 
-`codeAction` queries the server for available actions at a position (quick fixes, refactorings, source actions). The response includes context lines around the cursor so the model can verify it's the right spot. Actions are shown with their kind, title, and preferred/disabled status.
+`codeAction` lists actions at a position (kind, title, preferred/disabled, with context lines). `codeActionApply` runs one by index — re-queries for freshness, resolves via `codeAction/resolve` if deferred, applies the `WorkspaceEdit` to disk.
 
-`codeActionApply` executes a code action by its index from a prior `codeAction` listing. It:
-1. Re-queries available actions (ensures freshness)
-2. Resolves deferred actions via `codeAction/resolve` if the server uses lazy evaluation
-3. Applies the resulting `WorkspaceEdit` to disk via `applyWorkspaceEdit`
+<details>
+<summary>WorkspaceEdit application details</summary>
 
-`applyWorkspaceEdit` (in `format.ts`) applies a `WorkspaceEdit` to disk, handling **both** edit forms servers use: `changes` (a `{uri → TextEdit[]}` map — what tsserver emits) and `documentChanges` (the structured array — what rust-analyzer's `rename` returns, via `TextDocumentEdit`). When both are present, `documentChanges` is authoritative (per the LSP spec) so edits are never double-applied. Edits within each file are applied in reverse order to preserve character positions. Resource operations other than text edits (CreateFile/RenameFile/DeleteFile) are collected into an `unsupported` list and reported rather than executed. Requires an `onFileWritten` callback invoked after each file is written — used to sync modified content back to the LSP server via `didChange` so subsequent edits (e.g., round-trip renames) don't operate on stale positions.
+`applyWorkspaceEdit` (format.ts) handles both forms: `changes` (tsserver) and `documentChanges` (rust-analyzer rename). `documentChanges` is authoritative when both are present (per spec); within a file, edits apply in reverse order to preserve positions. Resource operations (Create/Rename/Delete) are reported unsupported, not executed. An `onFileWritten` callback syncs each file back via `didChange` so round-trip edits use fresh positions.
+
+</details>
 
 ## Progress reporting
 
@@ -186,14 +201,12 @@ For `rename` failures, 3 lines of context are shown. For `codeAction`, 5 lines.
 
 ## Position resolution
 
-When the agent provides a `symbol` parameter, the extension resolves the exact cursor position using two strategies:
+When `symbol` is provided, the cursor resolves via:
 
-1. **Semantic** (when `line` is NOT specified): fetches `textDocument/documentSymbol` and searches the symbol tree by name. Uses `selectionRange` — the precise name span at the declaration site. Most reliable for "find where X is defined."
-2. **Textual** (when `line` IS specified): word-boundary regex match on the given line. Finds the symbol at the usage site, not the declaration. Required for `references`, `hover`, `type_definition` at a specific usage.
+- **Semantic** (no `line`): `documentSymbol` tree search by name → declaration site. Best for "where is X defined."
+- **Textual** (`line` given): word-boundary match on that line → usage site; falls back to nearest textual match, then semantic.
 
-When `line` is omitted, semantic resolution is used (finds the declaration). When `line` is provided, textual resolution is used first (finds the usage at that line). If textual resolution fails (symbol not on that line), the tool expands outward from the given line to find the nearest textual match. Semantic resolution is only used as a last resort when the symbol doesn't appear anywhere in the file textually (e.g., macro expansion or renamed import).
-
-Word-boundary matching (`\b`) prevents false matches where a symbol name appears inside another identifier (e.g., `get` won't match `getApiKey`).
+Word-boundary (`\b`) prevents `get` matching `getApiKey`.
 
 ## Tool call rendering
 

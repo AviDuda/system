@@ -9,6 +9,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { deepMerge } from "../shared/deep-merge";
+import { type ContainerTarget, findDevcontainerRoot, type PathMap, pathFromServer, pathToServer } from "./devcontainer";
 
 // ── Types ──
 
@@ -40,6 +41,10 @@ export interface LspClient {
   proc: ChildProcess;
   /** Server name (for logging) */
   name: string;
+  /** Host↔container path map (null = host-local server, no translation). */
+  pathMap: PathMap | null;
+  /** Container name when running in a devcontainer (null/undefined = host). */
+  containerName?: string;
   /** Resolved server capabilities from initialize response */
   capabilities: ServerCapabilities;
   /** Currently open files (URI -> version) */
@@ -375,6 +380,17 @@ export function uriToFile(uri: string): string {
   return uri.replace(/^file:\/\//, "");
 }
 
+/** Build the URI to SEND to the server for a host file path (container-translated when mapped). */
+function serverUriFor(client: LspClient, filePath: string): string {
+  return fileToUri(pathToServer(filePath, client.pathMap));
+}
+
+/** Translate a URI received FROM the server into a host URI (no-op when map is null). */
+export function translateLocationUri(uri: string, map: PathMap | null): string {
+  if (!map) return uri;
+  return fileToUri(pathFromServer(uriToFile(uri), map));
+}
+
 /**
  * Detect language ID from file extension.
  */
@@ -449,7 +465,11 @@ function stripMeta(obj: Record<string, unknown>): Record<string, unknown> {
  * Returns empty object if no .lsp/ directory or file exists.
  */
 export async function loadLspSettings(cwd: string, serverName: string): Promise<Record<string, unknown>> {
-  const lspDir = path.join(cwd, ".lsp");
+  // `.lsp/` lives at the devcontainer root (git root) when one exists, else the
+  // server root — one config location per repo regardless of where the server
+  // root sits (e.g. a subproject under the repo that owns the devcontainer).
+  const base = findDevcontainerRoot(cwd) ?? cwd;
+  const lspDir = path.join(base, ".lsp");
   const settingsFile = path.join(lspDir, `${serverName}.json`);
 
   if (!fs.existsSync(lspDir)) return {};
@@ -508,24 +528,46 @@ export function findProjectRoot(filePath: string, rootMarkers: string[]): string
 
 /**
  * Create and initialize an LSP client.
+ *
+ * When `target` is provided, the server is spawned inside the devcontainer via
+ * `docker exec -i` (see devcontainer.ts), URIs are translated across the wire, and
+ * `processId` is sent as null (container servers can't see the host pid — some
+ * vscode-* servers crash monitoring it). When omitted, runs the server on the host.
  */
 export async function createClient(
   name: string,
   config: ServerConfig,
   cwd: string,
+  target?: ContainerTarget | null,
   timeoutMs = 10_000,
 ): Promise<LspClient> {
-  // Resolve command: check node_modules/.bin, .venv/bin, then PATH
-  const resolvedCommand = resolveCommand(config.command, cwd);
-  if (!resolvedCommand) {
-    throw new Error(`LSP server binary not found: ${config.command}`);
-  }
+  const pathMap = target?.pathMap ?? null;
+  // The server's view of its root: container path when in a devcontainer, host cwd otherwise.
+  const serverRoot = pathToServer(cwd, pathMap);
 
-  const proc = spawn(resolvedCommand, config.args ?? [], {
-    cwd,
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, NODE_NO_WARNINGS: "1" },
-  });
+  let proc: ChildProcess;
+  if (target) {
+    // Container mode: `exec "$@"` with positionals [bash-label, command, ...args]
+    // runs `command args` under a login shell (PATH sees globally-installed bins).
+    // `-i` keeps stdin open for JSON-RPC; no `-t` (TTY corrupts binary framing).
+    // Node passes positionals as distinct argv elements — no shell quoting needed.
+    proc = spawn(
+      "docker",
+      ["exec", "-i", target.containerName, "bash", "-lc", 'exec "$@"', "bash", config.command, ...(config.args ?? [])],
+      { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, NODE_NO_WARNINGS: "1" } },
+    );
+  } else {
+    // Host mode: resolve command via node_modules/.bin, .venv/bin, then PATH.
+    const resolvedCommand = resolveCommand(config.command, cwd);
+    if (!resolvedCommand) {
+      throw new Error(`LSP server binary not found: ${config.command}`);
+    }
+    proc = spawn(resolvedCommand, config.args ?? [], {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, NODE_NO_WARNINGS: "1" },
+    });
+  }
 
   // Collect stderr for error reporting
   let stderrBuf = "";
@@ -541,10 +583,12 @@ export async function createClient(
 
   const registeredWatchers: RegisteredWatcher[] = [];
 
-  // Handle diagnostic notifications
+  // Handle diagnostic notifications. Translate the URI container→host so the
+  // diagnostics map is host-keyed (callers look up by host uri via fileToUri()).
   transport.onNotification("textDocument/publishDiagnostics", (params: unknown) => {
     const p = params as { uri: string; diagnostics: Diagnostic[] };
-    diagnostics.set(p.uri, p.diagnostics);
+    const hostUri = pathMap ? fileToUri(pathFromServer(uriToFile(p.uri), pathMap)) : p.uri;
+    diagnostics.set(hostUri, p.diagnostics);
     diagnosticsVersion++;
   });
 
@@ -596,10 +640,12 @@ export async function createClient(
 
   const initResult = (await Promise.race([
     transport.request("initialize", {
-      processId: process.pid,
+      // Container servers can't see the host pid; some vscode-* servers crash
+      // monitoring it. Null is the safe value across all servers.
+      processId: target ? null : process.pid,
       capabilities: CLIENT_CAPABILITIES,
-      rootUri: fileToUri(cwd),
-      workspaceFolders: [{ uri: fileToUri(cwd), name: path.basename(cwd) }],
+      rootUri: fileToUri(serverRoot),
+      workspaceFolders: [{ uri: fileToUri(serverRoot), name: path.basename(cwd) }],
       initializationOptions: initOptions,
     }),
     new Promise((_, reject) =>
@@ -665,6 +711,8 @@ export async function createClient(
     createdAt: Date.now(),
     proc,
     name,
+    pathMap,
+    containerName: target?.containerName,
     capabilities: initResult.capabilities,
     openFiles,
     diagnostics,
@@ -703,15 +751,15 @@ export async function createClient(
  * Open a file in the LSP server (textDocument/didOpen).
  */
 export async function openFile(client: LspClient, filePath: string): Promise<void> {
-  const uri = fileToUri(filePath);
-  if (client.openFiles.has(uri)) return;
+  const hostUri = fileToUri(filePath);
+  if (client.openFiles.has(hostUri)) return;
 
   const content = await fs.promises.readFile(filePath, "utf-8");
   const languageId = detectLanguageId(filePath);
-  client.openFiles.set(uri, 1);
+  client.openFiles.set(hostUri, 1);
 
   client.notify("textDocument/didOpen", {
-    textDocument: { uri, languageId, version: 1, text: content },
+    textDocument: { uri: serverUriFor(client, filePath), languageId, version: 1, text: content },
   });
 }
 
@@ -720,18 +768,19 @@ export async function openFile(client: LspClient, filePath: string): Promise<voi
  * Returns the synced text (for passing to notifySaved with includeText).
  */
 export async function syncFile(client: LspClient, filePath: string, content?: string): Promise<string> {
-  const uri = fileToUri(filePath);
+  const hostUri = fileToUri(filePath);
   const text = content ?? (await fs.promises.readFile(filePath, "utf-8"));
+  const uri = serverUriFor(client, filePath);
 
-  if (!client.openFiles.has(uri)) {
+  if (!client.openFiles.has(hostUri)) {
     const languageId = detectLanguageId(filePath);
-    client.openFiles.set(uri, 1);
+    client.openFiles.set(hostUri, 1);
     client.notify("textDocument/didOpen", {
       textDocument: { uri, languageId, version: 1, text },
     });
   } else {
-    const version = (client.openFiles.get(uri) ?? 0) + 1;
-    client.openFiles.set(uri, version);
+    const version = (client.openFiles.get(hostUri) ?? 0) + 1;
+    client.openFiles.set(hostUri, version);
     client.notify("textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ text }],
@@ -745,10 +794,10 @@ export async function syncFile(client: LspClient, filePath: string, content?: st
  * Removes from openFiles tracking. Servers drop their in-memory state for the file.
  */
 export function closeFile(client: LspClient, filePath: string): void {
-  const uri = fileToUri(filePath);
-  if (!client.openFiles.has(uri)) return;
-  client.openFiles.delete(uri);
-  client.notify("textDocument/didClose", { textDocument: { uri } });
+  const hostUri = fileToUri(filePath);
+  if (!client.openFiles.has(hostUri)) return;
+  client.openFiles.delete(hostUri);
+  client.notify("textDocument/didClose", { textDocument: { uri: serverUriFor(client, filePath) } });
 }
 
 /**
@@ -756,7 +805,7 @@ export function closeFile(client: LspClient, filePath: string): void {
  * Includes file text if the server requested it via capabilities.
  */
 export function notifySaved(client: LspClient, filePath: string, text?: string): void {
-  const uri = fileToUri(filePath);
+  const uri = serverUriFor(client, filePath);
   const sync = client.capabilities.textDocumentSync;
   const wantsText = typeof sync === "object" && typeof sync.save === "object" && sync.save.includeText === true;
 
@@ -779,7 +828,14 @@ export function notifyFileChanges(
   changes: Array<{ uri: string; type: (typeof FileChangeType)[keyof typeof FileChangeType] }>,
 ): void {
   if (changes.length === 0) return;
-  client.notify("workspace/didChangeWatchedFiles", { changes });
+  // Callers pass host URIs (built via fileToUri); translate to server URIs for the wire.
+  const mapped = client.pathMap
+    ? changes.map((c) => ({
+        uri: fileToUri(pathToServer(uriToFile(c.uri), client.pathMap)),
+        type: c.type,
+      }))
+    : changes;
+  client.notify("workspace/didChangeWatchedFiles", { changes: mapped });
 }
 
 /**

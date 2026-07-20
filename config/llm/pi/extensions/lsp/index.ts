@@ -33,8 +33,11 @@ import {
   openFile,
   type SymbolInformation,
   syncFile,
+  type TextEdit,
+  translateLocationUri,
   type WorkspaceEdit,
 } from "./client";
+import { type ContainerTarget, type PathMap, resolveServerTarget } from "./devcontainer";
 import {
   applyWorkspaceEdit,
   extractHoverText,
@@ -57,6 +60,15 @@ import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType }
 
 /** Active LSP clients, keyed by `serverName::rootPath` */
 const clients = new Map<string, LspClient>();
+
+/**
+ * Resolved devcontainer targets per `serverName::rootPath`. Discovery (docker
+ * inspect + binary probe + optional install) is non-trivial, so cache per session:
+ * successes indefinitely, nulls for a short TTL so a container started mid-session
+ * gets picked up. Cleared on shutdown and `/lsp-restart`.
+ */
+const targetCache = new Map<string, { target: ContainerTarget | null; expires: number }>();
+const TARGET_NULL_TTL_MS = 60_000;
 
 /** Build a client map key from server name and project root. */
 function clientKey(serverName: string, root: string): string {
@@ -86,6 +98,21 @@ let fileWatcher: FileWatcher | null = null;
 
 // ── Client management ──
 
+/** Translate a WorkspaceEdit's URIs from server→host (no-op when map is null). */
+function translateWorkspaceEdit(edit: WorkspaceEdit, map: PathMap | null): WorkspaceEdit {
+  if (!map) return edit;
+  const changes: Record<string, TextEdit[]> = {};
+  for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
+    changes[translateLocationUri(uri, map)] = edits;
+  }
+  const documentChanges = edit.documentChanges?.map((dc) =>
+    dc && typeof dc === "object" && "textDocument" in dc && dc.textDocument
+      ? { ...dc, textDocument: { ...dc.textDocument, uri: translateLocationUri(dc.textDocument.uri, map) } }
+      : dc,
+  );
+  return { changes: Object.keys(changes).length ? changes : undefined, documentChanges };
+}
+
 /**
  * Get or create a client for a specific server at a specific root.
  */
@@ -98,8 +125,24 @@ async function getClientAt(serverName: string, root: string): Promise<LspClient 
   const config = KNOWN_SERVERS[serverName];
   if (!config) return null;
 
+  // Resolve a devcontainer target (null = host mode). Cached per session.
+  let target: ContainerTarget | null = null;
+  const cached = targetCache.get(key);
+  if (cached && (cached.target !== null || cached.expires > Date.now())) {
+    target = cached.target;
+  } else {
+    try {
+      target = await resolveServerTarget(root, serverName, config.command, undefined, (msg) => {
+        sessionCtx?.ui.notify(msg, "warning");
+      });
+    } catch {
+      target = null;
+    }
+    targetCache.set(key, { target, expires: Date.now() + TARGET_NULL_TTL_MS });
+  }
+
   try {
-    const client = await createClient(serverName, config, root);
+    const client = await createClient(serverName, config, root, target);
     client.onProgress = () => updateStatusBarThrottled();
     clients.set(key, client);
     return client;
@@ -119,49 +162,23 @@ function getServersForFile(filePath: string): DetectedServer[] {
 }
 
 /**
- * Find the project root for a file using known servers' root markers.
- * Returns the root and which server matched, or null.
+ * Resolve the server root for a file: walk up from the file to the nearest
+ * ancestor holding one of the server's root markers, falling back to currentCwd.
+ * This is what makes a subproject file (e.g. a frontend under a repo root that
+ * owns the devcontainer but has no package.json at its own root) root the server
+ * at the subproject rather than at currentCwd.
  */
-function findRootForFile(filePath: string): { root: string; serverName: string } | null {
-  for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
-    const root = findProjectRoot(filePath, config.rootMarkers);
-    if (root) return { root, serverName: name };
-  }
-  return null;
+function rootForServer(server: DetectedServer, absFile: string): string {
+  return findProjectRoot(absFile, server.config.rootMarkers) ?? currentCwd;
 }
 
 async function getClientForFile(filePath: string): Promise<{ client: LspClient; server: DetectedServer } | null> {
   const abs = path.resolve(filePath);
-  const isOutsideCwd = !abs.startsWith(currentCwd);
 
-  // For files outside the session cwd, try project root detection first.
-  // Pre-detected servers are rooted at currentCwd and won't work for external projects.
-  if (isOutsideCwd) {
-    const found = findRootForFile(abs);
-    if (found) {
-      const client = await getClientAt(found.serverName, found.root);
-      if (client) {
-        const config = KNOWN_SERVERS[found.serverName];
-        return { client, server: { name: found.serverName, config, resolvedCommand: "" } };
-      }
-    }
-  }
-
-  // 1. Try pre-detected servers (session cwd) — fastest path for files inside cwd
+  // Find servers that handle this file's extension — pre-detected first, then a
+  // lazy detect-by-extension if none.
   let servers = getServersForFile(abs);
-
-  // 2. If no pre-detected server handles this extension, find project root
   if (servers.length === 0) {
-    const found = findRootForFile(abs);
-    if (found) {
-      const client = await getClientAt(found.serverName, found.root);
-      if (client) {
-        const config = KNOWN_SERVERS[found.serverName];
-        return { client, server: { name: found.serverName, config, resolvedCommand: "" } };
-      }
-    }
-
-    // 3. Fallback: lazy detection by extension (original behavior)
     const lazyFound = findServerByExtension(abs, currentCwd);
     if (lazyFound && !detectedServers.some((s) => s.name === lazyFound.name)) {
       detectedServers.push(lazyFound);
@@ -171,9 +188,13 @@ async function getClientForFile(filePath: string): Promise<{ client: LspClient; 
     if (servers.length === 0) return null;
   }
 
-  // Prefer first available (non-linter first in oh-my-pi, we just take first)
+  // For each candidate server, resolve the root by walking up from the file to
+  // the nearest root marker. Rooting at currentCwd is wrong when the server root
+  // is a subproject inside (or outside) cwd — e.g. a frontend under a repo root
+  // that owns the devcontainer but has no package.json at its own root. The
+  // per-server walk-up handles inside-cwd, outside-cwd, and multi-root uniformly.
   for (const server of servers) {
-    const client = await getClient(server.name);
+    const client = await getClientAt(server.name, rootForServer(server, abs));
     if (client) return { client, server };
   }
   return null;
@@ -248,6 +269,7 @@ async function shutdownAll(): Promise<void> {
   const shutdowns = Array.from(clients.values()).map((c) => c.shutdown());
   await Promise.allSettled(shutdowns);
   clients.clear();
+  targetCache.clear();
 }
 
 // ── File tracking helpers ──
@@ -426,7 +448,7 @@ async function getDiagnosticsForFile(
       }
     }
 
-    const client = await getClient(server.name);
+    const client = await getClientAt(server.name, rootForServer(server, abs));
     if (!client) continue;
     sourceNames.push(server.name);
 
@@ -635,45 +657,7 @@ export default function (pi: ExtensionAPI) {
 
       // ── Status ──
       if (action === "status") {
-        if (detectedServers.length === 0 && detectedLinters.length === 0 && clients.size === 0) {
-          return text("No language servers or linters detected for this project.");
-        }
-        const lines: string[] = [];
-
-        // Show pre-detected servers (session cwd)
-        if (detectedServers.length > 0) {
-          lines.push(`Detected ${detectedServers.length} language server(s) for ${currentCwd}:`);
-          for (const s of detectedServers) {
-            const client = clients.get(clientKey(s.name, currentCwd));
-            const status = client && !client.dead ? `running (${formatUptime(client.createdAt)})` : "available";
-            lines.push(`  ${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
-          }
-        }
-
-        // Show dynamically-started clients (other roots)
-        const otherRoots = [...clients.entries()].filter(([key]) => {
-          const { root } = parseClientKey(key);
-          return root !== currentCwd;
-        });
-        if (otherRoots.length > 0) {
-          lines.push(``);
-          lines.push(`Active servers for other projects (${otherRoots.length}):`);
-          for (const [key, client] of otherRoots) {
-            const { serverName, root } = parseClientKey(key);
-            const relRoot = path.relative(currentCwd, root);
-            const status = !client.dead ? `running (${formatUptime(client.createdAt)})` : "dead";
-            lines.push(`  ${serverName} @ ${relRoot} — ${status}`);
-          }
-        }
-
-        if (detectedLinters.length > 0) {
-          lines.push(``);
-          lines.push(`Detected ${detectedLinters.length} linter(s):`);
-          for (const l of detectedLinters) {
-            lines.push(`  ${l.name} (${l.config.fileTypes.join(", ")}) — cli`);
-          }
-        }
-        return text(lines.join("\n"));
+        return text(statusReport() ?? "No language servers or linters detected for this project.");
       }
 
       // ── Workspace symbol search (no file required — broadcasts to all clients) ──
@@ -690,6 +674,12 @@ export default function (pi: ExtensionAPI) {
               query: workspaceQuery,
             })) as SymbolInformation[] | null;
             if (raw && raw.length > 0) {
+              // Translate each result's location URI server→host for that client.
+              if (c.pathMap) {
+                for (const s of raw) {
+                  if (s?.location) s.location = { ...s.location, uri: translateLocationUri(s.location.uri, c.pathMap) };
+                }
+              }
               allResults.push(...raw);
             }
           } catch {
@@ -832,7 +822,7 @@ export default function (pi: ExtensionAPI) {
               textDocument: { uri },
               position,
             });
-            const locs = normalizeLocations(raw);
+            const locs = normalizeLocations(raw, client.pathMap);
             if (locs.length === 0) {
               const ctx = readLocationContext(abs, displayLine, 2).join("\n");
               return text(`No definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
@@ -846,7 +836,7 @@ export default function (pi: ExtensionAPI) {
               textDocument: { uri },
               position,
             });
-            const locs = normalizeLocations(raw);
+            const locs = normalizeLocations(raw, client.pathMap);
             if (locs.length === 0) {
               const ctx = readLocationContext(abs, displayLine, 2).join("\n");
               return text(`No type definition found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
@@ -860,7 +850,7 @@ export default function (pi: ExtensionAPI) {
               textDocument: { uri },
               position,
             });
-            const locs = normalizeLocations(raw);
+            const locs = normalizeLocations(raw, client.pathMap);
             if (locs.length === 0) {
               const ctx = readLocationContext(abs, displayLine, 2).join("\n");
               return text(`No implementation found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
@@ -875,7 +865,7 @@ export default function (pi: ExtensionAPI) {
               position,
               context: { includeDeclaration: true },
             });
-            const locs = normalizeLocations(raw);
+            const locs = normalizeLocations(raw, client.pathMap);
             if (locs.length === 0) {
               const ctx = readLocationContext(abs, displayLine, 2).join("\n");
               return text(`No references found${posInfo}. Context around line ${displayLine}:\n${ctx}`);
@@ -975,9 +965,13 @@ export default function (pi: ExtensionAPI) {
             // both (documentChanges is authoritative when present) and syncs
             // each file back to the server so subsequent renames use fresh
             // positions instead of corrupting the file.
-            const { applied, unsupported } = await applyWorkspaceEdit(raw, ctx.cwd, (editPath) => {
-              syncFile(client, editPath);
-            });
+            const { applied, unsupported } = await applyWorkspaceEdit(
+              translateWorkspaceEdit(raw, client.pathMap),
+              ctx.cwd,
+              (editPath) => {
+                syncFile(client, editPath);
+              },
+            );
 
             const lines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
             if (unsupported.length > 0) {
@@ -1055,9 +1049,13 @@ export default function (pi: ExtensionAPI) {
             }
 
             // Apply the workspace edit, syncing each modified file back to the server
-            const { applied, unsupported } = await applyWorkspaceEdit(resolvedAction.edit, ctx.cwd, (editPath) => {
-              syncFile(client, editPath);
-            });
+            const { applied, unsupported } = await applyWorkspaceEdit(
+              translateWorkspaceEdit(resolvedAction.edit, client.pathMap),
+              ctx.cwd,
+              (editPath) => {
+                syncFile(client, editPath);
+              },
+            );
             const appliedLines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
             if (unsupported.length > 0) {
               appliedLines.push(`  (skipped unsupported resource ops: ${unsupported.join(", ")})`);
@@ -1119,29 +1117,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("lsp", {
     description: "Show LSP server and linter status",
     handler: async (_args, ctx) => {
-      if (detectedServers.length === 0 && detectedLinters.length === 0) {
-        ctx.ui.notify("No language servers or linters detected for this project", "warning");
-        return;
-      }
-      const lines: string[] = [];
-      for (const s of detectedServers) {
-        const client = clients.get(s.name);
-        const status = client && !client.dead ? `running (${formatUptime(client.createdAt)})` : "available";
-        lines.push(`${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
-        // Show active progress for this server
-        if (client && !client.dead && client.progress.size > 0) {
-          for (const wp of client.progress.values()) {
-            const pct = wp.percentage !== undefined ? ` ${wp.percentage}%` : "";
-            const msg = wp.message ? `: ${wp.message}` : "";
-            const stale = Date.now() - wp.lastUpdated > PROGRESS_STALE_MS ? " (stale)" : "";
-            lines.push(`  → ${wp.title}${pct}${msg}${stale}`);
-          }
-        }
-      }
-      for (const l of detectedLinters) {
-        lines.push(`${l.name} (${l.config.fileTypes.join(", ")}) — cli`);
-      }
-      ctx.ui.notify(lines.join("\n"), "info");
+      const report = statusReport();
+      ctx.ui.notify(report ?? "No language servers or linters detected for this project", report ? "info" : "warning");
     },
   });
 
@@ -1179,6 +1156,50 @@ function formatUptime(createdAt: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h${minutes % 60}m`;
+}
+
+/** Host vs container label for status output, so it's visible where each server runs. */
+function modeLabel(client: LspClient): string {
+  return client.containerName ? `[container:${client.containerName}]` : "[host]";
+}
+
+/**
+ * Unified status report: detected servers at cwd + active clients at OTHER roots
+ * (e.g. a subproject's container-routed server) + linters. Shared by the `lsp
+ * status` tool action and the `/lsp` command so they can't drift apart. Returns
+ * null when there's nothing to show.
+ */
+function statusReport(): string | null {
+  if (detectedServers.length === 0 && detectedLinters.length === 0 && clients.size === 0) return null;
+  const lines: string[] = [];
+  if (detectedServers.length > 0) {
+    lines.push(`Detected ${detectedServers.length} language server(s) for ${currentCwd}:`);
+    for (const s of detectedServers) {
+      const client = clients.get(clientKey(s.name, currentCwd));
+      const status =
+        client && !client.dead ? `running (${formatUptime(client.createdAt)}) ${modeLabel(client)}` : "available";
+      lines.push(`  ${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
+    }
+  }
+  const otherRoots = [...clients.entries()].filter(([key]) => parseClientKey(key).root !== currentCwd);
+  if (otherRoots.length > 0) {
+    lines.push(``);
+    lines.push(`Active servers for other projects (${otherRoots.length}):`);
+    for (const [key, client] of otherRoots) {
+      const { serverName, root } = parseClientKey(key);
+      const relRoot = path.relative(currentCwd, root);
+      const status = !client.dead ? `running (${formatUptime(client.createdAt)}) ${modeLabel(client)}` : "dead";
+      lines.push(`  ${serverName} @ ${relRoot} — ${status}`);
+    }
+  }
+  if (detectedLinters.length > 0) {
+    lines.push(``);
+    lines.push(`Detected ${detectedLinters.length} linter(s):`);
+    for (const l of detectedLinters) {
+      lines.push(`  ${l.name} (${l.config.fileTypes.join(", ")}) — cli`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function text(t: string) {

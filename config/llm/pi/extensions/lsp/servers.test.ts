@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { DetectedServer } from "./servers";
-import { findServerByExtension, getTsServerMemory, KNOWN_SERVERS, serversForFile } from "./servers";
+import {
+  findServerByExtension,
+  getTsServerMemory,
+  KNOWN_SERVERS,
+  readDisabledServers,
+  serversForFile,
+} from "./servers";
 
 describe("KNOWN_SERVERS", () => {
   test("has typescript-language-server", () => {
@@ -136,5 +144,22 @@ describe("findServerByExtension", () => {
   test("returns null for unknown extensions", () => {
     const result = findServerByExtension("data.csv", "/tmp");
     expect(result).toBeNull();
+  });
+});
+
+describe("readDisabledServers", () => {
+  test("parses disabled list; missing file = empty", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-srv-"));
+    try {
+      expect(readDisabledServers(tmp)).toEqual(new Set());
+      fs.mkdirSync(path.join(tmp, ".lsp"));
+      fs.writeFileSync(
+        path.join(tmp, ".lsp", "servers.json"),
+        JSON.stringify({ disabled: ["nixd", "bashls"], ignored: 1 }),
+      );
+      expect(readDisabledServers(tmp)).toEqual(new Set(["nixd", "bashls"]));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
