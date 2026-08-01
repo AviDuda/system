@@ -43,7 +43,7 @@
           "--"
           "sh"
           "-c"
-          "jj git fetch && jj rebase -d 'trunk()'"  # quotes: sh would eat the ()
+          "jj git fetch && jj rebase -d 'trunk()'" # quotes: sh would eat the ()
         ];
         push = [
           "git"

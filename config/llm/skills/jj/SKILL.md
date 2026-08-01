@@ -48,7 +48,7 @@ jj has no staging area — the working-copy change holds every change. Select wh
 ## History editing (reversible)
 
 **Restructure and combine**
-- `jj squash` — fold changes into another change (`--into @-` folds the working copy into its parent; `-i` interactive)
+- `jj squash` — fold changes into another change (`--into @-` folds the working copy into its parent; `-i` interactive). `jj squash --from <range> --into <dest> -m "<msg>"` folds a whole range at once — verify with `jj log` between chained range-squashes; running two back-to-back can create divergent duplicates
 - `jj split <paths>... -m` — carve a change apart (`-i` interactive hunks, `-p` splits into siblings)
 - `jj absorb` — move hunks into the nearest mutable ancestor that introduced those lines
 - `jj rebase -r <rev> -d <dest>` — re-parent changes (`--skip-emptied` drops changes the rebase emptied; `-A`/`-B` insert after/before)
@@ -104,7 +104,7 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 ## Recovery
 
 - `jj undo` — revert the last operation (repeated undo goes further back; `jj redo` moves forward again)
-- `jj op log` → `jj op restore <op-id>` — recover an earlier repository state (distinct from `jj restore`, which is path-level)
+- `jj op log` → `jj op restore <op-id>` — recover an earlier repository state (distinct from `jj restore`, which is path-level). Divergent commits (same change id at two spots, shown with `(divergent)`) are recoverable the same way — restore the operation that created them
 - `jj --at-op=<op-id> log` — read-only peek at repo state at an earlier operation, without changing anything
 - Nothing is lost: abandon/restore/rebase are all reversible via the operation log.
 
