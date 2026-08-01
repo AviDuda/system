@@ -93,11 +93,13 @@ in
     ./fonts.nix
     ./git.nix
     ./iterm2.nix
+    ./jj.nix
     ./lazygit.nix
     ./llm.nix
     ./pi.nix
     ./shell.nix
     ./tmux.nix
+    ./vcs-shared.nix
     ./zed.nix
   ];
 
