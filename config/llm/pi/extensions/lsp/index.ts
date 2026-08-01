@@ -578,12 +578,16 @@ export default function (pi: ExtensionAPI) {
       const isNewFile = isWrite && !isFileOpenInAnyClient(filePath, ctx.cwd);
       try {
         const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
-        if (!result || result.messages.length === 0) continue;
-        if (result.errored) anyErrored = true;
+        if (!result) continue; // No LSP server or linter for this file — silent
         const label = multi ? ` ${path.relative(ctx.cwd, path.resolve(ctx.cwd, filePath))}` : "";
-        diagParts.push(
-          `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
-        );
+        if (result.messages.length === 0) {
+          diagParts.push(`[LSP diagnostics (${result.server})${label}: no errors, no warnings]`);
+        } else {
+          if (result.errored) anyErrored = true;
+          diagParts.push(
+            `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
+          );
+        }
       } catch {
         // Non-fatal per file: continue with the rest
       }
@@ -593,9 +597,12 @@ export default function (pi: ExtensionAPI) {
     const diagText = `\n\n${diagParts.join("\n\n")}`;
     const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
 
-    // Notify the user in the UI
-    const level = anyErrored ? "error" : "warning";
-    ctx.ui.notify(`LSP: ${diagParts.join("\n\n")}`, level);
+    // Notify the user in the UI about actual issues (skip clean notifications as noise)
+    const hasIssues = diagParts.some((p) => !p.includes("no errors, no warnings"));
+    if (hasIssues) {
+      const level = anyErrored ? "error" : "warning";
+      ctx.ui.notify(`LSP: ${diagParts.join("\n\n")}`, level);
+    }
 
     return {
       content: [{ type: "text" as const, text: existingText + diagText }],
@@ -627,7 +634,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, workspace_symbol, rename, codeAction, codeActionApply, restart, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
     promptGuidelines: [
       "Before `read`ing a large source file (Rust, TS/JS, C#, Go, and other languages with a capable LSP server), use `lsp` with action `symbols` first. It returns a compact skeleton — top-level functions, structs/classes/interfaces with their fields, and line ranges — so you can `read` with `offset`/`limit` for just the symbol you need instead of the whole file. Useless for you on languages with weak servers (nixd, bash-language-server); fall back to `read` there. If a symbols call reports the server is still indexing, retry it immediately or use `read` directly.",
-      "Use `lsp` with action `diagnostics` after making changes to check for type errors.",
+      "LSP diagnostics and lint results are automatically checked after every edit/write/patch and reported in the tool result. Call `lsp diagnostics` explicitly for fresh diagnostics after non-edit file changes (e.g., bash commands).",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
       "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
       "The `hover` action shows type information for a symbol at a given position.",

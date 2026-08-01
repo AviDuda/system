@@ -748,7 +748,7 @@ export async function createClient(
 }
 
 /**
- * Open a file in the LSP server (textDocument/didOpen).
+ * Open a file in the LSP server (textDocument/didOpen). No-op if already open.
  */
 export async function openFile(client: LspClient, filePath: string): Promise<void> {
   const hostUri = fileToUri(filePath);

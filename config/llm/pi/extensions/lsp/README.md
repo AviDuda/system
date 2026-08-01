@@ -5,7 +5,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 ## What it does
 
 1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, workspace symbol search, rename, code actions, and restart (the tool's action enum has the full set, including `type_definition`, `implementation`, `workspace_symbol`, `restart`, and `status`)
-2. **Auto-diagnostics** — after every edit/write/patch, LSP diagnostics + linter results are appended to the tool result so the model sees type errors and lint issues immediately
+2. **Auto-diagnostics** — after every edit/write/patch, LSP diagnostics + linter results are appended to the tool result, even when clean, so the model always sees its code's status without asking
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
 4. **Multi-root support** — automatically roots LSP servers at the correct project root for files outside the session cwd (e.g., rust-analyzer rooted at the Cargo.toml ancestor, not the session dir). Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist.
 5. **Workspace symbol search** — `workspace_symbol` action searches across all active LSP servers by symbol name, returning matches from the entire project (not just one file)
@@ -29,13 +29,13 @@ The agent can also restart servers via `lsp(action="restart")` (all servers) or 
 
 ## How auto-diagnostics work
 
-When the model uses `edit` or `write` on a file that has an active language server:
+When the model uses `edit`, `write`, or `patch` on a file that has an active language server:
 
 1. The new content is synced to the LSP server (`didOpen` or `didChange` with incrementing version)
 2. The server is notified of the save (`didSave`, with `includeText` if the server requests it)
 3. For new files (not yet opened by any server), a `workspace/didChangeWatchedFiles` Created notification is sent first, with a longer 6s timeout for re-indexing
 4. Diagnostics are collected (up to 3s timeout for existing files, 6s for new files)
-5. Any errors/warnings are appended to the tool result
+5. A status line is appended to the tool result: the errors/warnings if any, or `no errors, no warnings` when clean. The model sees the result inline — no explicit `lsp diagnostics` call needed after edits.
 
 The file watcher also handles changes made via bash (e.g., `rm`, `echo >`, `git checkout`). When a file is deleted, `didClose` is sent before the deletion notification so servers like tsserver drop their cached state.
 
@@ -47,6 +47,16 @@ Successfully edited src/main.ts
 [LSP diagnostics (typescript-language-server): 1 error(s)]
 src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
 ```
+
+or, when the edit is clean:
+
+```
+Successfully edited src/main.ts
+
+[LSP diagnostics (typescript-language-server, biome): no errors, no warnings]
+```
+
+All servers and linters that ran are listed in the parenthetical, one line per edited file. Clean results don't raise a UI notification — only actual issues do.
 
 ## Symbols
 
