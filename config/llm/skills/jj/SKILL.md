@@ -77,6 +77,7 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 ## Push, pull, and sync (git stays canonical)
 
 **Pull / sync from upstream**
+- The user config defines `jj sync` (fetch + rebase your work onto the repo's `trunk()`) and `jj push` (publish the stack via `jj git push --change @-`); use those for the daily loop, the raw commands below are what they do.
 - `jj git fetch` — import remote changes (updates `<trunk>@origin`; does NOT move your local `<trunk>` bookmark)
 - Catch the bookmark up to the remote: `jj bookmark move <trunk> --to <trunk>@origin` (fast-forward; use `jj bookmark set <trunk> -r <trunk>@origin` to force when the remote rewrote history)
 - Rebase your work onto the new position: `jj rebase -d <trunk>` (current change) or `jj rebase -s 'all:roots(trunk()..mutable())' -d <trunk>` for a whole stack; add `--skip-emptied` to drop changes the rebase emptied

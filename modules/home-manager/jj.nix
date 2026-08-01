@@ -25,6 +25,33 @@
         # Refuse to push machine-local changes (see the jj skill, "Keep machine-local changes out of pushes")
         "private-commits" = "description('LOCAL:*') | description('wip:*') | description('private:*')";
       };
+      # Aliases: jj aliases run a single command; multi-step flows wrap `jj util exec`.
+      # `trunk()` resolves to the repo's mainline (auto-set to main@origin at `jj git init`;
+      # per-repo override possible). sync never moves bookmarks: `bookmark move` is
+      # unconditional (no fast-forward check), so a divergent local bookmark would silently
+      # orphan its commits. Bookmarkless push (`--change @-`) publishes the stack as a branch.
+      # jj refuses to shadow builtins (warning + builtin wins) — when native `jj sync`
+      # ships, this alias gets rejected with a warning on every command; delete it then.
+      aliases = {
+        pull = [
+          "git"
+          "fetch"
+        ];
+        sync = [
+          "util"
+          "exec"
+          "--"
+          "sh"
+          "-c"
+          "jj git fetch && jj rebase -d 'trunk()'"  # quotes: sh would eat the ()
+        ];
+        push = [
+          "git"
+          "push"
+          "--change"
+          "@-"
+        ];
+      };
       ui = {
         "default-command" = "log"; # bare `jj` shows the log
         paginate = "never"; # agents (and humans) never hang on the pager
