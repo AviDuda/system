@@ -29,12 +29,23 @@ description: Use jj (Jujutsu) for version control in repositories with a `.jj/` 
 
 ## Daily loop (squash workflow)
 
-1. `jj new` — new change on top of the current one
-2. `jj describe -m "<message>"` — name the change (message is a plan, written before the code)
+**Start of work — check the working copy first** (`jj status`; `jj log -n 3` if unclear). What's in `@`?
+
+**Repo has other developers? Run `jj sync` before anything** (fetch + rebase existing work onto the fresh trunk). Starting from a stale base wastes a cycle.
+
+- Empty + undescribed (`no changes ... (empty) (no description set)`) → an auto-created placeholder; claim it: `jj describe -m "<plan>"` and work in it directly (skip the `jj new` below).
+- Has edits → someone's in-flight work. `jj new` on top, keep your change separate, and never squash into / commit paths out of / abandon the pre-existing change. Say the split when reporting back.
+- Described (even if empty) → a claimed change; if its description is the task, work in it directly.
+
+Describing a change early also protects it: jj auto-abandons empty + undescribed changes when the working copy moves away.
+
+1. `jj new` — new change on top of the current one (skip if you claimed an empty placeholder above)
+2. `jj describe -m "<message>"` — name the change (message is a plan, written before the code). Multi-line messages: repeat `-m` for subject + body (git-style blank line between), or embed literal newlines.
 3. Record its change ID: `CHANGE_ID=$(jj log -r @ --no-graph -T 'change_id')` — stable across amend/rebase/squash/split while commit IDs and `@` move. Reference it (never `@`-assumptions) to find the change later: `jj show $CHANGE_ID`, `jj edit $CHANGE_ID`.
 4. Edit files (auto-snapshotted on the next jj command)
 5. `jj new` again — one change per logical unit; keep unrelated work out of the current change
 6. Navigate without revision IDs: `jj prev` / `jj next` (with `-e` edits the target in place; without it creates a new working-copy change on top), `jj edit <rev>`
+7. Quick moves: `jj new @-` — clean slate on the parent of the current change, your current edits stay behind as a visible change (no stash, no branch naming); `jj new -B <rev>` — insert a new change before `<rev>` (work below the current change)
 
 ## Commit selectively (replaces git add -p)
 
@@ -49,7 +60,7 @@ jj has no staging area — the working-copy change holds every change. Select wh
 ## History editing (reversible)
 
 **Restructure and combine**
-- `jj squash` — fold changes into another change (`--into @-` folds the working copy into its parent; `-i` interactive). `jj squash --from <range> --into <dest> -m "<msg>"` folds a whole range at once — verify with `jj log` between chained range-squashes; running two back-to-back can create divergent duplicates
+- `jj squash` — fold changes into another change (`--into @-` folds the working copy into its parent; `-i` interactive). `jj squash --from <range> --into <dest> -m "<msg>"` folds a whole range at once; `-u` keeps the destination's description instead of prompting for a combined one — verify with `jj log` between chained range-squashes; running two back-to-back can create divergent duplicates
 - `jj split <paths>... -m` — carve a change apart (`-i` interactive hunks, `-p` splits into siblings)
 - `jj absorb` — move hunks into the nearest mutable ancestor that introduced those lines
 - `jj rebase -r <rev> -d <dest>` — re-parent changes (`--skip-emptied` drops changes the rebase emptied; `-A`/`-B` insert after/before)
@@ -74,13 +85,14 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - Make the local change a **sibling**, not an ancestor: from the base bookmark, `jj new <bookmark>` → `jj describe -m "LOCAL: <what>"` → `jj new <bookmark>` again for real work. Pushing the work change pushes only its chain; the local change is not in it.
 - To commit the local change later: `jj rebase -r <local-change> -d <bookmark>` (or onto the work change), drop the marker, push.
 - Untracked new files: jj auto-tracks new files by default. Keep files out of snapshots via `.git/info/exclude` (per-repo, uncommitted) or `.gitignore`; opt back in with `jj file track <path>` (`--include-ignored` force-tracks an ignored file). `jj file untrack` only works on files that are already ignored.
+- New files >1MiB are refused at snapshot time (`snapshot.max-new-file-size`, default 1MiB) with a warning + hint listing the fixes. To track one deliberately: `jj file track --include-ignored <path>`. To raise the limit: `jj config set --repo snapshot.max-new-file-size <bytes>` (per-repo) or `jj --config snapshot.max-new-file-size=<bytes>` for one command.
 
 ## Push, pull, and sync (git stays canonical)
 
 **Pull / sync from upstream**
 - The user config defines `jj sync` (fetch + rebase your work onto the repo's `trunk()`) and `jj push` (advance the nearest ancestor bookmark to the stack and push it — the trunk bookmark in direct-to-trunk repos, a feature bookmark in PR-based repos; create the feature bookmark before pushing there). Use those for the daily loop; the raw commands below are what they do.
-- `jj git fetch` — import remote changes (updates `<trunk>@origin`; does NOT move your local `<trunk>` bookmark)
-- Catch the bookmark up to the remote: `jj bookmark move <trunk> --to <trunk>@origin` (fast-forward; use `jj bookmark set <trunk> -r <trunk>@origin` to force when the remote rewrote history)
+- `jj git fetch` — import remote changes. Fast-forwards your local `<trunk>` bookmark when it's behind but an ancestor of the remote position (the common case); a divergent local bookmark (local commits on it) is left in place and marked `(conflicted)`.
+- Resolve a divergent bookmark: `jj bookmark set <trunk> -r <trunk>@origin` to discard local bookmark movement, or resolve the conflict to keep local commits.
 - Rebase your work onto the new position: `jj rebase -d <trunk>` (current change) or `jj rebase -s 'all:roots(trunk()..mutable())' -d <trunk>` for a whole stack; add `--skip-emptied` to drop changes the rebase emptied
 - Resolve any conflicts (see Conflicts), then `jj status` until clean
 
@@ -94,7 +106,6 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - Never rewrite public history.
 - History rewriting is safe by default: jj only moves a bookmark after safety checks (the `git push --force-with-lease` analog), so silent force-push accidents don't happen.
 - Immutable by default: trunk, tags, and *untracked* remote bookmarks. A locally tracked remote (e.g. `main` after `jj bookmark track main`) is NOT auto-protected. To protect all pushed commits: `revset-aliases.'immutable_heads()' = 'builtin_immutable_heads() | remote_bookmarks()'` (changes nothing else; note it reshapes the default `jj log` view).
-- Pushes trigger a 1Password SSH-signing approval (sign-on-push). One approval per push is expected, not an error; a denied approval fails the push visibly — retry after the user approves.
 
 ## Conflicts
 
@@ -108,6 +119,8 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - `jj op log` → `jj op restore <op-id>` — recover an earlier repository state (distinct from `jj restore`, which is path-level). Divergent commits (same change id at two spots, shown with `(divergent)`) are recoverable the same way — restore the operation that created them
 - `jj --at-op=<op-id> log` — read-only peek at repo state at an earlier operation, without changing anything
 - Nothing is lost: abandon/restore/rebase are all reversible via the operation log.
+- Accidental edits in a change you `jj edit`ed: `jj evolog <rev>` finds the pre-edit state (jj snapshotted it), `jj restore --from <old-commit-id>` reverts.
+- Accidentally committed onto a pushed bookmark `<bm>`: `jj rebase --branch <bm> --destination <bm>@origin` splits your new edits off the pushed state, `jj new` gives a fresh working copy, `jj abandon <bm> --restore-descendants --retain-bookmarks` drops the accidental commit while keeping your edits — the bookmark returns to the remote position.
 
 ## Workspaces (parallel work, worktree-style)
 
