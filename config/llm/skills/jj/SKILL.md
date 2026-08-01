@@ -31,9 +31,10 @@ description: Use jj (Jujutsu) for version control in repositories with a `.jj/` 
 
 1. `jj new` — new change on top of the current one
 2. `jj describe -m "<message>"` — name the change (message is a plan, written before the code)
-3. Edit files (auto-snapshotted on the next jj command)
-4. `jj new` again — one change per logical unit; keep unrelated work out of the current change
-5. Navigate without revision IDs: `jj prev` / `jj next` (with `-e` edits the target in place; without it creates a new working-copy change on top), `jj edit <rev>`
+3. Record its change ID: `CHANGE_ID=$(jj log -r @ --no-graph -T 'change_id')` — stable across amend/rebase/squash/split while commit IDs and `@` move. Reference it (never `@`-assumptions) to find the change later: `jj show $CHANGE_ID`, `jj edit $CHANGE_ID`.
+4. Edit files (auto-snapshotted on the next jj command)
+5. `jj new` again — one change per logical unit; keep unrelated work out of the current change
+6. Navigate without revision IDs: `jj prev` / `jj next` (with `-e` edits the target in place; without it creates a new working-copy change on top), `jj edit <rev>`
 
 ## Commit selectively (replaces git add -p)
 

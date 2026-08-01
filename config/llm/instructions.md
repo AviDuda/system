@@ -71,6 +71,8 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 
 **File naming:** `YYYY-MM-DD-NN-topic.md` (e.g. `2026-01-11-02-api-design.md`) — NN is the next sequence number for that day, check existing files. Inside the file, use descriptive headers for future search ("MySQL Retry Audit", "Code Review Feedback"), not generic session numbers.
 
+**In jj repos**, include the change ID in the entry (`jj log -r @ --no-graph -T 'change_id'`) — it is stable across rewrites, so a later session can `jj edit <id>` and resume the work.
+
 **Update existing notes when relevant.** If today's work directly continues a recent note (same type of work, same context), append to it instead of creating a new file. Split only when the work is meaningfully different.
 
 **Rename files if needed.** If the conversation evolves and the original topic no longer fits, rename the file to reflect what it actually covers.
