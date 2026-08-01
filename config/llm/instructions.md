@@ -105,9 +105,11 @@ When you discover durable knowledge (patterns, gotchas, architectural decisions)
 
 Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the user approves, suggest `/avi-init-agents`. Before suggesting a promotion, check whether the pattern has come up before — repetition is a signal it belongs somewhere durable.
 
-## Git Commits
+## Version Control
 
-Check `git log --oneline -10` for conventions before committing. Match existing style. Project AGENTS.md commit guidelines override these. Update relevant docs alongside code changes.
+Use jj (Jujutsu) for version-control operations BY DEFAULT (see the `jj` skill). In any repo without `.jj/`, convert with `jj git init` (colocated — git is untouched, `.jj/` is gitignored; revert anytime with `rm -rf .jj`), then operate with jj. Keep raw git mutations read-only in jj repos: jj ignores git's staging area and mixing the two desyncs. Fall back to plain git individually per repo if jj doesn't fit it.
+
+Commit messages: check recent history (`jj log` / `git log --oneline -10`) for conventions before committing. Match existing style. Project AGENTS.md commit guidelines override these. Update relevant docs alongside code changes.
 
 ## Wrapping Up Sessions
 
