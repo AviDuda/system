@@ -237,6 +237,7 @@ in
         # lazygit - managed by programs.lazygit in lazygit.nix
         imagemagick # Image processing
         jq # JSON processor
+        jjui # TUI for Jujutsu (interactive jj)
         just # Command runner (Makefile alternative)
         lynx # Text-based web browser
         # mise - in Homebrew (updates frequently, avoid recompiling Rust)
