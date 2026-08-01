@@ -111,7 +111,7 @@ Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the 
 
 Use jj (Jujutsu) for version-control operations BY DEFAULT (see the `jj` skill). In any repo without `.jj/`, convert with `jj git init` (colocated — git is untouched, `.jj/` is gitignored; revert anytime with `rm -rf .jj`), then operate with jj. Keep raw git mutations read-only in jj repos: jj ignores git's staging area and mixing the two desyncs. Fall back to plain git individually per repo if jj doesn't fit it.
 
-Commit messages: check recent history (`jj log` / `git log --oneline -10`) for conventions before committing. Match existing style. Project AGENTS.md commit guidelines override these. Update relevant docs alongside code changes.
+Commit messages: check recent history (`jj log` / `git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`jj commit <paths>`). Project AGENTS.md guidelines override these. Update docs alongside code changes.
 
 ## Wrapping Up Sessions
 
