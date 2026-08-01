@@ -88,10 +88,10 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - `jj git remote add origin <url>` to attach a remote to a converted repo (also `jj git remote list/remove/rename/set-url`)
 
 **Push**
-- One-commit-per-PR convention: `jj squash --into <base-change>` or fold the stack before pushing
-- PR flow: `jj bookmark create <name> -r @-`, then `jj git push --bookmark <name>` (new bookmarks push by default in 0.43). Bookmarkless: `jj git push --change <rev>`
-- Direct-to-trunk: `jj bookmark move <trunk> --to @-`, then `jj git push --bookmark <trunk>`
-- Never push to protected/default branches; never rewrite public history. Open PRs from the pushed bookmark with `gh`/`glab`.
+- Use the flow the repo uses — branch + PR, or direct-to-trunk — detected from AGENTS.md / existing branches; don't assume either.
+- Branch + PR: `jj bookmark create <name> -r @-`, then `jj git push --bookmark <name>` (new bookmarks push by default in 0.43); squash the stack into one commit first if that's the repo's convention. Never push to protected/default branches. Opening the PR is the user's call, not the agent's.
+- Direct-to-trunk (repos that push straight to their mainline): `jj bookmark move <trunk> --to @-`, then `jj git push --bookmark <trunk>` — or the `jj sync` / `jj push` aliases.
+- Never rewrite public history.
 - History rewriting is safe by default: jj only moves a bookmark after safety checks (the `git push --force-with-lease` analog), so silent force-push accidents don't happen.
 - Immutable by default: trunk, tags, and *untracked* remote bookmarks. A locally tracked remote (e.g. `main` after `jj bookmark track main`) is NOT auto-protected. To protect all pushed commits: `revset-aliases.'immutable_heads()' = 'builtin_immutable_heads() | remote_bookmarks()'` (changes nothing else; note it reshapes the default `jj log` view).
 - Pushes trigger a 1Password SSH-signing approval (sign-on-push). One approval per push is expected, not an error; a denied approval fails the push visibly — retry after the user approves.
