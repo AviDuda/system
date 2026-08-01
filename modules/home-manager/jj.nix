@@ -26,10 +26,10 @@
         "private-commits" = "description('LOCAL:*') | description('wip:*') | description('private:*')";
       };
       # Aliases: jj aliases run a single command; multi-step flows wrap `jj util exec`.
-      # `trunk()` resolves to the repo's mainline (auto-set to main@origin at `jj git init`;
-      # per-repo override possible). sync never moves bookmarks: `bookmark move` is
-      # unconditional (no fast-forward check), so a divergent local bookmark would silently
-      # orphan its commits. Bookmarkless push (`--change @-`) publishes the stack as a branch.
+      # `jj sync` rebases work onto `trunk()` (the repo's mainline, auto-set at `jj git init`).
+      # `jj push` advances the nearest ancestor bookmark to the stack and pushes it: in
+      # direct-to-trunk repos that is main/master; in PR-based repos it is the feature
+      # bookmark (create it first — the PR needs a branch anyway). advance is forward-only.
       # jj refuses to shadow builtins (warning + builtin wins) — when native `jj sync`
       # ships, this alias gets rejected with a warning on every command; delete it then.
       aliases = {
@@ -46,12 +46,17 @@
           "jj git fetch && jj rebase -d 'trunk()'" # quotes: sh would eat the ()
         ];
         push = [
-          "git"
-          "push"
-          "--change"
-          "@-"
+          "util"
+          "exec"
+          "--"
+          "sh"
+          "-c"
+          "jj bookmark advance && jj git push"
         ];
       };
+      # `jj bookmark advance` moves the nearest bookmark to the committed stack, not the
+      # empty working-copy change (docs-recommended for squash workflows).
+      revsets."bookmark-advance-to" = "@-";
       ui = {
         "default-command" = "log"; # bare `jj` shows the log
         paginate = "never"; # agents (and humans) never hang on the pager
