@@ -74,10 +74,21 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - To commit the local change later: `jj rebase -r <local-change> -d <bookmark>` (or onto the work change), drop the marker, push.
 - Untracked new files: jj auto-tracks new files by default. Keep files out of snapshots via `.git/info/exclude` (per-repo, uncommitted) or `.gitignore`; opt back in with `jj file track <path>` (`--include-ignored` force-tracks an ignored file). `jj file untrack` only works on files that are already ignored.
 
-## Push and sync (git stays canonical)
+## Push, pull, and sync (git stays canonical)
 
-- `jj git fetch`, then `jj rebase -d <trunk>@origin`
-- `jj bookmark create <name> -r @-`, then `jj git push --bookmark <name>` (new bookmarks push by default in 0.43; no `--allow-new` flag). Bookmarkless alternative: `jj git push --change <rev>`
+**Pull / sync from upstream**
+- `jj git fetch` — import remote changes (updates `<trunk>@origin`; does NOT move your local `<trunk>` bookmark)
+- Catch the bookmark up to the remote: `jj bookmark move <trunk> --to <trunk>@origin` (fast-forward; use `jj bookmark set <trunk> -r <trunk>@origin` to force when the remote rewrote history)
+- Rebase your work onto the new position: `jj rebase -d <trunk>` (current change) or `jj rebase -s 'all:roots(trunk()..mutable())' -d <trunk>` for a whole stack; add `--skip-emptied` to drop changes the rebase emptied
+- Resolve any conflicts (see Conflicts), then `jj status` until clean
+
+**Fresh repos**
+- `jj git remote add origin <url>` to attach a remote to a converted repo (also `jj git remote list/remove/rename/set-url`)
+
+**Push**
+- One-commit-per-PR convention: `jj squash --into <base-change>` or fold the stack before pushing
+- PR flow: `jj bookmark create <name> -r @-`, then `jj git push --bookmark <name>` (new bookmarks push by default in 0.43). Bookmarkless: `jj git push --change <rev>`
+- Direct-to-trunk: `jj bookmark move <trunk> --to @-`, then `jj git push --bookmark <trunk>`
 - Never push to protected/default branches; never rewrite public history. Open PRs from the pushed bookmark with `gh`/`glab`.
 - History rewriting is safe by default: jj only moves a bookmark after safety checks (the `git push --force-with-lease` analog), so silent force-push accidents don't happen.
 - Immutable by default: trunk, tags, and *untracked* remote bookmarks. A locally tracked remote (e.g. `main` after `jj bookmark track main`) is NOT auto-protected. To protect all pushed commits: `revset-aliases.'immutable_heads()' = 'builtin_immutable_heads() | remote_bookmarks()'` (changes nothing else; note it reshapes the default `jj log` view).
