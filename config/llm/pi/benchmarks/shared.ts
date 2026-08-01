@@ -20,12 +20,8 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  getModels as getBuiltinModels,
-  getProviders as getBuiltinProviders,
-  getEnvApiKey,
-  type KnownProvider,
-} from "@earendil-works/pi-ai/compat";
+import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
+import { type BuiltinProvider, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // ── Config types ──
@@ -151,10 +147,10 @@ export function resolveRoleModels(
   }
 
   // Build a lookup of built-in models by "provider/id"
-  const builtInProviders = new Set<string>(getBuiltinProviders());
+  const builtInProviders = new Set(getBuiltinProviders());
   const builtInLookup = new Map<string, { baseUrl: string; name?: string }>();
   for (const provider of builtInProviders) {
-    for (const m of getBuiltinModels(provider as KnownProvider)) {
+    for (const m of getBuiltinModels(provider)) {
       builtInLookup.set(`${provider}/${m.id}`, { baseUrl: m.baseUrl, name: m.name });
     }
   }
@@ -191,7 +187,7 @@ export function resolveRoleModels(
     if (!baseUrl) {
       throw new Error(
         `Model "${entry.ref}" not found in models.json or built-in providers. ` +
-          `Provider "${providerName}" is ${builtInProviders.has(providerName) ? "built-in" : "custom"}.`,
+          `Provider "${providerName}" is ${builtInProviders.has(providerName as BuiltinProvider) ? "built-in" : "custom"}.`,
       );
     }
 
