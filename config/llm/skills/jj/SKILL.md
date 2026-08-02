@@ -57,6 +57,12 @@ jj has no staging area — the working-copy change holds every change. Select wh
 - `jj split <paths>... -m "<msg>"` — carve paths out of a change without interactive UI
 - `jj absorb` — move hunks into the nearest mutable ancestor that introduced those lines; leaves unrelated changes alone
 
+## Signing
+
+- `jj sign -r <rev>` signs a commit (SSH key; one approval per sign).
+- After `jj commit`, the working copy is a fresh empty change on top — the commit you just made is `@-`, not `@`. Sign it with `jj sign -r @-`.
+- Signing rewrites the commit and rebases descendants; sign immediately after commit while `@-` still points at it.
+
 ## History editing (reversible)
 
 **Restructure and combine**
