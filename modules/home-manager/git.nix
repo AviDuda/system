@@ -34,7 +34,7 @@
 
     ignores = [
       ".DS_Store"
-      ".jj/" # Jujutsu colocated repo state
+      ".jj" # Jujutsu colocated repo state
       "AGENTS.local.md"
       "CLAUDE.local.md"
       "mise.local.toml"
