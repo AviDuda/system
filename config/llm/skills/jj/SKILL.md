@@ -15,6 +15,7 @@ description: Use jj (Jujutsu) for version control in repositories with a `.jj/` 
 
 - Always pass `-m "<msg>"` to `describe`/`commit`/`squash`/`new`. Never run bare interactive forms (`jj describe`, `jj commit`, `jj squash`, `jj split`, `jj resolve`, `jj diffedit`) — they open an editor or TUI and hang non-interactive agents.
 - Use `--no-pager` on output commands (user config sets `ui.paginate = never`, but belt-and-braces).
+- Never pipe jj output through `head`/`tail`/`grep` — SIGPIPE kills the process mid-operation (Rust `SIG_IGN` issue) and can abort the op after partial output. Dump full output.
 - jj snapshots the working copy when a jj command runs, not on every file write. To capture file state, run any jj command.
 - After history mutations (squash/rebase/abandon/split/restore), run `jj status` to verify state.
 
