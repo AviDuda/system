@@ -120,6 +120,8 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 
 - `jj status` lists conflicted files (`jj resolve --list` enumerates them); conflict content contains both sides marked with descriptions.
 - Agent context: edit conflicted files directly, remove markers, then verify with `jj status` until clean. Interactive `jj resolve` hangs agents.
+- "N-sided conflict including 1 deletion" can be a **rename**, not a deletion — the other side renamed the file (the deleting commit's diff stat shows `Modified (old => new)`). Before resolving "keep the deletion", check whether the file lives on under a new name with the same identity/purpose; if so, keep the deletion AND re-apply the change to the new path. Re-adding the deleted path silently drops the change's intent.
+- Resolving the bottom conflicted commit clears inherited conflicts up the stack: `jj new <bottom>` (jj's own hint), edit the conflicted files (`jj status` flips to "Conflict in parent commit has been resolved in working copy"), then `jj squash --into <commit> -m "<msg>"` — jj auto-rebases descendants and reports "Existing conflicts were resolved or abandoned". `jj edit <top>` to put the working copy back.
 - Conflicts are first-class data: rebases and merges never abort.
 
 ## Recovery
