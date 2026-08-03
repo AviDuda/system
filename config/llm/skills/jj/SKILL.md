@@ -23,6 +23,8 @@ description: Use jj (Jujutsu) for version control in repositories with a `.jj/` 
 
 - `jj status` — current change and working-copy state
 - `jj log -n 10` — the change graph (bare `jj` = log); `-p` shows patches, `--no-graph` for flat, parsable output
+- **`jj log` default: working copy + 30 newest commits in its ancestry** (`revsets.log = "@ | latest(::@, 30)"` in jj.nix) — full history incl. teammates' pushed work, no elision, no unrelated branches; works on any branch (`::@` is HEAD's ancestry, like `git log`).
+- **`-n` only shrinks, never grows** — it can't exceed the 30-commit revset. More: `jj log -r '::@' -n 100`, or `-r '::@'` for the whole ancestry.
 - `jj show` — diff of the current change
 - `jj diff` / `jj diff -r <rev>`
 - `jj file search <pattern>` and `jj file annotate <path>` — content search and blame across revisions
@@ -136,4 +138,5 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 ## Version drift
 
 - `jj --version`; the CLI moves fast. When a flag misbehaves, run `jj <cmd> --help`. This skill is written against jj 0.43.
+- **Config keys: don't guess, dump the schema.** `jj util config-schema` prints the authoritative JSON schema of every config key (e.g. `revsets.log`, `ui.log-word-wrap`, `git.sign-on-push`). Use it to check whether a key exists before setting it — `log.revset` and `log.limit` are dead keys people reach for, and the schema is the only quick way to confirm a key's real name/scope. `jj config get <key>` only proves the value is stored, not that it's read.
 - See `git-map.md` in this skill's references for the command-by-command git equivalence table.
