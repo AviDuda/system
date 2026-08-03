@@ -62,6 +62,11 @@
         paginate = "never"; # agents (and humans) never hang on the pager
         "show-cryptographic-signatures" = true;
       };
+      # git-log-like default: the working copy plus the 30 newest commits in
+      # its own ancestry. Full history (teammates' pushed work included, no
+      # elision) without dumping the whole history or unrelated branches.
+      # Works on any branch: `::@` is HEAD's ancestry, like `git log`.
+      revsets."log" = "@ | latest(::@, 30)";
     };
   };
 }
