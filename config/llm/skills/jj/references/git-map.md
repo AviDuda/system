@@ -20,7 +20,8 @@
 | show a commit | `git show <rev>` | `jj show -r <rev>` |
 | diff | `git diff` | `jj diff` |
 | push | `git push` | `jj git push --bookmark <name>` |
-| pull | `git pull --rebase` | `jj git fetch` → `jj bookmark move <trunk> --to <trunk>@origin` → `jj rebase -d <trunk>` |
+| fetch | `git fetch` | `jj fetch` (alias = `jj git fetch`) |
+| pull | `git pull --rebase` | `jj sync` (alias = fetch + rebase -d trunk()) |
 | squash before push | `git rebase -i` + squash | `jj squash` (fold into `@-`) |
 | split a commit | `git reset HEAD^` + `git add -p` | `jj split<paths>` / `jj split -i` |
 | revert a change | `git revert <rev>` | `jj revert <rev>` |

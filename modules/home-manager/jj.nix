@@ -33,7 +33,7 @@
       # jj refuses to shadow builtins (warning + builtin wins) — when native `jj sync`
       # ships, this alias gets rejected with a warning on every command; delete it then.
       aliases = {
-        pull = [
+        fetch = [
           "git"
           "fetch"
         ];

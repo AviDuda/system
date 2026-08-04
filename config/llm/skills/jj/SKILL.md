@@ -100,10 +100,11 @@ The user config refuses to push changes whose descriptions start `LOCAL:` / `wip
 - Untracked new files: jj auto-tracks new files by default. Keep files out of snapshots via `.git/info/exclude` (per-repo, uncommitted) or `.gitignore`; opt back in with `jj file track <path>` (`--include-ignored` force-tracks an ignored file). `jj file untrack` only works on files that are already ignored.
 - New files >1MiB are refused at snapshot time (`snapshot.max-new-file-size`, default 1MiB) with a warning + hint listing the fixes. To track one deliberately: `jj file track --include-ignored <path>`. To raise the limit: `jj config set --repo snapshot.max-new-file-size <bytes>` (per-repo) or `jj --config snapshot.max-new-file-size=<bytes>` for one command.
 
-## Push, pull, and sync (git stays canonical)
+## Push, fetch, and sync (git stays canonical)
 
-**Pull / sync from upstream**
+**Fetch / sync from upstream**
 - The user config defines `jj sync` (fetch + rebase your work onto the repo's `trunk()`) and `jj push` (advance the nearest ancestor bookmark to the stack and push it — the trunk bookmark in direct-to-trunk repos, a feature bookmark in PR-based repos; create the feature bookmark before pushing there). Use those for the daily loop; the raw commands below are what they do.
+- `jj fetch` (alias = `jj git fetch`) — download remote changes *only*; touches none of your stack. The daily loop is `jj sync`, not this — `sync` is fetch + rebase. Reach for `jj fetch` when you want refs updated without touching the working stack (rare).
 - `jj git fetch` — import remote changes. Fast-forwards your local `<trunk>` bookmark when it's behind but an ancestor of the remote position (the common case); a divergent local bookmark (local commits on it) is left in place and marked `(conflicted)`.
 - Resolve a divergent bookmark: `jj bookmark set <trunk> -r <trunk>@origin` to discard local bookmark movement, or resolve the conflict to keep local commits.
 - Rebase your work onto the new position: `jj rebase -d <trunk>` (current change) or `jj rebase -s 'all:roots(trunk()..mutable())' -d <trunk>` for a whole stack; add `--skip-emptied` to drop changes the rebase emptied
