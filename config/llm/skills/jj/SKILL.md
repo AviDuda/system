@@ -29,6 +29,10 @@ description: Use jj (Jujutsu) for version control in repositories with a `.jj/` 
 - `jj diff` / `jj diff -r <rev>`
 - `jj file search <pattern>` and `jj file annotate <path>` — content search and blame across revisions
 - `jj interdiff <from-change> <to-change>` — show what changed *between* two versions of a change (e.g. before/after review feedback)
+- **`jj log -T <template>`: joined fields need explicit separators.** `-T 'change_id'` (single field) works, but concatenating fields is a parse error unless joined with `++`: `-T 'commit_id.short(6) ++ " " ++ author.name() ++ " " ++ description.first_line()'`. Missing the `++ " "` between fields → "Failed to parse template: Syntax error" with a caret at the gap.
+- **`author` (and `committer`) is a `Signature`, not a string.** `author.name()`, `author.email()`, `author.timestamp().ago()` work; `author.short()`/`author.shortest()` do not ("Method `short` doesn't exist for type `Signature`"). For a short author label use `author.name()`.
+- **`jj show` is not `jj log`.** It takes a revset positional; it has no `--no-graph` (log-only) and no `-p`/`--patch` flag ("unexpected argument '-p'"). Use `jj show -s`/`--stat`/`-T` instead of patch flags.
+- **Revset functions need `()` in `-r`/revsets too, and must be quoted against the shell** (`-r 'trunk()'` for a function; `-r @` works bare, but `jj show trunk()` unquoted is a shell error, and bare `trunk` without parens is a literal-revision lookup that fails "Revision `trunk` doesn't exist").
 
 ## Daily loop (squash workflow)
 
