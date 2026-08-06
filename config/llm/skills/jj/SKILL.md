@@ -77,6 +77,7 @@ jj has no staging area — the working-copy change holds every change. Select wh
 - `jj split <paths>... -m` — carve a change apart (`-i` interactive hunks, `-p` splits into siblings)
 - `jj absorb` — move hunks into the nearest mutable ancestor that introduced those lines
 - `jj rebase -r <rev> -d <dest>` — re-parent changes (`--skip-emptied` drops changes the rebase emptied; `-A`/`-B` insert after/before)
+- **`-r` vs `-s`**: `jj rebase -r <rev>` moves the revision *alone*; `-s <rev>` moves it **and its descendants**. If a moved commit is an ancestor of the working copy, `-r` re-roots the working copy away from it and its files vanish from the working tree — the commits stay in the repo (recoverable), but are no longer in `@`'s ancestry. Use `-s` to carry the whole subtree together.
 - `jj duplicate <rev> --destination <target>` — cherry-pick style
 - `jj parallelize` — turn a stack into sibling changes
 
@@ -96,6 +97,9 @@ jj has no staging area — the working-copy change holds every change. Select wh
 The user config refuses to push changes whose descriptions start `LOCAL:` / `wip:` / `private:` (`git.private-commits`).
 
 - Make the local change a **sibling**, not an ancestor: from the base bookmark, `jj new <bookmark>` → `jj describe -m "LOCAL: <what>"` → `jj new <bookmark>` again for real work. Pushing the work change pushes only its chain; the local change is not in it.
+- **Private commits must be descendants of what you push, never ancestors.** jj refuses to push a bookmark whose *ancestry* contains a private commit (`Won't push bookmark <bm>: commit <id> is private`). So local work belongs *on top of* the commit you want to push (or as a sibling), and the bookmark must point at the public commit below the local work.
+- **The `jj push` alias can advance the bookmark onto your private stack.** When `jj push` is `jj bookmark advance && jj git push`, running it with private commits under/in the working-copy stack moves the bookmark onto a private commit, then the push fails, leaving the bookmark mis-pointed. When private commits are in play, place the bookmark explicitly instead: `jj bookmark set <trunk> -r <public-head>` then `jj git push --bookmark <trunk>`. Moving a bookmark backward needs `jj bookmark set <bm> -r <head> --allow-backwards`.
+- **Repair a stack that already built work on top of private commits**: re-parent the work root and its descendants onto the trunk so the private commits become descendants: `jj rebase -s <work-root> -d <trunk>` (use `-s`, not `-r` — see the rebase warning above).
 - To commit the local change later: `jj rebase -r <local-change> -d <bookmark>` (or onto the work change), drop the marker, push.
 - Untracked new files: jj auto-tracks new files by default. Keep files out of snapshots via `.git/info/exclude` (per-repo, uncommitted) or `.gitignore`; opt back in with `jj file track <path>` (`--include-ignored` force-tracks an ignored file). `jj file untrack` only works on files that are already ignored.
 - New files >1MiB are refused at snapshot time (`snapshot.max-new-file-size`, default 1MiB) with a warning + hint listing the fixes. To track one deliberately: `jj file track --include-ignored <path>`. To raise the limit: `jj config set --repo snapshot.max-new-file-size <bytes>` (per-repo) or `jj --config snapshot.max-new-file-size=<bytes>` for one command.
