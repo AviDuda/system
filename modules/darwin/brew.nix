@@ -75,6 +75,7 @@
       }
       "ollama" # LLM runtime (nixpkgs build broken)
       "anomalyco/tap/opencode" # AI coding assistant
+      "openfortivpn" # FortiClient VPN CLI
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
       "pi-coding-agent" # AI coding assistant (not in nixpkgs)
@@ -355,6 +356,7 @@
       "Swift Playground" = 1496833156; # Swift tutorial
       # "Swiftgram: Telegram mod client" = 6471879502; # Telegram mod client # Disabled iPad app
       "Velja" = 1607635845; # Open links in different browsers
+      "Windows App" = 1295203466; # Windows remote desktop
     };
   };
 }
