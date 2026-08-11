@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Test jj-push: with a LOCAL commit above public work, push must advance the
-# trunk bookmark to the PUBLIC head (not the LOCAL head), sign+stamp the pushed
-# commit so its committer equals its author, and leave the LOCAL commit
-# unpushed. Runs in a throwaway /tmp repo with a bare remote.
+# trunk bookmark to the PUBLIC head (not the LOCAL head), sign the pushed
+# commit, leave the LOCAL commit unpushed, AND set the pushed commit's exported
+# git committer equal to its author (the layer GitHub renders). Runs in a
+# throwaway /tmp repo with a bare remote.
 #
 # Override the command under test with PUSH="..." (defaults to `jj push`,
 # the installed alias).
@@ -48,7 +49,17 @@ $PUSH 2>/dev/null
   || { echo "FAIL: origin head not public P"; exit 1; }
 [ "$(jj log -r 'master' -T 'if(signature, "Y", "N")' --no-graph | tr -d ' ')" = "Y" ] \
   || { echo "FAIL: pushed commit not signed"; exit 1; }
-[ "$(jj log -r 'master' -T 'author.timestamp().format("%H:%M:%S") == committer.timestamp().format("%H:%M:%S")' --no-graph | tr -d ' ')" = "true" ] \
-  || { echo "FAIL: committer != author time"; exit 1; }
+# The exported GIT commit (the layer GitHub renders) must carry the author time
+# as its committer. The jj-model committer is not proof: sign-on-push rewrites
+# the git committer to the push instant for any re-signed (stacked) commit, and
+# the jj model can still report committer==author while the git commit shows
+# push-time.
+gai=$(git -C "$REMOTE" log -1 master --format='%ai')
+gci=$(git -C "$REMOTE" log -1 master --format='%ci')
+[ "$gai" = "$gci" ] \
+  || {
+    echo "FAIL: exported git committer ($gci) != author ($gai)"
+    exit 1
+  }
 
-echo "PASS: master at public head, LOCAL unpushed, origin=P, signed, committer==author"
+echo "PASS: master at public head, LOCAL unpushed, origin=P, signed, git committer==author"
