@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# jj reorder: make the trunk bookmark cover ALL public commits and nothing local.
+#
+# Collect every public commit (anything not matching the local markers) from the
+# unpushed stack onto trunk in order, then every LOCAL/wip/private commit on top
+# of that, then the working copy. Advance the trunk() bookmark to the topmost
+# public commit and dry-run the push (no remote mutation). A plain
+# `jj git push --bookmark <bm>` after reviewing the dry-run completes it.
+#
+# Use when public work sits on top of local commits and `jj push` is refused
+# ("commit S is private"), or is interleaved. Assumes one contiguous public run
+# and one contiguous local run.
+#
+# All revsets are computed up front: each rebase mutates the graph, so
+# recomputing after a move would miss the local commits once they are stranded.
+set -e
+PRIV='description("LOCAL:*") | description("wip:*") | description("private:*")'
+ST='::@ & mutable() & ~::trunk() & ~empty()'
+PUB="$ST & ~($PRIV)"
+LOC="$ST & ($PRIV)"
+
+PUBROOT=$(jj log --no-pager -r "latest(roots($PUB), 1)" -T change_id --no-graph | tr -d ' ')
+PHEAD=$(jj log --no-pager -r "latest($PUB, 1)" -T change_id --no-graph | tr -d ' ')
+LOCROOT=$(jj log --no-pager -r "latest(roots($LOC), 1)" -T change_id --no-graph | tr -d ' ')
+LOC_HEAD=$(jj log --no-pager -r "latest($LOC, 1)" -T change_id --no-graph | tr -d ' ')
+
+if [ -z "$PUBROOT" ]; then
+  echo "No public (non-LOCAL) commits above trunk(); nothing to reorder."
+  exit 0
+fi
+
+# 1) move the whole public run (root + descendants) onto trunk
+jj rebase -s "$PUBROOT" -d 'trunk()'
+
+# 2) move the local run on top of the public head
+if [ -n "$LOCROOT" ]; then
+  jj rebase -s "$LOCROOT" -d "$PHEAD"
+fi
+if [ -n "$LOC_HEAD" ]; then
+  TOP="$LOC_HEAD"
+else
+  TOP="$PHEAD"
+fi
+
+# 3) put the working copy back on top
+jj rebase -r @ -d "$TOP"
+
+# 4) advance the trunk bookmark to the public head and dry-run the push
+BM=$(jj bookmark list -r 'trunk()' | awk -F: 'NR==1{print $1}' | tr -d ' ')
+jj bookmark set "$BM" -r "$PHEAD"
+echo "Now push with:"
+echo "  jj git push --bookmark $BM"
+jj git push --bookmark "$BM" --dry-run

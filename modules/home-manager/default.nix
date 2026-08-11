@@ -122,6 +122,8 @@ in
       sops # Secrets management
       typescript # TypeScript compiler
       typescript-language-server # TypeScript/JS language server
+      # jj reorder -- stack local commits below public ones, dry-run the push.
+      (writeShellScriptBin "jj-reorder" (builtins.readFile ./scripts/jj-reorder))
     ])
     ++
       # Stable packages (versions match homebrew)

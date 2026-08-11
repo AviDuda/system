@@ -53,6 +53,17 @@
           "-c"
           "jj bookmark advance && jj git push"
         ];
+        # "reorder": standalone script -- stack ALL local commits (LOCAL/wip/private)
+        # above the public ones, advance the trunk() bookmark to the topmost public
+        # commit, and dry-run the push (no remote mutation). A plain
+        # `jj git push --bookmark <bm>` after reviewing the dry-run completes it.
+        # Implemented in the jj-reorder script, built to PATH from this config.
+        reorder = [
+          "util"
+          "exec"
+          "--"
+          "jj-reorder"
+        ];
       };
       # `jj bookmark advance` moves the nearest bookmark to the committed stack, not the
       # empty working-copy change (docs-recommended for squash workflows).
