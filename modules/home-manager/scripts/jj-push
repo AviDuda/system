@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# jj-push: fix the trunk bookmark to the topmost PUBLIC (non-local) commit,
+# re-sign+stamp the commits being published so their GitHub-visible date equals
+# their author time, then push.
+#
+# The bare `jj git push`/`jj bookmark advance` can land the bookmark on a
+# LOCAL/wip/private head, and sign-on-push rewrites every unpushed unsigned
+# commit with committer = "now", so GitHub shows all commits pushed at once.
+# This instead:
+#   1) advances the bookmark only to the topmost public commit (never a local
+#      head), so private commits stay unpushed,
+#   2) for each commit being published, signs it with JJ_TIMESTAMP = its own
+#      author time (one rewrite that both signs and stamps committer = author;
+#      author time is preserved), so the stored signature covers that content,
+#   3) pushes: sign-on-push finds signatures already present -> no re-rewrite ->
+#      GitHub shows each commit's real author date.
+#
+# --dry-run: report what would be pushed without advancing the bookmark,
+# signing, or pushing.
+set -e
+
+case "${1:-}" in
+  -h|--help|help)
+    echo "usage: jj push [--no-advance] [--dry-run]"
+    echo
+    echo "Push the trunk() bookmark after re-sign+stamping every commit being"
+    echo "published so its committer equals its author time (GitHub then shows the"
+    echo "real author date, not the push instant). The bookmark is first moved to"
+    echo "the topmost public commit so private/local commits are never pushed."
+    echo "Private commits are never pushed."
+    echo "  --no-advance   leave the trunk bookmark where it is; push its current"
+    echo "                 position (no bookmark move)"
+    echo "  --dry-run      report what would be pushed without moving anything,"
+    echo "                 signing, or pushing"
+    exit 0
+    ;;
+esac
+
+dry_run=0
+advance=1
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dry_run=1 ;;
+    --no-advance) advance=0 ;;
+  esac
+done
+
+PRIV=$(jj config get git.private-commits 2>/dev/null || true)
+ST='::@ & mutable() & ~::trunk() & ~empty()'
+if [ -n "$PRIV" ]; then
+  PUB="$ST & ~($PRIV)"
+else
+  PUB="$ST"
+fi
+BM=$(jj bookmark list -r 'trunk()' | awk -F: 'NR==1{print $1}' | tr -d ' ')
+PHEAD=$(jj log --no-pager -r "latest($PUB, 1)" -T change_id --no-graph | tr -d ' ')
+
+if [ -z "$BM" ]; then
+  echo "No trunk() bookmark; nothing to push." >&2
+  exit 1
+fi
+
+if [ "$dry_run" -eq 0 ]; then
+  # move the bookmark to the topmost public commit (not a local head); skip with --no-advance
+  if [ "$advance" -eq 1 ] && [ -n "$PHEAD" ]; then
+    jj bookmark set "$BM" -r "$PHEAD"
+  fi
+
+  # sign + stamp the commits being published
+  for rev in $(jj log --no-pager -r "$BM@origin..$BM" -T 'change_id ++ "\n"' --no-graph | sed '/^$/d'); do
+    ts=$(jj log --no-pager -r "$rev" -T 'author.timestamp().format("%Y-%m-%dT%H:%M:%S%:z")' --no-graph | tr -d ' \r')
+    JJ_TIMESTAMP="$ts" jj sign -r "$rev"
+  done
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+  jj git push --bookmark "$BM" --dry-run
+else
+  jj git push --bookmark "$BM"
+fi

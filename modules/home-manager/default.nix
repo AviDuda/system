@@ -124,6 +124,10 @@ in
       typescript-language-server # TypeScript/JS language server
       # jj reorder -- stack local commits below public ones, dry-run the push.
       (writeShellScriptBin "jj-reorder" (builtins.readFile ./scripts/jj-reorder))
+      # jj-stamp -- rewrite a commit's committer timestamp (reuse via `jj stamp`).
+      (writeShellScriptBin "jj-stamp" (builtins.readFile ./scripts/jj-stamp))
+      # jj-push -- advance trunk to public head, re-sign+stamp, then push.
+      (writeShellScriptBin "jj-push" (builtins.readFile ./scripts/jj-push))
     ])
     ++
       # Stable packages (versions match homebrew)

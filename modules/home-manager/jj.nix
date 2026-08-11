@@ -45,13 +45,15 @@
           "-c"
           "jj git fetch && jj rebase -d 'trunk()'" # quotes: sh would eat the ()
         ];
+        # "push": standalone script -- advance trunk to the top public commit,
+        # re-sign+stamp the commits being pushed so GitHub shows the real author
+        # dates (committer restored to author time), then push. Private commits
+        # are never pushed. --dry-run reports without mutating.
         push = [
           "util"
           "exec"
           "--"
-          "sh"
-          "-c"
-          "jj bookmark advance && jj git push"
+          "jj-push"
         ];
         # "reorder": standalone script -- stack ALL local commits (LOCAL/wip/private)
         # above the public ones, advance the trunk() bookmark to the topmost public
@@ -63,6 +65,14 @@
           "exec"
           "--"
           "jj-reorder"
+        ];
+        # "stamp": rewrite a commit's committer timestamp (set to its author time,
+        # or to an explicit RFC 3339 time). Reused by reorder. See jj-stamp.
+        stamp = [
+          "util"
+          "exec"
+          "--"
+          "jj-stamp"
         ];
       };
       # `jj bookmark advance` moves the nearest bookmark to the committed stack, not the
