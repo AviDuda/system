@@ -126,8 +126,11 @@ in
       (writeShellScriptBin "jj-reorder" (builtins.readFile ./scripts/jj-reorder))
       # jj-stamp -- rewrite a commit's committer timestamp (reuse via `jj stamp`).
       (writeShellScriptBin "jj-stamp" (builtins.readFile ./scripts/jj-stamp))
-      # jj-push -- advance trunk to public head, re-sign+stamp, then push.
+      # jj-push -- advance trunk to public head, sign+push, git-normal dates.
       (writeShellScriptBin "jj-push" (builtins.readFile ./scripts/jj-push))
+      # jj-commit -- git-style commit; reset author date to now for a previously-
+      # empty (auto-created) change so it shows when it was committed.
+      (writeShellScriptBin "jj-commit" (builtins.readFile ./scripts/jj-commit))
     ])
     ++
       # Stable packages (versions match homebrew)

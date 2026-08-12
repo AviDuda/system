@@ -20,8 +20,8 @@ case "${1:-}" in
     echo "usage: jj reorder"
     echo
     echo "Stack all local commits (LOCAL/wip/private) above the public ones, move the"
-    echo "public run onto trunk(), put the working copy on top, restore each moved"
-    echo "commit's committer time to its author time, then dry-run the push."
+    echo "public run onto trunk(), put the working copy on top, advance the trunk()"
+    echo "bookmark to the topmost public commit, then dry-run the push."
     echo
     echo "Completes with:"
     echo "  jj git push --bookmark <trunk>"

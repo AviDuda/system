@@ -45,10 +45,23 @@
           "-c"
           "jj git fetch && jj rebase -d 'trunk()'" # quotes: sh would eat the ()
         ];
-        # "push": standalone script -- advance trunk to the top public commit,
-        # re-sign+stamp the commits being pushed so GitHub shows the real author
-        # dates (committer restored to author time), then push. Private commits
-        # are never pushed. --dry-run reports without mutating.
+        # "c": git-style commit -- describe + move on, then reset the author
+        # timestamp of a previously-empty (auto-created) change to now, so that
+        # change's author date reflects when it was committed rather than when jj
+        # first spawned the empty change. Pre-described work keeps its author
+        # (start) date. Implemented in the jj-commit script, built to PATH from
+        # this config.
+        c = [
+          "util"
+          "exec"
+          "--"
+          "jj-commit"
+        ];
+        # "push": standalone script -- advance trunk to the topmost PUBLIC commit
+        # (never a local/private head) and push it. Signing happens via
+        # git.sign-on-push; GitHub shows the normal git committer (push) date.
+        # Private commits are never pushed. --dry-run reports without mutating.
+        # See the jj-push script for why we don't try to preserve real dates.
         push = [
           "util"
           "exec"

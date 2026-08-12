@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# jj-commit: git-style commit -- describe the change and move on, then reset the
+# author timestamp of a previously-empty (auto-created) change to now, so that
+# change's author date reflects when it was committed rather than when jj first
+# spawned the empty change.
+#
+# jj sets a change's author date when the change is created (often an empty,
+# auto-created working-copy change from `jj new`/`jj commit`) and preserves it
+# forever. So a change committed "now" can show a meaningless older author date.
+# After committing, reset the author to now -- but only for changes that had no
+# description yet (the auto-created-empty case). A change you already described
+# as real work keeps its author (start) date.
+set -euo pipefail
+
+case "${1:-}" in
+  -h|--help|help)
+    echo "usage: jj c [<jj commit args>]"
+    echo
+    echo "Commit like git (describe + move on), then reset the author timestamp"
+    echo "of a previously-empty (auto-created) change to now, so its author date"
+    echo "is when you committed it, not when jj spawned the empty change."
+    echo "Pre-described work keeps its author (start) date."
+    echo "Extra args pass through to jj commit."
+    exit 0
+    ;;
+esac
+
+# Capture the change being committed (@) before `jj commit` moves the working
+# copy to a fresh empty change on top. Its change_id is stable after the commit.
+cid=$(jj log --no-pager -r @ -T change_id --no-graph | tr -d ' ')
+desc=$(jj log --no-pager -r "$cid" -T description --no-graph)
+
+jj commit "$@"
+
+if [ -z "$desc" ]; then
+  jj metaedit --update-author-timestamp -r "$cid"
+fi

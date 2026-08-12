@@ -1,37 +1,39 @@
 #!/usr/bin/env bash
-# jj-push: fix the trunk bookmark to the topmost PUBLIC (non-local) commit,
-# re-sign+stamp the commits being published so their GitHub-visible date equals
-# their author time, then push.
+# jj-push: move the trunk bookmark to the topmost PUBLIC (non-local) commit and
+# push it. Private/local commits (LOCAL:/wip:/private:) are never pushed.
 #
 # The bare `jj git push`/`jj bookmark advance` can land the bookmark on a
-# LOCAL/wip/private head, and sign-on-push rewrites every unpushed unsigned
-# commit with committer = "now", so GitHub shows all commits pushed at once.
-# This instead:
-#   1) advances the bookmark only to the topmost public commit (never a local
-#      head), so private commits stay unpushed,
-#   2) for each commit being published, signs it with JJ_TIMESTAMP = its own
-#      author time (one rewrite that both signs and stamps committer = author;
-#      author time is preserved), so the stored signature covers that content,
-#   3) pushes: sign-on-push finds signatures already present -> no re-rewrite ->
-#      GitHub shows each commit's real author date.
+# LOCAL/wip/private head. This instead advances the bookmark only to the topmost
+# public commit (never a local head), so private commits stay unpushed, then
+# pushes. Signing happens via git.sign-on-push; GitHub shows the normal git
+# committer (push) date.
 #
-# --dry-run: report what would be pushed without advancing the bookmark,
-# signing, or pushing.
+# Why we don't try to preserve the real per-commit dates: jj bumps the committer
+# to "now" on every rewrite (rebase/sign), and GitHub renders the committer date.
+# So any rebase or push of a stacked run collapses every commit's shown date to
+# the push instant. Making the committer equal the author only survives for a
+# lone leaf commit -- for a real stack (the common case here, with private
+# commits above) sign-on-push re-signs and resets it anyway. And when it does
+# survive, a fresh commit shows its author time (= when the change was created,
+# possibly an auto-created empty change), which can make a just-pushed commit
+# look hours old. So we accept git's normal committer date: a batch you push
+# shows the push time, which is what git users expect.
+#
+# --dry-run: report what would be pushed without advancing the bookmark or
+# pushing.
 set -e
 
 case "${1:-}" in
   -h|--help|help)
     echo "usage: jj push [--no-advance] [--dry-run]"
     echo
-    echo "Push the trunk() bookmark after re-sign+stamping every commit being"
-    echo "published so its committer equals its author time (GitHub then shows the"
-    echo "real author date, not the push instant). The bookmark is first moved to"
-    echo "the topmost public commit so private/local commits are never pushed."
-    echo "Private commits are never pushed."
+    echo "Push the trunk() bookmark after moving it to the topmost public commit"
+    echo "so private/local commits are never pushed. Signing happens via"
+    echo "git.sign-on-push; GitHub shows the normal git committer (push) date."
     echo "  --no-advance   leave the trunk bookmark where it is; push its current"
     echo "                 position (no bookmark move)"
-    echo "  --dry-run      report what would be pushed without moving anything,"
-    echo "                 signing, or pushing"
+    echo "  --dry-run      report what would be pushed without moving anything, or"
+    echo "                 pushing"
     exit 0
     ;;
 esac
@@ -65,12 +67,6 @@ if [ "$dry_run" -eq 0 ]; then
   if [ "$advance" -eq 1 ] && [ -n "$PHEAD" ]; then
     jj bookmark set "$BM" -r "$PHEAD"
   fi
-
-  # sign + stamp the commits being published
-  for rev in $(jj log --no-pager -r "$BM@origin..$BM" -T 'change_id ++ "\n"' --no-graph | sed '/^$/d'); do
-    ts=$(jj log --no-pager -r "$rev" -T 'author.timestamp().format("%Y-%m-%dT%H:%M:%S%:z")' --no-graph | tr -d ' \r')
-    JJ_TIMESTAMP="$ts" jj sign -r "$rev"
-  done
 fi
 
 if [ "$dry_run" -eq 1 ]; then
