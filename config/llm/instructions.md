@@ -111,6 +111,8 @@ Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the 
 
 Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Project AGENTS.md guidelines override these. Update docs alongside code changes.
 
+**Machine-local changes** (keep working locally, never push): permanent overrides of *tracked* files → `git update-index --skip-worktree <path>` — invisible to status/staging (even `git add -A`); a checkout that would overwrite the file refuses rather than clobbers; revert with `--no-skip-worktree`, list with `git ls-files -v | grep '^S'`, and document it in the repo's `AGENTS.local.md` (it's invisible). In-progress work → a branch; maybe-dead local tooling → `git stash`; brand-new local files → `.git/info/exclude`.
+
 ## Wrapping Up Sessions
 
 When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work.
