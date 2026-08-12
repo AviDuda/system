@@ -71,7 +71,7 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 
 **File naming:** `YYYY-MM-DD-NN-topic.md` (e.g. `2026-01-11-02-api-design.md`) — NN is the next sequence number for that day, check existing files. Inside the file, use descriptive headers for future search ("MySQL Retry Audit", "Code Review Feedback"), not generic session numbers.
 
-**In jj repos**, include the change ID in the entry (`jj log -r @ --no-graph -T 'change_id'`) — it is stable across rewrites, so a later session can `jj edit <id>` and resume the work.
+**Version control:** include the commit hash (or reflog state) in the entry so a later session can find and resume the work.
 
 **Update existing notes when relevant.** If today's work directly continues a recent note (same type of work, same context), append to it instead of creating a new file. Split only when the work is meaningfully different.
 
@@ -109,9 +109,7 @@ Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the 
 
 ## Version Control
 
-Use jj (Jujutsu) for version-control operations BY DEFAULT (see the `jj` skill). In any repo without `.jj/`, convert with `jj git init` (colocated — git is untouched, `.jj/` is gitignored; revert anytime with `rm -rf .jj`), then operate with jj. Keep raw git mutations read-only in jj repos: jj ignores git's staging area and mixing the two desyncs. Fall back to plain git individually per repo if jj doesn't fit it.
-
-Commit messages: check recent history (`jj log` / `git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`jj commit <paths>`). Project AGENTS.md guidelines override these. Update docs alongside code changes.
+Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Project AGENTS.md guidelines override these. Update docs alongside code changes.
 
 ## Wrapping Up Sessions
 

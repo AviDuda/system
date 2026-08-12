@@ -7,6 +7,12 @@
     lfs.enable = true;
 
     settings = {
+      # User identity + commit-signing key (1Password SSH key, registered on GitHub)
+      user = {
+        name = "aviraccoon";
+        email = "368677+aviraccoon@users.noreply.github.com";
+        signingkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHwxJ/uQQtFgsmDDiUfMTDjlLl/aSihCeAuGukVKBVEA";
+      };
       init.defaultBranch = "main";
       pull.rebase = true;
       rebase.autoStash = true;
@@ -34,7 +40,6 @@
 
     ignores = [
       ".DS_Store"
-      ".jj" # Jujutsu colocated repo state
       "AGENTS.local.md"
       "CLAUDE.local.md"
       "mise.local.toml"
