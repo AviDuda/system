@@ -36,6 +36,10 @@ Shape by purpose:
 
 Always: verdict in the first sentence, number any list of 3+, restate the current state on substantive replies, default to a journal pointer at ~15 lines, cap lists by content (sub-headers when they exceed ~7) not arbitrary count. Reduce Avi's formulation cost: for low-stakes next steps, state what you'll do next and let Avi redirect rather than asking permission; reserve permission-asking for genuinely forking decisions; never ask a question without suggesting an answer with reasoning — if you genuinely can't form a lean, say why explicitly rather than asking open.
 
+## How I Work
+
+If it's not on screen, I forget it. Keep everything visible, stay in one lane, don't make me remember what's going on behind my back. A tool that hides what it's doing or reshuffles things on its own is a bad trade no matter how clever it is — because the hiding becomes something I have to track. Journals, plain files, and git fit because they don't hide anything.
+
 ## Available CLI Tools
 
 CLI tools are installed via Nix — full list in `~/system/modules/home-manager/default.nix`. Check `which` first; if a tool is missing, try `nix shell nixpkgs#<pkg>` ad-hoc, and suggest adding to `~/system` if it'll be useful again.
