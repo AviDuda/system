@@ -32,6 +32,7 @@ import {
   notifySaved,
   openFile,
   type SymbolInformation,
+  serverUriFor,
   syncFile,
   translateLocationUri,
   translateWorkspaceEdit,
@@ -814,7 +815,9 @@ export default function (pi: ExtensionAPI) {
       try {
         await openFile(client, abs);
 
-        const uri = fileToUri(abs);
+        // Requests must carry the server's view of the path (container-translated
+        // when mapped); host paths are for display and host-keyed maps only.
+        const uri = serverUriFor(client, abs);
 
         // Fetch document symbols for semantic position resolution.
         // The server is already parsing the file from openFile, so this is fast.
@@ -965,7 +968,7 @@ export default function (pi: ExtensionAPI) {
               if (msg.includes("timed out")) {
                 coldServers.set(server.name, Date.now());
                 return text(
-                  `${server.name} is still indexing ${path.relative(ctx.cwd, abs)} (timed out after ${LSP_REQUEST_TIMEOUT_MS / 1000}s). The file analysis continues in the background — try again immediately, or use read with offset/limit in the meantime.`,
+                  `${serverDisplayName(server.name)} is still indexing ${path.relative(ctx.cwd, abs)} (timed out after ${LSP_REQUEST_TIMEOUT_MS / 1000}s). The file analysis continues in the background — try again immediately, or use read with offset/limit in the meantime.`,
                 );
               }
               throw err;
@@ -1131,7 +1134,7 @@ export default function (pi: ExtensionAPI) {
         const transientHint = /\(-32602\)|\(-32801\)/.test(msg)
           ? " This is often transient (the server may still be indexing after opening the file) — retry, or run `references` first to warm the index and confirm the symbol resolves."
           : "";
-        return text(`LSP error (${server.name}): ${msg}${transientHint}`);
+        return text(`LSP error (${serverDisplayName(server.name)}): ${msg}${transientHint}`);
       }
     },
 

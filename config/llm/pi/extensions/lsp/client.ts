@@ -398,7 +398,7 @@ export function uriToFile(uri: string): string {
 }
 
 /** Build the URI to SEND to the server for a host file path (container-translated when mapped). */
-function serverUriFor(client: LspClient, filePath: string): string {
+export function serverUriFor(client: LspClient, filePath: string): string {
   return fileToUri(pathToServer(filePath, client.pathMap));
 }
 
