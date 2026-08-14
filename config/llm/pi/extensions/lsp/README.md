@@ -161,8 +161,21 @@ When a project has a running `.devcontainer/`, language servers can run **inside
 
 Auto-detected when `.devcontainer/` exists and a container with the server binary is running; falls back to host otherwise. Override: `.lsp/devcontainer.json` `{ "disabled": true }`, `.lsp/<server>.json` `_container` (force a service), `_containerInstall` (install the binary in the container if missing).
 
+### TypeScript 7 (native) vs classic TS ≤6
+
+TypeScript 7 is the native Go build ("typescript-go") and ships **no `lib/tsserver.js`** — the classic `typescript-language-server` cannot run against it at all (its version resolver fails with `Could not find a valid TypeScript installation`). TS7 ships its own LSP: `tsc --lsp --stdio`.
+
+The extension auto-detects the flavor per server root and picks the right command. Mixed setups work: each file roots at its nearest `package.json`/`tsconfig.json`, so a monorepo with a TS5 package and a TS7 package gets two servers with the right flavor each. Escape hatch: `.lsp/typescript-language-server.json` `_command`/`_args` override the auto-detection.
+
 <details>
-<summary>How it works</summary>
+<summary>How flavor detection works</summary>
+
+It walks up from the server root to the nearest `node_modules/typescript` (inside the container when one is used, else on the host) — `lib/tsserver.js` present ⇒ classic (`typescript-language-server`), absent ⇒ TS7 (`tsc --lsp --stdio`). The devcontainer container-probe looks for `tsc`, so `_containerInstall` for TypeScript projects should install **both** `typescript-language-server` and `typescript` — a fresh container for a TS ≤6 project still needs the classic server after detection picks it. The TS7 native server reports diagnostics via the pull model (`textDocument/diagnostic`) instead of pushing; the client polls after opens/edits/saves/watcher events when the server advertises `diagnosticProvider`.
+
+</details>
+
+<details>
+<summary>How devcontainer mode works</summary>
 
 On first use, the extension scans running containers and picks the one that bind-mounts the project root and has (or can install) the binary — probing each, so multi-service devcontainers work, not just the `service` in `devcontainer.json`. The server is spawned via `docker exec -i <container> bash -lc 'exec "$@"'`, URIs are translated both directions across the wire, and `processId` is sent as null (some servers crash monitoring it). `_containerInstall` runs as the container user (prefix `sudo` if it can't write the install prefix, e.g. `npm`'s global dir); if undeclared, a warning shows via `ctx.ui.notify` and it falls back to host for the session. `lsp status` / `/lsp` annotate each server with `[host]` or `[container:<name>]`.
 

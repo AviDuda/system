@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findProjectRoot } from "./client";
+import { type Diagnostic, diagnosticsFromPullReport, findProjectRoot } from "./client";
 
 describe("findProjectRoot", () => {
   test("finds root with Cargo.toml marker", () => {
@@ -72,5 +72,32 @@ describe("findProjectRoot", () => {
     expect(result).toBe(tmpRoot);
 
     fs.rmSync(tmpRoot, { recursive: true });
+  });
+});
+
+describe("diagnosticsFromPullReport", () => {
+  const diag = (msg: string): Diagnostic => ({
+    message: msg,
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+  });
+
+  test("full report returns its items", () => {
+    const items = [diag("a"), diag("b")];
+    expect(diagnosticsFromPullReport({ kind: "full", items })).toEqual(items);
+  });
+
+  test("unchanged report returns null (keep current diagnostics)", () => {
+    expect(diagnosticsFromPullReport({ kind: "unchanged", resultId: "x" })).toBeNull();
+  });
+
+  test("malformed payloads return null", () => {
+    expect(diagnosticsFromPullReport(null)).toBeNull();
+    expect(diagnosticsFromPullReport("nope")).toBeNull();
+    expect(diagnosticsFromPullReport({ items: "not-an-array" })).toBeNull();
+  });
+
+  test("non-diagnostic items are filtered out", () => {
+    const items = [diag("ok"), { nope: true }, null];
+    expect(diagnosticsFromPullReport({ kind: "full", items })).toEqual([diag("ok")]);
   });
 });

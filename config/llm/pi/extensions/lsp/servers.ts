@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ServerConfig } from "./client";
 import { hasRootMarkers, resolveCommand } from "./client";
+import type { TsFlavor } from "./devcontainer";
 import { findDevcontainerRoot } from "./devcontainer";
 
 /** Calculate tsserver memory limit: 1/8 of system RAM, min 4096 MB */
@@ -178,6 +179,24 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     rootMarkers: ["Cargo.toml", ".slint"],
   },
 };
+
+/**
+ * TS7 (native) ships its own LSP: `tsc --lsp --stdio`. No Node wrapper needed.
+ * The native server ignores the classic initOptions (maxTsServerMemory,
+ * preferences) — verified harmless. Code actions verified live against tsgo
+ * 7.0.2: quickfixes (e.g. "Add import") work but ONLY when diagnostics are
+ * passed in context.diagnostics (see requestCodeActions); import source
+ * actions (organize/removeUnused/sort) work; type-error quickfixes, fixAll
+ * and refactor are not implemented upstream (typescript-go#4005: TS7 won't
+ * reimplement 100% of classic actions).
+ */
+export const TS7_COMMAND = "tsc";
+export const TS7_ARGS = ["--lsp", "--stdio"];
+
+/** Effective TS server config for the detected flavor. TS ≤6 keeps the classic wrapper. */
+export function configForTsFlavor(config: ServerConfig, flavor: TsFlavor): ServerConfig {
+  return flavor === "ts7" ? { ...config, command: TS7_COMMAND, args: TS7_ARGS } : config;
+}
 
 export interface DetectedServer {
   name: string;

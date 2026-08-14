@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DetectedServer } from "./servers";
 import {
+  configForTsFlavor,
   findServerByExtension,
   getTsServerMemory,
   KNOWN_SERVERS,
@@ -161,5 +162,23 @@ describe("readDisabledServers", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("configForTsFlavor", () => {
+  const base = KNOWN_SERVERS["typescript-language-server"];
+
+  test("ts7 swaps in the native tsc --lsp command, keeping fileTypes/rootMarkers/initOptions", () => {
+    const cfg = configForTsFlavor(base, "ts7");
+    expect(cfg.command).toBe("tsc");
+    expect(cfg.args).toEqual(["--lsp", "--stdio"]);
+    expect(cfg.fileTypes).toBe(base.fileTypes);
+    expect(cfg.rootMarkers).toBe(base.rootMarkers);
+    expect(cfg.initOptions).toBe(base.initOptions);
+  });
+
+  test("ts-classic keeps the typescript-language-server wrapper unchanged", () => {
+    const cfg = configForTsFlavor(base, "ts-classic");
+    expect(cfg).toBe(base);
   });
 });

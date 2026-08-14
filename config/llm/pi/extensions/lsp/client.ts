@@ -53,6 +53,8 @@ export interface LspClient {
   diagnostics: Map<string, Diagnostic[]>;
   /** Monotonic version counter for diagnostics (increments on any publish) */
   diagnosticsVersion: number;
+  /** True when the server advertises pull diagnostics — the client polls after edits. */
+  pullDiagnostics: boolean;
   /** Glob patterns registered by the server via client/registerCapability */
   registeredWatchers: RegisteredWatcher[];
   /** Active work done progress tokens */
@@ -84,6 +86,12 @@ export interface ServerCapabilities {
   codeActionProvider?: boolean | object;
   documentFormattingProvider?: boolean | object;
   renameProvider?: boolean | object;
+  /**
+   * Pull-diagnostics support (`textDocument/diagnostic`). Servers that
+   * advertise this (e.g. the TS7 native LSP) may never push
+   * `textDocument/publishDiagnostics` for source files — the client must ask.
+   */
+  diagnosticProvider?: { identifier?: string; interFileDependencies?: boolean } | boolean;
 }
 
 export interface Position {
@@ -199,7 +207,11 @@ type PendingRequest = {
 function createTransport(proc: ChildProcess) {
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
-  let buffer = "";
+  // Frame parsing operates on BYTES: Content-Length counts bytes, and JSON
+  // bodies may contain multi-byte UTF-8 (e.g. the TS7 native server's markdown
+  // hovers). Accumulating as a string and slicing by Content-Length desyncs
+  // the framing on any non-ASCII message — decode only the fully-sliced body.
+  let buffer = Buffer.alloc(0);
   let contentLength = -1;
   const notificationHandlers = new Map<string, (params: unknown) => void>();
   const requestHandlers = new Map<string, (params: unknown) => unknown>();
@@ -207,25 +219,25 @@ function createTransport(proc: ChildProcess) {
   const stdout = proc.stdout;
   if (!stdout) throw new Error("LSP process has no stdout");
   stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
+    buffer = Buffer.concat([buffer, chunk]);
     while (true) {
       if (contentLength === -1) {
         const headerEnd = buffer.indexOf("\r\n\r\n");
         if (headerEnd === -1) break;
-        const header = buffer.slice(0, headerEnd);
+        const header = buffer.subarray(0, headerEnd).toString("latin1"); // headers are ASCII
         const match = header.match(/Content-Length:\s*(\d+)/i);
         if (!match) {
-          buffer = buffer.slice(headerEnd + 4);
+          buffer = buffer.subarray(headerEnd + 4);
           continue;
         }
         contentLength = parseInt(match[1], 10);
-        buffer = buffer.slice(headerEnd + 4);
+        buffer = buffer.subarray(headerEnd + 4);
       }
 
       if (buffer.length < contentLength) break;
 
-      const body = buffer.slice(0, contentLength);
-      buffer = buffer.slice(contentLength);
+      const body = buffer.subarray(0, contentLength).toString("utf-8");
+      buffer = buffer.subarray(contentLength);
       contentLength = -1;
 
       try {
@@ -350,6 +362,7 @@ const CLIENT_CAPABILITIES = {
     formatting: { dynamicRegistration: false },
     rename: { dynamicRegistration: false, prepareSupport: true },
     publishDiagnostics: { relatedInformation: true },
+    diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
   },
   window: {
     workDoneProgress: true,
@@ -389,6 +402,21 @@ function serverUriFor(client: LspClient, filePath: string): string {
 export function translateLocationUri(uri: string, map: PathMap | null): string {
   if (!map) return uri;
   return fileToUri(pathFromServer(uriToFile(uri), map));
+}
+
+/** Translate a WorkspaceEdit's URIs from server→host (no-op when map is null). */
+export function translateWorkspaceEdit(edit: WorkspaceEdit, map: PathMap | null): WorkspaceEdit {
+  if (!map) return edit;
+  const changes: Record<string, TextEdit[]> = {};
+  for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
+    changes[translateLocationUri(uri, map)] = edits;
+  }
+  const documentChanges = edit.documentChanges?.map((dc) =>
+    dc && typeof dc === "object" && "textDocument" in dc && dc.textDocument
+      ? { ...dc, textDocument: { ...dc.textDocument, uri: translateLocationUri(dc.textDocument.uri, map) } }
+      : dc,
+  );
+  return { changes: Object.keys(changes).length ? changes : undefined, documentChanges };
 }
 
 /**
@@ -714,6 +742,8 @@ export async function createClient(
     pathMap,
     containerName: target?.containerName,
     capabilities: initResult.capabilities,
+    pullDiagnostics:
+      initResult.capabilities.diagnosticProvider !== undefined && initResult.capabilities.diagnosticProvider !== null,
     openFiles,
     diagnostics,
     diagnosticsVersion,
@@ -747,6 +777,75 @@ export async function createClient(
   return client;
 }
 
+// ── Pull diagnostics ──
+
+/**
+ * State for pull-based diagnostics (`textDocument/diagnostic`). Servers that
+ * advertise `diagnosticProvider` — e.g. the TS7 native LSP — don't push
+ * `textDocument/publishDiagnostics` for source files; the client must ask.
+ * After every didOpen/didChange/didSave (and watcher events, since
+ * `interFileDependencies` means one file's diagnostics can change because a
+ * DIFFERENT file changed) we re-pull with a short debounce.
+ */
+interface PullState {
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** Bumped on every scheduled pull; a response is applied only if it is the newest. */
+  seq: number;
+}
+
+const pullStates = new WeakMap<LspClient, Map<string, PullState>>();
+
+const PULL_DEBOUNCE_MS = 250;
+
+/**
+ * Extract the diagnostic items from a pull response. `kind: "full"` replaces
+ * the stored list; `"unchanged"` keeps it (server signals nothing moved).
+ */
+export function diagnosticsFromPullReport(report: unknown): Diagnostic[] | null {
+  if (!report || typeof report !== "object") return null;
+  const r = report as { kind?: string; items?: unknown };
+  if (r.kind === "unchanged") return null;
+  if (!Array.isArray(r.items)) return null;
+  return r.items.filter((d): d is Diagnostic => d !== null && typeof d === "object" && "message" in d && "range" in d);
+}
+
+function scheduleDiagnosticsPull(client: LspClient, hostUri: string): void {
+  if (!client.pullDiagnostics || client.dead) return;
+  let perClient = pullStates.get(client);
+  if (!perClient) {
+    perClient = new Map();
+    pullStates.set(client, perClient);
+  }
+  let state = perClient.get(hostUri);
+  if (!state) {
+    state = { timer: undefined, seq: 0 };
+    perClient.set(hostUri, state);
+  }
+  state.seq++;
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    state.timer = undefined;
+    void runDiagnosticsPull(client, hostUri, state);
+  }, PULL_DEBOUNCE_MS);
+  state.timer.unref?.();
+}
+
+async function runDiagnosticsPull(client: LspClient, hostUri: string, state: PullState): Promise<void> {
+  const seq = state.seq;
+  try {
+    const report = await client.request("textDocument/diagnostic", {
+      textDocument: { uri: serverUriFor(client, uriToFile(hostUri)) },
+    });
+    if (client.dead || seq !== state.seq) return; // superseded by a newer pull
+    const items = diagnosticsFromPullReport(report);
+    if (items === null) return; // unchanged or malformed — keep current
+    client.diagnostics.set(hostUri, items);
+    client.diagnosticsVersion++;
+  } catch {
+    // Server declined/timed out — keep last known diagnostics.
+  }
+}
+
 /**
  * Open a file in the LSP server (textDocument/didOpen). No-op if already open.
  */
@@ -761,6 +860,7 @@ export async function openFile(client: LspClient, filePath: string): Promise<voi
   client.notify("textDocument/didOpen", {
     textDocument: { uri: serverUriFor(client, filePath), languageId, version: 1, text: content },
   });
+  scheduleDiagnosticsPull(client, hostUri);
 }
 
 /**
@@ -786,6 +886,7 @@ export async function syncFile(client: LspClient, filePath: string, content?: st
       contentChanges: [{ text }],
     });
   }
+  scheduleDiagnosticsPull(client, hostUri);
   return text;
 }
 
@@ -814,6 +915,7 @@ export function notifySaved(client: LspClient, filePath: string, text?: string):
   } else {
     client.notify("textDocument/didSave", { textDocument: { uri } });
   }
+  scheduleDiagnosticsPull(client, fileToUri(filePath));
 }
 
 /** FileChangeType from LSP spec */
@@ -836,6 +938,11 @@ export function notifyFileChanges(
       }))
     : changes;
   client.notify("workspace/didChangeWatchedFiles", { changes: mapped });
+  // interFileDependencies: a change to file B can change file A's diagnostics.
+  // Re-pull every open file of this server, not just the changed ones.
+  for (const hostUri of client.openFiles.keys()) {
+    scheduleDiagnosticsPull(client, hostUri);
+  }
 }
 
 /**

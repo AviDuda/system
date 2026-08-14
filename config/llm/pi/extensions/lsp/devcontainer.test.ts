@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ContainerInfo, DockerTransport } from "./devcontainer";
+import type { ContainerInfo, ContainerTarget, DockerTransport } from "./devcontainer";
 import {
+  detectTsFlavor,
   findDevcontainerRoot,
   findMountForHost,
   hasDevcontainer,
@@ -255,6 +256,16 @@ describe("hasDevcontainer / config readers", () => {
         install: "npm install -g my-ls",
       });
 
+      // _command / _args escape hatch
+      fs.writeFileSync(
+        path.join(tmp, ".lsp", "cmd-ls.json"),
+        JSON.stringify({ _command: "tsc", _args: ["--lsp", "--stdio", 42] }),
+      );
+      expect(readServerContainerConfig(tmp, "cmd-ls")).toEqual({
+        command: "tsc",
+        args: ["--lsp", "--stdio"], // non-strings filtered
+      });
+
       // Array form for _containerInstall
       fs.writeFileSync(
         path.join(tmp, ".lsp", "other-ls.json"),
@@ -412,5 +423,83 @@ describe("resolveContainerForServer (mock transport)", () => {
     expect(probeCall?.script.includes("evil")).toBe(false);
     expect(probeCall?.script.includes("rm")).toBe(false);
     expect(probeCall?.positional).toEqual(["bash", "evil;rm -rf /"]);
+  });
+});
+
+describe("detectTsFlavor (host)", () => {
+  const mkTs = (root: string, flavor: "ts5" | "ts7") => {
+    const pkg = path.join(root, "node_modules", "typescript");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "typescript" }));
+    fs.mkdirSync(path.join(pkg, "lib"), { recursive: true });
+    if (flavor === "ts5") fs.writeFileSync(path.join(pkg, "lib", "tsserver.js"), "");
+  };
+
+  test("tsserver.js present => ts-classic; absent => ts7", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-ts-"));
+    try {
+      mkTs(tmp, "ts5");
+      expect(await detectTsFlavor(tmp, null)).toBe("ts-classic");
+      fs.rmSync(path.join(tmp, "node_modules", "typescript", "lib", "tsserver.js"));
+      expect(await detectTsFlavor(tmp, null)).toBe("ts7");
+    } finally {
+      fs.rmSync(tmp, { recursive: true });
+    }
+  });
+
+  test("walks up to the nearest typescript (subproject without its own install)", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-ts-"));
+    try {
+      mkTs(tmp, "ts7"); // repo root on TS7
+      const sub = path.join(tmp, "packages", "a");
+      fs.mkdirSync(sub, { recursive: true });
+      expect(await detectTsFlavor(sub, null)).toBe("ts7");
+      // A nested TS5 package closer to the file wins.
+      mkTs(sub, "ts5");
+      expect(await detectTsFlavor(sub, null)).toBe("ts-classic");
+    } finally {
+      fs.rmSync(tmp, { recursive: true });
+    }
+  });
+
+  test("no typescript anywhere => ts-classic (safe default; native needs positive evidence)", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-ts-"));
+    try {
+      expect(await detectTsFlavor(tmp, null)).toBe("ts-classic");
+    } finally {
+      fs.rmSync(tmp, { recursive: true });
+    }
+  });
+});
+
+describe("detectTsFlavor (container)", () => {
+  test("probes the container at the translated root; failure falls back to ts7", async () => {
+    const calls: Array<{ script: string; positional?: string[] }> = [];
+    const t: DockerTransport = {
+      async listRunningContainers() {
+        return [];
+      },
+      async run(_c, script, positional) {
+        calls.push({ script, positional });
+        return "ts-classic";
+      },
+    };
+    const target: ContainerTarget = {
+      containerName: "app",
+      pathMap: { hostRoot: "/host/root", containerRoot: "/work/root", extra: [] },
+    };
+    expect(await detectTsFlavor("/host/root/sub", target, t)).toBe("ts-classic");
+    expect(calls[0]?.positional).toEqual(["bash", "/work/root/sub"]);
+
+    // Container probe fails (transport throws) => safe default ts-classic.
+    const broken: DockerTransport = {
+      async listRunningContainers() {
+        return [];
+      },
+      async run() {
+        throw new Error("docker down");
+      },
+    };
+    expect(await detectTsFlavor("/host/root", target, broken)).toBe("ts-classic");
   });
 });

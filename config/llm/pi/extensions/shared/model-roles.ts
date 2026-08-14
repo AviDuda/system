@@ -33,6 +33,7 @@ import {
   type Message,
   type Model,
   type ThinkingLevel as PiThinkingLevel,
+  type ProviderHeaders,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -69,7 +70,9 @@ export interface RolesFile {
 export interface ResolvedModel {
   model: Model<Api>;
   apiKey: string | undefined;
-  headers: Record<string, string> | undefined;
+  /** Pass-through from ModelRegistry.getApiKeyAndHeaders — forwarded verbatim to
+   * pi-ai streams. Values may be null (header-deletion markers); do not strip. */
+  headers: ProviderHeaders | undefined;
   thinking: ThinkingLevel;
 }
 

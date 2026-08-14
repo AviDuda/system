@@ -32,6 +32,71 @@ export interface PathMap {
   extra: Array<{ host: string; container: string }>;
 }
 
+/**
+ * TypeScript flavor, decided by the workspace's `typescript` package layout.
+ *
+ * TS7 (the native Go build, "typescript-go") ships NO `lib/tsserver.js` — its
+ * own `tsc --lsp` speaks LSP directly. The classic `typescript-language-server`
+ * spawns `lib/tsserver.js`, so it only works against TS ≤6. When a `typescript`
+ * package is found, `lib/tsserver.js` present ⇒ classic (ts-classic), absent ⇒
+ * native (ts7). No `typescript` anywhere up the tree ⇒ ts-classic — native is
+ * only chosen on positive evidence (a typescript package without tsserver.js),
+ * so a host/container with only a stray classic `tsc` never gets `--lsp`
+ * passed to it (classic tsc has no such flag).
+ */
+export type TsFlavor = "ts7" | "ts-classic";
+
+const TS_FLAVOR_PROBE_SCRIPT = `
+d="$1"
+while true; do
+  if [ -f "$d/node_modules/typescript/package.json" ]; then
+    if [ -f "$d/node_modules/typescript/lib/tsserver.js" ]; then
+      echo ts-classic
+    else
+      echo ts7
+    fi
+    exit 0
+  fi
+  [ "$d" = "/" ] && break
+  d=$(dirname "$d")
+done
+echo ts-classic
+`;
+
+/**
+ * Detect the TypeScript flavor for the project at `root` (host path).
+ * Walks up from the server root looking for the nearest `typescript` package —
+ * the same resolution order the classic server uses (workspace-local first,
+ * then anything resolvable above it). In container mode the probe runs inside
+ * the container (node_modules typically lives only there); on the host it
+ * checks the filesystem directly.
+ */
+export async function detectTsFlavor(
+  root: string,
+  target: ContainerTarget | null,
+  transport?: DockerTransport,
+): Promise<TsFlavor> {
+  if (target) {
+    const containerRoot = pathToServer(root, target.pathMap);
+    try {
+      const t = transport ?? realTransport;
+      const out = await t.run(target.containerName, TS_FLAVOR_PROBE_SCRIPT, ["bash", containerRoot]);
+      return out.trim() === "ts7" ? "ts7" : "ts-classic";
+    } catch {
+      return "ts-classic";
+    }
+  }
+  let dir: string | undefined = path.resolve(root);
+  while (dir) {
+    if (fs.existsSync(path.join(dir, "node_modules", "typescript", "package.json"))) {
+      return fs.existsSync(path.join(dir, "node_modules", "typescript", "lib", "tsserver.js")) ? "ts-classic" : "ts7";
+    }
+    const parent = path.dirname(dir);
+    dir = parent === dir ? undefined : parent;
+  }
+  return "ts-classic";
+}
+
 export interface ContainerTarget {
   containerName: string;
   pathMap: PathMap;
@@ -260,9 +325,13 @@ export interface ServerContainerConfig {
   container?: string;
   /** Install command(s) to run in the container when the binary probe fails. */
   install?: string | string[];
+  /** Override the server binary (escape hatch from auto-detection, e.g. a pinned TS6 tsserver). */
+  command?: string;
+  /** Args for `_command`. Ignored without `_command`. */
+  args?: string[];
 }
 
-/** Read per-server container config from `.lsp/<server>.json` (`_container`, `_containerInstall`). */
+/** Read per-server container config from `.lsp/<server>.json` (`_container`, `_containerInstall`, `_command`, `_args`). */
 export function readServerContainerConfig(cwd: string, serverName: string): ServerContainerConfig {
   const parsed = readJsonFile(path.join(cwd, ".lsp", `${serverName}.json`));
   if (!parsed) return {};
@@ -271,7 +340,11 @@ export function readServerContainerConfig(cwd: string, serverName: string): Serv
     typeof parsed._containerInstall === "string" || Array.isArray(parsed._containerInstall)
       ? (parsed._containerInstall as string | string[])
       : undefined;
-  return { container, install };
+  const command = typeof parsed._command === "string" ? parsed._command : undefined;
+  const args = Array.isArray(parsed._args)
+    ? (parsed._args as unknown[]).filter((a): a is string => typeof a === "string")
+    : undefined;
+  return { container, install, command, args };
 }
 
 // ── Discovery orchestration ──

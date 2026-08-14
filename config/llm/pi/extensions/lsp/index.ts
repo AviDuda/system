@@ -33,11 +33,17 @@ import {
   openFile,
   type SymbolInformation,
   syncFile,
-  type TextEdit,
   translateLocationUri,
+  translateWorkspaceEdit,
   type WorkspaceEdit,
 } from "./client";
-import { type ContainerTarget, type PathMap, resolveServerTarget } from "./devcontainer";
+import {
+  type ContainerTarget,
+  detectTsFlavor,
+  findDevcontainerRoot,
+  readServerContainerConfig,
+  resolveServerTarget,
+} from "./devcontainer";
 import {
   applyWorkspaceEdit,
   extractHoverText,
@@ -53,7 +59,14 @@ import {
   sortDiagnostics,
 } from "./format";
 import { type DetectedLinter, detectLinters, findLinterByExtension, lintersForFile, lintFile } from "./linters";
-import { type DetectedServer, detectServers, findServerByExtension, KNOWN_SERVERS, serversForFile } from "./servers";
+import {
+  configForTsFlavor,
+  type DetectedServer,
+  detectServers,
+  findServerByExtension,
+  KNOWN_SERVERS,
+  serversForFile,
+} from "./servers";
 import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType } from "./watcher";
 
 // ── State ──
@@ -98,24 +111,31 @@ let fileWatcher: FileWatcher | null = null;
 
 // ── Client management ──
 
-/** Translate a WorkspaceEdit's URIs from server→host (no-op when map is null). */
-function translateWorkspaceEdit(edit: WorkspaceEdit, map: PathMap | null): WorkspaceEdit {
-  if (!map) return edit;
-  const changes: Record<string, TextEdit[]> = {};
-  for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
-    changes[translateLocationUri(uri, map)] = edits;
-  }
-  const documentChanges = edit.documentChanges?.map((dc) =>
-    dc && typeof dc === "object" && "textDocument" in dc && dc.textDocument
-      ? { ...dc, textDocument: { ...dc.textDocument, uri: translateLocationUri(dc.textDocument.uri, map) } }
-      : dc,
-  );
-  return { changes: Object.keys(changes).length ? changes : undefined, documentChanges };
-}
-
 /**
- * Get or create a client for a specific server at a specific root.
+ * Request code actions at a range. `context.diagnostics` carries the file's
+ * known diagnostics on the queried range — required in practice: the TS7
+ * native server returns NOTHING without them (verified live; VS Code passes
+ * them too), and an empty unfiltered response is additionally retried with
+ * the standard kinds since tsgo returns none without `only`.
  */
+async function requestCodeActions(
+  client: LspClient,
+  uri: string,
+  hostFile: string,
+  range: { start: { line: number; character: number }; end: { line: number; character: number } },
+): Promise<CodeAction[]> {
+  const known = client.diagnostics.get(fileToUri(hostFile)) ?? [];
+  const inRange = known.filter((d) => d.range.start.line <= range.end.line && d.range.end.line >= range.start.line);
+  const query = async (only?: string[]) =>
+    (await client.request("textDocument/codeAction", {
+      textDocument: { uri },
+      range,
+      context: { diagnostics: inRange, ...(only ? { only } : {}) },
+    })) as CodeAction[];
+  const raw = await query();
+  if (raw && raw.length > 0) return raw;
+  return query(["quickfix", "refactor", "source"]);
+}
 async function getClientAt(serverName: string, root: string): Promise<LspClient | null> {
   const key = clientKey(serverName, root);
   const existing = clients.get(key);
@@ -125,6 +145,19 @@ async function getClientAt(serverName: string, root: string): Promise<LspClient 
   const config = KNOWN_SERVERS[serverName];
   if (!config) return null;
 
+  // The typescript server's command depends on the workspace's TypeScript
+  // flavor: TS ≤6 runs typescript-language-server (spawns lib/tsserver.js);
+  // TS7 (native) ships no tsserver.js — its own `tsc --lsp` speaks LSP
+  // directly. `.lsp/<server>.json` `_command`/`_args` override the detection.
+  // Containers are probed for `tsc` (globally installed alongside the server
+  // in managed containers, present for BOTH flavors) so container selection is
+  // flavor-independent; the actual spawn command is decided after, when the
+  // workspace (which may live only in the container) can be inspected.
+  const isTsServer = serverName === "typescript-language-server";
+  const lspBase = findDevcontainerRoot(root) ?? root;
+  const srv = readServerContainerConfig(lspBase, serverName);
+  const probeCommand = srv.command ?? (isTsServer ? "tsc" : config.command);
+
   // Resolve a devcontainer target (null = host mode). Cached per session.
   let target: ContainerTarget | null = null;
   const cached = targetCache.get(key);
@@ -132,7 +165,7 @@ async function getClientAt(serverName: string, root: string): Promise<LspClient 
     target = cached.target;
   } else {
     try {
-      target = await resolveServerTarget(root, serverName, config.command, undefined, (msg) => {
+      target = await resolveServerTarget(root, serverName, probeCommand, undefined, (msg) => {
         sessionCtx?.ui.notify(msg, "warning");
       });
     } catch {
@@ -141,8 +174,18 @@ async function getClientAt(serverName: string, root: string): Promise<LspClient 
     targetCache.set(key, { target, expires: Date.now() + TARGET_NULL_TTL_MS });
   }
 
+  // Effective spawn config: explicit `_command`/`_args` win; else auto-detect
+  // the TypeScript flavor (container probe or host fs) and pick the command.
+  let effective = config;
+  if (srv.command) {
+    effective = { ...config, command: srv.command, args: srv.args ?? [] };
+  } else if (isTsServer) {
+    const flavor = await detectTsFlavor(root, target);
+    effective = configForTsFlavor(config, flavor);
+  }
+
   try {
-    const client = await createClient(serverName, config, root, target);
+    const client = await createClient(serverName, effective, root, target);
     client.onProgress = () => updateStatusBarThrottled();
     clients.set(key, client);
     return client;
@@ -989,11 +1032,10 @@ export default function (pi: ExtensionAPI) {
 
           case "codeAction": {
             // Query available code actions at the cursor position
-            const raw = (await client.request("textDocument/codeAction", {
-              textDocument: { uri },
-              range: { start: { line: resolved.line, character: 0 }, end: { line: resolved.line, character: 0 } },
-              context: { diagnostics: [] },
-            })) as Array<{ title: string; kind?: string; isPreferred?: boolean; disabled?: { reason: string } }>;
+            const raw = await requestCodeActions(client, uri, abs, {
+              start: { line: resolved.line, character: 0 },
+              end: { line: resolved.line, character: 0 },
+            });
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
 
@@ -1023,11 +1065,10 @@ export default function (pi: ExtensionAPI) {
             }
 
             // Query available code actions
-            const raw = (await client.request("textDocument/codeAction", {
-              textDocument: { uri },
-              range: { start: { line: resolved.line, character: 0 }, end: { line: resolved.line, character: 0 } },
-              context: { diagnostics: [] },
-            })) as CodeAction[];
+            const raw = await requestCodeActions(client, uri, abs, {
+              start: { line: resolved.line, character: 0 },
+              end: { line: resolved.line, character: 0 },
+            });
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
             if (idx >= raw.length) return text(`Invalid index ${idx}. Available actions: 0-${raw.length - 1}`);
