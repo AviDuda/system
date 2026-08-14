@@ -9,6 +9,7 @@ import {
   getTsServerMemory,
   KNOWN_SERVERS,
   readDisabledServers,
+  serverDisplayName,
   serversForFile,
 } from "./servers";
 
@@ -180,5 +181,19 @@ describe("configForTsFlavor", () => {
   test("ts-classic keeps the typescript-language-server wrapper unchanged", () => {
     const cfg = configForTsFlavor(base, "ts-classic");
     expect(cfg).toBe(base);
+  });
+});
+
+describe("serverDisplayName", () => {
+  test("declared displayName wins; unknown keys pass through", () => {
+    expect(serverDisplayName("typescript-language-server")).toBe("ts");
+    expect(serverDisplayName("lua-language-server")).toBe("lua-ls");
+    expect(serverDisplayName("rust-analyzer")).toBe("rust-analyzer");
+    expect(serverDisplayName("anything-else")).toBe("anything-else");
+  });
+
+  test("configForTsFlavor preserves displayName", () => {
+    const cfg = configForTsFlavor(KNOWN_SERVERS["typescript-language-server"], "ts7");
+    expect(cfg.displayName).toBe("ts");
   });
 });

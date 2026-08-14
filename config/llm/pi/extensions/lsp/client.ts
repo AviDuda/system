@@ -41,6 +41,8 @@ export interface LspClient {
   proc: ChildProcess;
   /** Server name (for logging) */
   name: string;
+  /** Effective spawn command (command + args, e.g. "tsc --lsp --stdio") — may differ from the server key's default when flavor detection or `_command` overrides picked another binary. */
+  command: string;
   /** Host↔container path map (null = host-local server, no translation). */
   pathMap: PathMap | null;
   /** Container name when running in a devcontainer (null/undefined = host). */
@@ -380,6 +382,8 @@ export interface ServerConfig {
   args?: string[];
   fileTypes: string[];
   rootMarkers: string[];
+  /** Short name for status/footer/diagnostic-header rendering. Keys stay canonical (`.lsp/<key>.json` discovery). */
+  displayName?: string;
   initOptions?: Record<string, unknown>;
   settings?: Record<string, unknown>;
 }
@@ -739,6 +743,7 @@ export async function createClient(
     createdAt: Date.now(),
     proc,
     name,
+    command: [config.command, ...(config.args ?? [])].join(" "),
     pathMap,
     containerName: target?.containerName,
     capabilities: initResult.capabilities,

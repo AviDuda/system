@@ -65,6 +65,7 @@ import {
   detectServers,
   findServerByExtension,
   KNOWN_SERVERS,
+  serverDisplayName,
   serversForFile,
 } from "./servers";
 import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType } from "./watcher";
@@ -253,9 +254,9 @@ function updateStatusBar(): void {
   const activeNames = new Set<string>();
   for (const key of clients.keys()) {
     const { serverName } = parseClientKey(key);
-    activeNames.add(serverName);
+    activeNames.add(serverDisplayName(serverName));
   }
-  for (const s of detectedServers) activeNames.add(s.name);
+  for (const s of detectedServers) activeNames.add(serverDisplayName(s.name));
   for (const l of detectedLinters) activeNames.add(l.name);
   if (activeNames.size === 0) return;
 
@@ -275,7 +276,7 @@ function updateStatusBar(): void {
     if (client.dead) continue;
     for (const wp of client.progress.values()) {
       const pct = wp.percentage !== undefined ? ` ${wp.percentage}%` : "";
-      progressParts.push(`${client.name} ${wp.title}${pct}`);
+      progressParts.push(`${serverDisplayName(client.name)} ${wp.title}${pct}`);
     }
   }
 
@@ -493,7 +494,7 @@ async function getDiagnosticsForFile(
 
     const client = await getClientAt(server.name, rootForServer(server, abs));
     if (!client) continue;
-    sourceNames.push(server.name);
+    sourceNames.push(serverDisplayName(server.name));
 
     const prevVersion = client.diagnosticsVersion;
 
@@ -1212,6 +1213,18 @@ function modeLabel(client: LspClient): string {
 }
 
 /**
+ * Command annotation for status lines: the effective spawn command when it
+ * differs from the server key's default (flavor detection or `_command`
+ * override picked another binary — e.g. `ts (tsc --lsp)` for a TS7 project).
+ */
+function commandLabel(name: string, client: LspClient | undefined): string {
+  if (!client) return "";
+  const def = KNOWN_SERVERS[name];
+  const defaultCmd = def ? [def.command, ...(def.args ?? [])].join(" ") : undefined;
+  return client.command !== defaultCmd ? ` (${client.command})` : "";
+}
+
+/**
  * Unified status report: detected servers at cwd + active clients at OTHER roots
  * (e.g. a subproject's container-routed server) + linters. Shared by the `lsp
  * status` tool action and the `/lsp` command so they can't drift apart. Returns
@@ -1226,7 +1239,8 @@ function statusReport(): string | null {
       const client = clients.get(clientKey(s.name, currentCwd));
       const status =
         client && !client.dead ? `running (${formatUptime(client.createdAt)}) ${modeLabel(client)}` : "available";
-      lines.push(`  ${s.name} (${s.config.fileTypes.join(", ")}) — ${status}`);
+      const cmd = client && !client.dead ? commandLabel(s.name, client) : "";
+      lines.push(`  ${serverDisplayName(s.name)}${cmd} (${s.config.fileTypes.join(", ")}) — ${status}`);
     }
   }
   const otherRoots = [...clients.entries()].filter(([key]) => parseClientKey(key).root !== currentCwd);
@@ -1237,7 +1251,8 @@ function statusReport(): string | null {
       const { serverName, root } = parseClientKey(key);
       const relRoot = path.relative(currentCwd, root);
       const status = !client.dead ? `running (${formatUptime(client.createdAt)}) ${modeLabel(client)}` : "dead";
-      lines.push(`  ${serverName} @ ${relRoot} — ${status}`);
+      const cmd = !client.dead ? commandLabel(serverName, client) : "";
+      lines.push(`  ${serverDisplayName(serverName)}${cmd} @ ${relRoot} — ${status}`);
     }
   }
   if (detectedLinters.length > 0) {

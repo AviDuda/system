@@ -26,6 +26,7 @@ export function getTsServerMemory(): number {
 export const KNOWN_SERVERS: Record<string, ServerConfig> = {
   "typescript-language-server": {
     command: "typescript-language-server",
+    displayName: "ts",
     args: ["--stdio"],
     fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     rootMarkers: ["package.json", "tsconfig.json", "jsconfig.json"],
@@ -94,6 +95,7 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
 
   "lua-language-server": {
     command: "lua-language-server",
+    displayName: "lua-ls",
     args: [],
     fileTypes: [".lua"],
     rootMarkers: [".luarc.json", ".luarc.jsonc", ".stylua.toml"],
@@ -196,6 +198,11 @@ export const TS7_ARGS = ["--lsp", "--stdio"];
 /** Effective TS server config for the detected flavor. TS ≤6 keeps the classic wrapper. */
 export function configForTsFlavor(config: ServerConfig, flavor: TsFlavor): ServerConfig {
   return flavor === "ts7" ? { ...config, command: TS7_COMMAND, args: TS7_ARGS } : config;
+}
+
+/** Display name for a server key — `displayName` when declared, else the key itself. */
+export function serverDisplayName(name: string): string {
+  return KNOWN_SERVERS[name]?.displayName ?? name;
 }
 
 export interface DetectedServer {
