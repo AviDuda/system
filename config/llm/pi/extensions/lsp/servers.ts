@@ -55,6 +55,15 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     allowLazy: false,
   },
 
+  biome: {
+    command: "biome",
+    displayName: "biome",
+    args: ["lsp-proxy"],
+    fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc"],
+    rootMarkers: ["biome.json", "biome.jsonc"],
+    allowLazy: false,
+  },
+
   "rust-analyzer": {
     command: "rust-analyzer",
     args: [],

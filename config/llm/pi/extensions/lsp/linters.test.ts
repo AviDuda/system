@@ -4,11 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DetectedLinter } from "./linters";
 import {
-  biomeOffsetToPosition,
   findLinterByExtension,
   KNOWN_LINTERS,
   lintersForFile,
-  parseBiomeOutput,
   parseGolangciOutput,
   readLinterOverrides,
 } from "./linters";
@@ -16,13 +14,6 @@ import {
 // ── Known linters ──
 
 describe("KNOWN_LINTERS", () => {
-  test("has biome", () => {
-    expect(KNOWN_LINTERS.biome).toBeDefined();
-    expect(KNOWN_LINTERS.biome.command).toBe("biome");
-    expect(KNOWN_LINTERS.biome.fileTypes).toContain(".ts");
-    expect(KNOWN_LINTERS.biome.rootMarkers).toContain("biome.json");
-  });
-
   test("has golangci-lint", () => {
     expect(KNOWN_LINTERS["golangci-lint"]).toBeDefined();
     expect(KNOWN_LINTERS["golangci-lint"].command).toBe("golangci-lint");
@@ -34,7 +25,6 @@ describe("KNOWN_LINTERS", () => {
 
 describe("lintersForFile", () => {
   const detected: DetectedLinter[] = [
-    { name: "biome", config: KNOWN_LINTERS.biome, resolvedCommand: "/usr/bin/biome" },
     {
       name: "golangci-lint",
       config: KNOWN_LINTERS["golangci-lint"],
@@ -42,170 +32,13 @@ describe("lintersForFile", () => {
     },
   ];
 
-  test("matches .ts files to biome", () => {
-    expect(lintersForFile("src/main.ts", detected)).toHaveLength(1);
-    expect(lintersForFile("src/main.ts", detected)[0].name).toBe("biome");
-  });
-
   test("matches .go files to golangci-lint", () => {
     expect(lintersForFile("cmd/main.go", detected)).toHaveLength(1);
     expect(lintersForFile("cmd/main.go", detected)[0].name).toBe("golangci-lint");
   });
 
-  test("matches .json files to biome", () => {
-    expect(lintersForFile("config.json", detected)).toHaveLength(1);
-    expect(lintersForFile("config.json", detected)[0].name).toBe("biome");
-  });
-
   test("returns empty for unknown extensions", () => {
     expect(lintersForFile("file.rs", detected)).toHaveLength(0);
-  });
-});
-
-// ── biomeOffsetToPosition ──
-
-describe("biomeOffsetToPosition", () => {
-  test("first line offset", () => {
-    const pos = biomeOffsetToPosition("const x = 1;", [5, 6]);
-    expect(pos.line).toBe(0);
-    expect(pos.column).toBe(5);
-  });
-
-  test("second line offset", () => {
-    const source = "line one\nline two";
-    // "line two" starts at offset 9, 'l' of 'line' on line 1
-    const pos = biomeOffsetToPosition(source, [9, 13]);
-    expect(pos.line).toBe(1);
-    expect(pos.column).toBe(0);
-  });
-
-  test("null source returns 0:0", () => {
-    const pos = biomeOffsetToPosition(null, [5, 6]);
-    expect(pos.line).toBe(0);
-    expect(pos.column).toBe(0);
-  });
-
-  test("null span returns 0:0", () => {
-    const pos = biomeOffsetToPosition("const x = 1;", null);
-    expect(pos.line).toBe(0);
-    expect(pos.column).toBe(0);
-  });
-});
-
-// ─�� parseBiomeOutput ─���
-
-describe("parseBiomeOutput", () => {
-  test("parses modern biome format (line/column, string message)", () => {
-    const output = JSON.stringify({
-      diagnostics: [
-        {
-          category: "lint/correctness/noUnusedVariables",
-          severity: "warning",
-          message: "This variable unused is unused.",
-          location: {
-            path: "test.ts",
-            start: { line: 5, column: 7 },
-            end: { line: 5, column: 13 },
-          },
-        },
-      ],
-    });
-
-    const diags = parseBiomeOutput(output, "/tmp/test.ts");
-    expect(diags).toHaveLength(1);
-    expect(diags[0].source).toBe("biome");
-    expect(diags[0].code).toBe("lint/correctness/noUnusedVariables");
-    expect(diags[0].severity).toBe(2); // warning
-    expect(diags[0].message).toBe("This variable unused is unused.");
-    expect(diags[0].range.start.line).toBe(4); // 0-based
-    expect(diags[0].range.start.character).toBe(6); // 0-based
-  });
-
-  test("parses legacy biome format (span/sourceCode, structured message)", () => {
-    const output = JSON.stringify({
-      diagnostics: [
-        {
-          category: "lint/correctness/noUnusedVariables",
-          severity: "warning",
-          description: "This variable is unused.",
-          message: [{ content: "This variable is unused." }],
-          location: {
-            path: { file: "/tmp/test.ts" },
-            span: [6, 7],
-            sourceCode: "const x = 1;",
-          },
-        },
-      ],
-    });
-
-    const diags = parseBiomeOutput(output, "/tmp/test.ts");
-    expect(diags).toHaveLength(1);
-    expect(diags[0].message).toBe("This variable is unused.");
-    expect(diags[0].range.start.line).toBe(0);
-    expect(diags[0].range.start.character).toBe(6);
-  });
-
-  test("filters to target file only", () => {
-    const output = JSON.stringify({
-      diagnostics: [
-        {
-          category: "lint/style/useConst",
-          severity: "warning",
-          message: "Use const.",
-          location: {
-            path: "other.ts",
-            start: { line: 1, column: 1 },
-            end: { line: 1, column: 5 },
-          },
-        },
-      ],
-    });
-
-    const diags = parseBiomeOutput(output, "/tmp/test.ts");
-    expect(diags).toHaveLength(0);
-  });
-
-  test("skips informational diagnostics", () => {
-    const output = JSON.stringify({
-      diagnostics: [
-        {
-          category: "info",
-          severity: "information",
-          message: "Just info.",
-          location: {
-            path: "test.ts",
-            start: { line: 1, column: 1 },
-          },
-        },
-      ],
-    });
-
-    const diags = parseBiomeOutput(output, "/tmp/test.ts");
-    expect(diags).toHaveLength(0);
-  });
-
-  test("handles invalid JSON", () => {
-    const diags = parseBiomeOutput("not json", "/tmp/test.ts");
-    expect(diags).toHaveLength(0);
-  });
-
-  test("maps error severity to 1", () => {
-    const output = JSON.stringify({
-      diagnostics: [
-        {
-          category: "parse",
-          severity: "error",
-          message: "Parse error.",
-          location: {
-            path: "test.ts",
-            start: { line: 1, column: 1 },
-          },
-        },
-      ],
-    });
-
-    const diags = parseBiomeOutput(output, "/tmp/test.ts");
-    expect(diags[0].severity).toBe(1);
   });
 });
 
@@ -288,11 +121,11 @@ describe("findLinterByExtension", () => {
   test("returns null when no root marker is present up the tree (binary alone is not enough)", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-lint-"));
     try {
-      const file = path.join(tmp, "x.ts");
+      const file = path.join(tmp, "x.go");
       fs.writeFileSync(file, "");
-      // No biome.json anywhere up the tree → biome must NOT be detected, even if
-      // the binary happens to be on PATH. A globally-installed linter shouldn't
-      // fire in a project that doesn't configure it.
+      // No .golangci.* marker anywhere up the tree → golangci-lint must NOT be
+      // detected, even if the binary happens to be on PATH. A globally-installed
+      // linter shouldn't fire in a project that doesn't configure it.
       expect(findLinterByExtension(file, tmp)).toBeNull();
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -308,10 +141,10 @@ describe("readLinterOverrides", () => {
       fs.mkdirSync(path.join(tmp, ".lsp"));
       fs.writeFileSync(
         path.join(tmp, ".lsp", "linters.json"),
-        JSON.stringify({ enabled: ["biome"], disabled: ["golangci-lint"], ignored: 1 }),
+        JSON.stringify({ enabled: ["custom"], disabled: ["golangci-lint"], ignored: 1 }),
       );
       expect(readLinterOverrides(tmp)).toEqual({
-        enabled: new Set(["biome"]),
+        enabled: new Set(["custom"]),
         disabled: new Set(["golangci-lint"]),
       });
     } finally {
@@ -324,10 +157,10 @@ describe("findLinterByExtension overrides", () => {
   test("disabled suppresses a linter even when its marker is present", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-lint-"));
     try {
-      fs.writeFileSync(path.join(tmp, "biome.json"), "{}"); // marker present
+      fs.writeFileSync(path.join(tmp, ".golangci.yml"), ""); // marker present
       fs.mkdirSync(path.join(tmp, ".lsp"));
-      fs.writeFileSync(path.join(tmp, ".lsp", "linters.json"), JSON.stringify({ disabled: ["biome"] }));
-      const file = path.join(tmp, "x.ts");
+      fs.writeFileSync(path.join(tmp, ".lsp", "linters.json"), JSON.stringify({ disabled: ["golangci-lint"] }));
+      const file = path.join(tmp, "x.go");
       fs.writeFileSync(file, "");
       expect(findLinterByExtension(file, tmp)).toBeNull();
     } finally {

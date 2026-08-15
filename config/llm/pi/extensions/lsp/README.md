@@ -21,7 +21,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 
 Auto-detects common language servers from project markers (TypeScript, Rust, Go, Python, Nix, Swift, Lua, Bash, YAML, TOML, Markdown, C/C++, Zig, and more). The server binary must be on PATH. The full list with file types and root markers lives in `servers.ts` (`KNOWN_SERVERS`).
 
-Linters that speak LSP (oxlint, later Biome) are registered as servers but repo-gated: they only start when the project ships their config marker (`.oxlintrc.json` / `oxlint.config.ts` etc.), and never lazy-start on touch. For a repo without the config that still wants one, force it via `.lsp/servers.json` `{ "enabled": ["oxlint"] }`.
+Linters that speak LSP (oxlint, biome) are registered as servers but repo-gated: they only start when the project ships their config marker (`.oxlintrc.json` / `oxlint.config.ts` / `biome.json` etc.), and never lazy-start on touch. For a repo without the config that still wants one, force it via `.lsp/servers.json` `{ "enabled": ["oxlint"] }`.
 
 ## Commands
 
@@ -177,11 +177,11 @@ For files outside the session cwd, `findProjectRoot` walks up to the nearest roo
 | index.ts | Extension entry point, tool registration, tool_result hooks, file change routing, cold server gating |
 | client.ts | JSON-RPC client over stdio, LSP protocol handling, server request handlers, progress tracking (10s request timeout) |
 | servers.ts | Known server configs, auto-detection, dynamic tsserver memory scaling |
-| linters.ts | CLI linter configs (biome, golangci-lint), detection, JSON output parsing |
+| linters.ts | CLI linter configs (golangci-lint), detection, JSON output parsing |
 | format.ts | Formatting utilities (diagnostics, locations, symbols, hover, workspace edit application) |
 | format.test.ts | Tests for formatting |
 | servers.test.ts | Tests for server configs, file matching, memory scaling |
-| linters.test.ts | Tests for linter configs, biome/golangci-lint output parsing |
+| linters.test.ts | Tests for linter configs, golangci-lint output parsing |
 | client.test.ts | Tests for project root detection |
 
 ## Per-project configuration (`.lsp/` directory)
@@ -208,10 +208,10 @@ Deep-merged into the server's `initializationOptions`. Reserved keys: `_comment`
 ### `.lsp/linters.json` — enable/disable linters
 
 ```jsonc
-{ "enabled": ["biome"], "disabled": ["golangci-lint"] }
+{ "disabled": ["golangci-lint"] }
 ```
 
-A linter runs only where its root marker is present by default. `enabled` forces it without the marker; `disabled` suppresses it. Priority: `disabled` > `enabled` > marker.
+A linter runs only where its root marker is present by default. `enabled` forces it without the marker; `disabled` suppresses it. Priority: `disabled` > `enabled` > marker. LSP-based linters (oxlint, biome) use `.lsp/servers.json` instead.
 
 ### `.lsp/servers.json` — disable servers
 
@@ -271,7 +271,7 @@ The server binary must be on PATH. Install via nix in `modules/home-manager/defa
 
 ## Adding new linters
 
-Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBiome` / `runGolangciLint` for examples. Linters use `child_process.execFile` (not `Bun.spawn` -- pi runs in Node, not Bun). A linter runs only where its root marker is present (override via `.lsp/linters.json`).
+Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runGolangciLint` for an example. Linters use `child_process.execFile` (not `Bun.spawn` -- pi runs in Node, not Bun). A linter runs only where its root marker is present (override via `.lsp/linters.json`).
 
 ## Code actions
 

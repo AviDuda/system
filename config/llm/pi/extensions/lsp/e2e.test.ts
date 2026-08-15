@@ -352,6 +352,29 @@ d("e2e", () => {
     60_000,
   );
 
+  test.skipIf(!hasBinary("biome"))(
+    "biome: push diagnostics on open, and re-push on change",
+    async () => {
+      const root = mkFixture("biome", {
+        "biome.json": '{"files":{"includes":["**"]},"linter":{"rules":{"recommended":true}}}',
+        "bad.ts": "export function greet(name: string): string {\n  return name;\n}\n", // clean
+      });
+      const client = await startServer("biome", root);
+      const file = path.join(root, "bad.ts");
+      await syncFile(client, file); // open clean
+      // let the server settle, then confirm no no-debugger lint yet
+      await new Promise((r) => setTimeout(r, 2000));
+      expect((client.diagnostics.get(fileToUri(file)) ?? []).every((d) => !d.message.includes("debugger"))).toBe(true);
+      // introduce a lint via change + save (the extension's post-edit path)
+      const broken = "export function greet(name: string): string {\n  debugger;\n  return name;\n}\n";
+      await syncFile(client, file, broken);
+      notifySaved(client, file, broken);
+      const diags = await waitForDiagnostics(client, file, 1, 20_000);
+      expect(diags.some((d) => d.message.includes("debugger"))).toBe(true);
+    },
+    60_000,
+  );
+
   test.skipIf(!hasBinary("taplo"))(
     "taplo: toml document symbols",
     () =>

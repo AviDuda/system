@@ -71,6 +71,20 @@ describe("KNOWN_SERVERS", () => {
     }
     expect(ox.allowLazy).toBe(false);
   });
+
+  test("has biome, repo-gated via lsp-proxy and never lazy-starts", () => {
+    const b = KNOWN_SERVERS.biome;
+    expect(b).toBeDefined();
+    expect(b.command).toBe("biome");
+    expect(b.args).toEqual(["lsp-proxy"]);
+    expect(b.fileTypes).toContain(".ts");
+    expect(b.fileTypes).toContain(".js");
+    expect(b.fileTypes).toContain(".json");
+    expect(b.fileTypes).toContain(".jsonc");
+    expect(b.rootMarkers).toContain("biome.json");
+    expect(b.rootMarkers).toContain("biome.jsonc");
+    expect(b.allowLazy).toBe(false);
+  });
 });
 
 describe("serversForFile", () => {

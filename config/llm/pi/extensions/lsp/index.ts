@@ -308,7 +308,7 @@ function getServersForFile(filePath: string): DetectedServer[] {
 }
 
 /**
- * Repo-gated linters (oxlint, later biome) serve any file whose tree carries
+ * Repo-gated linters (oxlint, biome) serve any file whose tree carries
  * their config marker (or an `enabled` override), even when the session started
  * in a different directory. Detect on first touch and cache in detectedServers
  * so later calls are stable.
