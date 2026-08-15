@@ -85,6 +85,7 @@ export interface ServerCapabilities {
   referencesProvider?: boolean | object;
   documentSymbolProvider?: boolean | object;
   workspaceSymbolProvider?: boolean | object;
+  callHierarchyProvider?: boolean | object;
   codeActionProvider?: boolean | object;
   documentFormattingProvider?: boolean | object;
   renameProvider?: boolean | object;
@@ -141,8 +142,7 @@ export interface WorkspaceEdit {
   documentChanges?: Array<TextDocumentEdit | CreateFile | RenameFile | DeleteFile>;
 }
 
-/** LSP resource operations. Only `TextDocumentEdit` carries edits we apply;
- * file create/rename/delete are reported as unsupported rather than executed. */
+/** LSP resource operations — executed by applyWorkspaceEdit. */
 export interface CreateFile {
   kind: "create";
   uri: string;
@@ -188,6 +188,29 @@ export interface SymbolInformation {
   kind: number;
   location: Location;
   containerName?: string;
+}
+
+/** LSP `textDocument/prepareCallHierarchy` item (a symbol usable as a call-hierarchy root). */
+export interface CallHierarchyItem {
+  name: string;
+  kind: number;
+  detail?: string;
+  uri: string;
+  range: Range;
+  selectionRange: Range;
+  data?: unknown;
+}
+
+/** `callHierarchy/incomingCalls` result: one caller symbol plus the call sites. */
+export interface CallHierarchyIncomingCall {
+  from: CallHierarchyItem;
+  fromRanges: Range[];
+}
+
+/** `callHierarchy/outgoingCalls` result: one callee symbol plus the call sites. */
+export interface CallHierarchyOutgoingCall {
+  to: CallHierarchyItem;
+  fromRanges: Range[];
 }
 
 // ── JSON-RPC transport ──
@@ -415,12 +438,46 @@ export function translateWorkspaceEdit(edit: WorkspaceEdit, map: PathMap | null)
   for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
     changes[translateLocationUri(uri, map)] = edits;
   }
-  const documentChanges = edit.documentChanges?.map((dc) =>
-    dc && typeof dc === "object" && "textDocument" in dc && dc.textDocument
-      ? { ...dc, textDocument: { ...dc.textDocument, uri: translateLocationUri(dc.textDocument.uri, map) } }
-      : dc,
-  );
+  const documentChanges = edit.documentChanges?.map((dc) => {
+    if (!dc || typeof dc !== "object") return dc;
+    if ("textDocument" in dc && dc.textDocument) {
+      return { ...dc, textDocument: { ...dc.textDocument, uri: translateLocationUri(dc.textDocument.uri, map) } };
+    }
+    if ("kind" in dc) {
+      if (dc.kind === "create" || dc.kind === "delete") {
+        return { ...dc, uri: translateLocationUri(dc.uri, map) };
+      }
+      if (dc.kind === "rename") {
+        return { ...dc, oldUri: translateLocationUri(dc.oldUri, map), newUri: translateLocationUri(dc.newUri, map) };
+      }
+    }
+    return dc;
+  });
   return { changes: Object.keys(changes).length ? changes : undefined, documentChanges };
+}
+
+/** Resolve a symbol position to a call-hierarchy root item (`textDocument/prepareCallHierarchy`). */
+export async function prepareCallHierarchy(
+  client: LspClient,
+  uri: string,
+  position: Position,
+): Promise<CallHierarchyItem[]> {
+  const raw = (await client.request("textDocument/prepareCallHierarchy", {
+    textDocument: { uri },
+    position,
+  })) as CallHierarchyItem | CallHierarchyItem[] | null;
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw : [raw];
+}
+
+/** List the symbols that call the given item (`callHierarchy/incomingCalls`). */
+export async function incomingCalls(client: LspClient, item: CallHierarchyItem): Promise<CallHierarchyIncomingCall[]> {
+  return ((await client.request("callHierarchy/incomingCalls", { item })) as CallHierarchyIncomingCall[] | null) ?? [];
+}
+
+/** List the symbols the given item calls (`callHierarchy/outgoingCalls`). */
+export async function outgoingCalls(client: LspClient, item: CallHierarchyItem): Promise<CallHierarchyOutgoingCall[]> {
+  return ((await client.request("callHierarchy/outgoingCalls", { item })) as CallHierarchyOutgoingCall[] | null) ?? [];
 }
 
 /**

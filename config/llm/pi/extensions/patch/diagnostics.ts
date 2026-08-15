@@ -7,6 +7,7 @@
  * this directly; the TUI gets its own colored rendering via renderDiff).
  */
 
+import { type CharDiff, diffRunes } from "../shared/diff";
 import type { MatchHit, PlannedInsertion, PlannedReplacement, PlanResult } from "./match";
 import { normalizeForFuzzyMatch, normalizeToLF } from "./match";
 
@@ -67,107 +68,6 @@ export function contextLines(content: string, aroundLine: number, context: numbe
     out.push({ num: n, text });
   }
   return out;
-}
-
-// ── Char-level diff (surfaces exact differing codepoints) ─────────────────
-
-/** A single contiguous differing hunk between two lines. `expected` is from
- * oldText, `actual` from the file. Either may be empty (pure insert/delete). */
-export interface CharDiff {
-  expected: string;
-  actual: string;
-}
-
-/** Cap LCS table size; longer lines fall back to common prefix/suffix (still
- * informative, avoids O(n*m) blowup on minified/very-long lines). */
-const MAX_LCS_LEN = 400;
-
-/**
- * Char-level diff between two lines, grouped into contiguous differing hunks.
- * Uses a bounded LCS so the common case (one substituted/inserted/deleted rune)
- * is reported precisely — including invisible Unicode (arrows, dashes, smart
- * quotes, non-breaking space, zero-width chars). Diagnosis only.
- *
- * Why this exists: the closest-match diagnostic used to say "1 line differs in
- * text" and leave the agent to eyeball which bytes. Normalization handles most
- * invisible differences silently; when it can't bridge a pair (e.g. ASCII 'x'
- * vs U+00D7 '×' — × normalizes to '*', not 'x') or another diff blocks the
- * normalized match, naming the exact conflicting codepoint closes the gap.
- */
-export function diffRunes(a: string, b: string): CharDiff[] {
-  if (a === b) return [];
-  const aa = Array.from(a);
-  const bb = Array.from(b);
-  if (aa.length > MAX_LCS_LEN || bb.length > MAX_LCS_LEN) {
-    const span = prefixSuffixSpan(aa, bb);
-    return span ? [span] : [];
-  }
-  return lcsHunks(aa, bb);
-}
-
-/** Common-prefix/suffix fallback: the single span between the shared ends.
- * The suffix bound is independent of `pre` (pre + suf can exceed half the
- * string), so a difference at the center of equal-length strings is found. */
-function prefixSuffixSpan(aa: string[], bb: string[]): CharDiff | null {
-  let pre = 0;
-  const minPre = Math.min(aa.length, bb.length);
-  while (pre < minPre && aa[pre] === bb[pre]) pre++;
-  let suf = 0;
-  while (suf < aa.length - pre && suf < bb.length - pre && aa[aa.length - 1 - suf] === bb[bb.length - 1 - suf]) suf++;
-  const expected = aa.slice(pre, aa.length - suf).join("");
-  const actual = bb.slice(pre, bb.length - suf).join("");
-  if (expected === "" && actual === "") return null;
-  return { expected, actual };
-}
-
-/** LCS-based diff → list of differing hunks (adjacent del+ins coalesced into
- * one substitution hunk). Splits by code point (Array.from) so surrogate
- * pairs/emoji aren't torn apart. */
-function lcsHunks(aa: string[], bb: string[]): CharDiff[] {
-  const m = aa.length;
-  const n = bb.length;
-  const dp = new Uint32Array((m + 1) * (n + 1));
-  const at = (i: number, j: number) => i * (n + 1) + j;
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      dp[at(i, j)] = aa[i] === bb[j] ? dp[at(i + 1, j + 1)] + 1 : Math.max(dp[at(i + 1, j)], dp[at(i, j + 1)]);
-    }
-  }
-  const hunks: CharDiff[] = [];
-  let exp = "";
-  let act = "";
-  const flush = () => {
-    if (exp !== "" || act !== "") {
-      hunks.push({ expected: exp, actual: act });
-      exp = "";
-      act = "";
-    }
-  };
-  let i = 0;
-  let j = 0;
-  while (i < m && j < n) {
-    if (aa[i] === bb[j]) {
-      flush();
-      i++;
-      j++;
-    } else if (dp[at(i + 1, j)] >= dp[at(i, j + 1)]) {
-      exp += aa[i];
-      i++;
-    } else {
-      act += bb[j];
-      j++;
-    }
-  }
-  while (i < m) {
-    exp += aa[i];
-    i++;
-  }
-  while (j < n) {
-    act += bb[j];
-    j++;
-  }
-  flush();
-  return hunks;
 }
 
 // ── Rune description (name the invisibles; hex the rest) ───────────────────

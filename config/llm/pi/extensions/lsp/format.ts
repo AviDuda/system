@@ -12,11 +12,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
+  CreateFile,
+  DeleteFile,
   Diagnostic,
   DocumentSymbol,
   Hover,
   Location,
   LocationLink,
+  RenameFile,
   SymbolInformation,
   TextEdit,
   WorkspaceEdit,
@@ -583,7 +586,15 @@ export async function applyWorkspaceEdit(
     for (const change of edit.documentChanges) {
       if (typeof change !== "object" || change === null) continue;
       if ("kind" in change) {
-        // CreateFile/RenameFile/DeleteFile — report, don't execute.
+        // CreateFile/RenameFile/DeleteFile. Move-to-file returns a CreateFile
+        // followed by a TextDocumentEdit that fills the created file, so run
+        // these in documentChanges order (create, then fill). Text-syncing to
+        // LSP happens via the following TextDocumentEdit's onFileWritten.
+        const op = applyResourceOp(change as CreateFile | RenameFile | DeleteFile, cwd);
+        if (op) {
+          applied.push(op);
+          continue;
+        }
         const uri = "uri" in change ? change.uri : "oldUri" in change ? change.oldUri : "?";
         unsupported.push(`${change.kind}: ${path.relative(cwd, uriToFile(uri))}`);
         continue;
@@ -595,6 +606,35 @@ export async function applyWorkspaceEdit(
       }
     }
     return { applied, unsupported };
+  }
+
+  /** Execute an LSP file resource op (create/rename/delete) on disk. Returns the
+   * applied record, or null for an unknown shape. Creates target parent dirs; a
+   * no-op create (file already exists) leaves content intact; a rename whose
+   * source is missing is a no-op. */
+  function applyResourceOp(
+    change: CreateFile | RenameFile | DeleteFile,
+    cwd: string,
+  ): { path: string; count: number } | null {
+    if (change.kind === "create") {
+      const fp = uriToFile(change.uri);
+      fs.mkdirSync(path.dirname(fp), { recursive: true });
+      if (!fs.existsSync(fp)) fs.writeFileSync(fp, "", "utf-8");
+      return { path: path.relative(cwd, fp), count: 1 };
+    }
+    if (change.kind === "rename") {
+      const oldFp = uriToFile(change.oldUri);
+      const newFp = uriToFile(change.newUri);
+      fs.mkdirSync(path.dirname(newFp), { recursive: true });
+      if (fs.existsSync(oldFp)) fs.renameSync(oldFp, newFp);
+      return { path: path.relative(cwd, newFp), count: 1 };
+    }
+    if (change.kind === "delete") {
+      const fp = uriToFile(change.uri);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+      return { path: path.relative(cwd, fp), count: 1 };
+    }
+    return null;
   }
 
   if (edit.changes) {

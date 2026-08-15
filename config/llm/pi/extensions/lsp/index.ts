@@ -17,6 +17,17 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import {
+  type CallerWarningSymbol,
+  changedLines,
+  formatCallerLocation,
+  formatCallerWarnings,
+  MAX_CALLER_SYMBOLS,
+  MAX_CALLERS_PER_SYMBOL,
+  touchedSymbols,
+} from "./callers";
+import {
+  type CallHierarchyIncomingCall,
+  type CallHierarchyOutgoingCall,
   type CodeAction,
   closeFile,
   createClient,
@@ -26,16 +37,20 @@ import {
   fileToUri,
   findProjectRoot,
   type Hover,
+  incomingCalls,
   LSP_REQUEST_TIMEOUT_MS,
   type LspClient,
   notifyFileChanges,
   notifySaved,
   openFile,
+  outgoingCalls,
+  prepareCallHierarchy,
   type SymbolInformation,
   serverUriFor,
   syncFile,
   translateLocationUri,
   translateWorkspaceEdit,
+  uriToFile,
   type WorkspaceEdit,
 } from "./client";
 import {
@@ -110,6 +125,15 @@ let sessionCtx: ExtensionContext | null = null;
 
 /** Active file watcher for cwd */
 let fileWatcher: FileWatcher | null = null;
+
+/**
+ * Pre-edit file contents captured at `tool_call` (files touched by an edit
+ * tool). Consumed by the post-edit caller warning in `tool_result`. Bounded:
+ * an edit whose tool_result never fires (or is a cold server) can't leak the
+ * map.
+ */
+const pendingPreEdit = new Map<string, string>();
+const MAX_PENDING_EDIT = 200;
 
 // ── Client management ──
 
@@ -560,6 +584,72 @@ async function getDiagnosticsForFile(
   return { messages, summary, errored, server: sourceNames.join(", ") };
 }
 
+/**
+ * Best-effort caller warning for a just-edited file: which top-level symbols
+ * the edit touched (diff of pre-edit vs on-disk content), and who calls them
+ * via call-hierarchy. Bounded by MAX_CALLER_SYMBOLS / MAX_CALLERS_PER_SYMBOL.
+ * Returns the `[LSP callers ...]` block or null when there's nothing worth
+ * reporting (no server, no call-hierarchy support, nothing touched, no callers).
+ * Never throws — it's a nudge, not a gate.
+ */
+async function editCallerWarnings(filePath: string, cwd: string): Promise<string | null> {
+  const abs = path.resolve(cwd, filePath);
+  const pre = pendingPreEdit.get(abs);
+  pendingPreEdit.delete(abs);
+  if (pre === undefined) return null; // not captured at tool_call, or a new file
+
+  let post: string;
+  try {
+    post = fs.readFileSync(abs, "utf-8");
+  } catch {
+    return null;
+  }
+  if (pre === post) return null; // no-op edit
+
+  const pair = await getClientForFile(abs);
+  if (!pair) return null;
+  const { client } = pair;
+  if (!client.capabilities.documentSymbolProvider || !client.capabilities.callHierarchyProvider) return null;
+
+  await openFile(client, abs);
+  await syncFile(client, abs);
+  const uri = serverUriFor(client, abs);
+  const raw = (await client.request("textDocument/documentSymbol", {
+    textDocument: { uri },
+  })) as (DocumentSymbol | SymbolInformation)[] | null;
+  if (!raw || raw.length === 0 || !("selectionRange" in raw[0])) return null;
+  const symbols = raw as DocumentSymbol[];
+
+  const touched = touchedSymbols(symbols, changedLines(pre, post)).slice(0, MAX_CALLER_SYMBOLS);
+  if (touched.length === 0) return null;
+
+  const warnings: CallerWarningSymbol[] = [];
+  for (const sym of touched) {
+    try {
+      const items = await prepareCallHierarchy(client, uri, sym.selectionRange.start);
+      if (items.length === 0) continue;
+      const item = items.find((it) => it.name === sym.name) ?? items[0];
+      const calls = await incomingCalls(client, item);
+      if (calls.length === 0) continue;
+      const callers = calls.slice(0, MAX_CALLERS_PER_SYMBOL).map((c) => {
+        const hostFile = uriToFile(translateLocationUri(c.from.uri, client.pathMap));
+        return formatCallerLocation(hostFile, c.from.selectionRange.start.line, cwd);
+      });
+      warnings.push({
+        name: sym.name,
+        line: sym.selectionRange.start.line + 1,
+        callers,
+        totalCallers: calls.length,
+      });
+    } catch {
+      // Per-symbol best-effort: one failing lookup shouldn't drop the others.
+    }
+  }
+  if (warnings.length === 0) return null;
+
+  return formatCallerWarnings(serverDisplayName(client.name), path.relative(cwd, abs), warnings);
+}
+
 // ── Extension entry point ──
 
 export default function (pi: ExtensionAPI) {
@@ -597,6 +687,27 @@ export default function (pi: ExtensionAPI) {
     await shutdownAll();
   });
 
+  // ── Capture pre-edit content for the post-edit caller warning ──
+
+  pi.on("tool_call", (event, ctx) => {
+    // Only file-mutating tools can invalidate callers.
+    if (!EDIT_LIKE_TOOLS.includes(event.toolName)) return;
+    const paths = collectToolPaths(event.toolName, event.input as Record<string, unknown>);
+    if (paths.length === 0) return;
+    for (const filePath of paths) {
+      const abs = path.resolve(ctx.cwd, filePath);
+      // Only matters for files an LSP server handles (skip big non-code files).
+      if (getServersForFile(abs).length === 0) continue;
+      try {
+        pendingPreEdit.set(abs, fs.readFileSync(abs, "utf-8"));
+      } catch {
+        // Not on disk yet (a new `write` target): no callers to find.
+      }
+      if (pendingPreEdit.size > MAX_PENDING_EDIT) {
+        pendingPreEdit.delete(pendingPreEdit.keys().next().value as string);
+      }
+    }
+  });
   // ── Auto-diagnostics on edit/write ──
 
   pi.on("tool_result", async (event, ctx) => {
@@ -618,28 +729,40 @@ export default function (pi: ExtensionAPI) {
     // Run diagnostics per path and accumulate. Only write can create new files.
     const multi = paths.length > 1;
     const diagParts: string[] = [];
+    const callerParts: string[] = [];
     let anyErrored = false;
     for (const filePath of paths) {
       const isNewFile = isWrite && !isFileOpenInAnyClient(filePath, ctx.cwd);
       try {
         const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
-        if (!result) continue; // No LSP server or linter for this file — silent
-        const label = multi ? ` ${path.relative(ctx.cwd, path.resolve(ctx.cwd, filePath))}` : "";
-        if (result.messages.length === 0) {
-          diagParts.push(`[LSP diagnostics (${result.server})${label}: no errors, no warnings]`);
-        } else {
-          if (result.errored) anyErrored = true;
-          diagParts.push(
-            `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
-          );
+        if (result) {
+          const label = multi ? ` ${path.relative(ctx.cwd, path.resolve(ctx.cwd, filePath))}` : "";
+          if (result.messages.length === 0) {
+            diagParts.push(`[LSP diagnostics (${result.server})${label}: no errors, no warnings]`);
+          } else {
+            if (result.errored) anyErrored = true;
+            diagParts.push(
+              `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
+            );
+          }
         }
       } catch {
         // Non-fatal per file: continue with the rest
       }
+
+      // Post-edit caller warning: symbols the edit touched + who calls them,
+      // so the agent checks call sites that a clean type-check misses.
+      try {
+        const callers = await editCallerWarnings(filePath, ctx.cwd);
+        if (callers) callerParts.push(callers);
+      } catch {
+        // Non-fatal / best-effort (cold server, no callHierarchy support).
+      }
     }
 
-    if (diagParts.length === 0) return;
+    if (diagParts.length === 0 && callerParts.length === 0) return;
     const diagText = `\n\n${diagParts.join("\n\n")}`;
+    const callerText = callerParts.length > 0 ? `\n\n${callerParts.join("\n\n")}` : "";
     const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
 
     // Notify the user in the UI about actual issues (skip clean notifications as noise)
@@ -650,7 +773,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     return {
-      content: [{ type: "text" as const, text: existingText + diagText }],
+      content: [{ type: "text" as const, text: existingText + diagText + callerText }],
     };
   });
 
@@ -662,6 +785,8 @@ export default function (pi: ExtensionAPI) {
     "type_definition",
     "implementation",
     "references",
+    "incoming",
+    "outgoing",
     "hover",
     "symbols",
     "workspace_symbol",
@@ -676,12 +801,13 @@ export default function (pi: ExtensionAPI) {
     name: "lsp",
     label: "LSP",
     description: `Language Server Protocol operations. Actions: ${LSP_ACTIONS.join(", ")}. Requires a running language server for the target file's language.`,
-    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, hover, symbols, workspace_symbol, rename, codeAction, codeActionApply, restart, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
+    promptSnippet: `lsp: Language server operations (diagnostics, definition, type_definition, references, incoming, outgoing, hover, symbols, workspace_symbol, rename, codeAction, codeActionApply, restart, status). Use for type errors, go-to-definition, finding references, and refactorings.`,
     promptGuidelines: [
       "Before `read`ing a large source file (Rust, TS/JS, C#, Go, and other languages with a capable LSP server), use `lsp` with action `symbols` first. It returns a compact skeleton — top-level functions, structs/classes/interfaces with their fields, and line ranges — so you can `read` with `offset`/`limit` for just the symbol you need instead of the whole file. Useless for you on languages with weak servers (nixd, bash-language-server); fall back to `read` there. If a symbols call reports the server is still indexing, retry it immediately or use `read` directly.",
       "LSP diagnostics and lint results are automatically checked after every edit/write/patch and reported in the tool result. Call `lsp diagnostics` explicitly for fresh diagnostics after non-edit file changes (e.g., bash commands).",
       "Use `lsp` with action `definition` or `references` to navigate code instead of grepping for definitions.",
       "Use `lsp` with action `rename` to rename symbols across files instead of rg+sed/sd. It's semantically aware and handles all references. Provide `symbol` and `new_name`.",
+      "Use `lsp` with action `references` or `incoming` to find who uses/ calls a symbol; `outgoing` shows what it calls. `incoming`/`outgoing` use call hierarchy (nearest callable definition), useful for blast-radius before a refactor.",
       "The `hover` action shows type information for a symbol at a given position.",
       "Always provide `file` for all actions except `status`, `workspace_symbol`, and `restart`.",
       "Use `line` and optionally `symbol` to target a specific position. When `symbol` is provided without `line`, the tool searches the file for the symbol — this is often more reliable for go-to-definition since it uses semantic resolution.",
@@ -934,6 +1060,35 @@ export default function (pi: ExtensionAPI) {
             }
             // Include posInfo when fallback resolved to a different line
             return text(`Found ${locs.length} reference(s)${posInfo}:\n${lines.join("\n")}`);
+          }
+
+          case "incoming":
+          case "outgoing": {
+            // Who calls this / what does this call (call hierarchy).
+            const items = await prepareCallHierarchy(client, uri, position);
+            if (items.length === 0) {
+              return text(
+                `No callable definition found${posInfo}. Context around line ${displayLine}:\n${readLocationContext(abs, displayLine, 2).join("\n")}`,
+              );
+            }
+            const item = items.find((i) => i.name === (symbol ?? items[0].name)) ?? items[0];
+            const calls = action === "incoming" ? await incomingCalls(client, item) : await outgoingCalls(client, item);
+            if (calls.length === 0) {
+              return text(action === "incoming" ? `No callers found${posInfo}` : `No outgoing calls found${posInfo}`);
+            }
+            // Call hierarchy never needs to dump every site; cap like references.
+            const MAX_HIERARCHY_RESULTS = 30;
+            const nodes =
+              action === "incoming"
+                ? (calls as CallHierarchyIncomingCall[]).map((c) => c.from)
+                : (calls as CallHierarchyOutgoingCall[]).map((c) => c.to);
+            const lines = nodes.slice(0, MAX_HIERARCHY_RESULTS).map((item) => {
+              const hostFile = uriToFile(translateLocationUri(item.uri, client.pathMap));
+              return `  ${formatCallerLocation(hostFile, item.selectionRange.start.line, ctx.cwd)} — ${item.name}`;
+            });
+            if (calls.length > MAX_HIERARCHY_RESULTS) lines.push(`  ... ${calls.length - MAX_HIERARCHY_RESULTS} more`);
+            const verb = action === "incoming" ? "callers" : "calls";
+            return text(`Found ${calls.length} ${verb}${posInfo}:\n${lines.join("\n")}`);
           }
 
           case "hover": {

@@ -216,29 +216,60 @@ describe("applyWorkspaceEdit", () => {
     expect(fs.readFileSync(filePath, "utf-8")).toBe("world\n");
   });
 
-  test("reports unsupported resource ops (create/rename/delete) without executing them", async () => {
+  test("executes create/rename/delete resource ops in documentChanges order", async () => {
     const filePath = path.join(tmpDir, "test.ts");
     await fs.promises.writeFile(filePath, "a\n");
 
+    // Move-to-file shape: create the new file, then a TextDocumentEdit fills it.
     const { applied, unsupported } = await applyWorkspaceEdit(
       {
         documentChanges: [
-          {
-            textDocument: { uri: `file://${filePath}`, version: 1 },
-            edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "b" }],
-          },
           { kind: "create", uri: `file://${path.join(tmpDir, "new.ts")}` },
-          { kind: "rename", oldUri: `file://${filePath}`, newUri: `file://${path.join(tmpDir, "moved.ts")}` },
+          {
+            textDocument: { uri: `file://${path.join(tmpDir, "new.ts")}`, version: 1 },
+            edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "b" }],
+          },
+          { kind: "create", uri: `file://${path.join(tmpDir, "sub/deep.ts")}` },
         ],
       },
       tmpDir,
       () => {},
     );
 
-    expect(applied).toEqual([{ path: "test.ts", count: 1 }]);
-    expect(unsupported).toEqual(["create: new.ts", "rename: test.ts"]);
-    // The rename was NOT executed — original file still has the (edited) content.
+    expect(unsupported).toEqual([]);
+    expect(applied).toEqual([
+      { path: "new.ts", count: 1 },
+      { path: "new.ts", count: 1 },
+      { path: "sub/deep.ts", count: 1 },
+    ]);
+    // Created file exists and the TextDocumentEdit filled it.
+    expect(fs.readFileSync(path.join(tmpDir, "new.ts"), "utf-8")).toBe("b");
+    // Parent dirs are created for nested targets.
+    expect(fs.readFileSync(path.join(tmpDir, "sub/deep.ts"), "utf-8")).toBe("");
+  });
+
+  test("executes rename and delete resource ops", async () => {
+    const filePath = path.join(tmpDir, "test.ts");
+    await fs.promises.writeFile(filePath, "a\n");
+
+    const { applied, unsupported } = await applyWorkspaceEdit(
+      {
+        documentChanges: [
+          { kind: "rename", oldUri: `file://${filePath}`, newUri: `file://${path.join(tmpDir, "moved.ts")}` },
+          { kind: "delete", uri: `file://${path.join(tmpDir, "moved.ts")}` },
+        ],
+      },
+      tmpDir,
+      () => {},
+    );
+
+    expect(unsupported).toEqual([]);
+    expect(applied).toEqual([
+      { path: "moved.ts", count: 1 },
+      { path: "moved.ts", count: 1 },
+    ]);
+    // Renamed, then deleted: neither file remains.
+    expect(fs.existsSync(filePath)).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, "moved.ts"))).toBe(false);
-    expect(fs.readFileSync(filePath, "utf-8")).toBe("b\n");
   });
 });

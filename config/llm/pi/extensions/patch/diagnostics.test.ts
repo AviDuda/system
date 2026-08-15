@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { diffRunes } from "../shared/diff";
 import {
   type ClosestMatch,
   closestMatches,
@@ -9,7 +10,6 @@ import {
   detectBoundaryDuplication,
   detectInsertDuplication,
   diagnoseLineDiff,
-  diffRunes,
   findNearMisses,
   formatClosestMatches,
   formatHitsWithContext,

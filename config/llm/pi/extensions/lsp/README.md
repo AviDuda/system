@@ -48,6 +48,27 @@ Successfully edited src/main.ts
 src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
 ```
 
+## Post-edit caller warning
+
+Diagnostics catch what *broke*; they don't catch what an edit might have *broken*. Changing a function's body or signature can invalidate its callers even when
+it still type-checks. After every edit-like tool, the extension:
+
+1. Captures the file's pre-edit content at `tool_call`
+2. Diffs pre vs post content to find which top-level symbols the edit touched
+3. For each touched symbol (up to 4), lists its incoming callers via call
+   hierarchy (up to 6 sites each), appended to the tool result
+
+The model sees call sites to check without hunting for them:
+
+```
+[LSP callers (ts): 2 symbol(s) changed — call sites to check]
+  validateToken (src/api.ts:12): src/auth.ts:88, src/ui.ts:5 (+1 more)
+  UserService (src/b.ts:50): src/app.ts:3
+```
+
+Best-effort only — cold servers, missing call-hierarchy support, or lookups
+that fail simply produce no block. It must never block the edit.
+
 or, when the edit is clean:
 
 ```
@@ -97,6 +118,14 @@ The `workspace_symbol` action searches for symbols across the entire project by 
 **When to use:** Finding a function/type/class when you know the name but not the file. More precise than `rg` for symbols (respects scoping, includes types/interfaces, handles overloads).
 
 **Example:** `lsp(action="workspace_symbol", query="handleInput")` — finds all symbols matching "handleInput" across the project.
+
+## Call hierarchy
+
+`lsp incoming` / `lsp outgoing` answer "who calls this?" / "what does this
+call?" via `textDocument/prepareCallHierarchy` + `callHierarchy/incomingCalls` /
+`outgoingCalls`. Useful for refactor blast-radius: check `incoming` before
+changing a symbol's contract, `outgoing` to see what an unfamiliar function
+depends on. The post-edit caller warning uses the same provider internally.
 
 ## Multi-root Support
 
@@ -199,10 +228,17 @@ Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBi
 
 `codeAction` lists actions at a position (kind, title, preferred/disabled, with context lines). `codeActionApply` runs one by index — re-queries for freshness, resolves via `codeAction/resolve` if deferred, applies the `WorkspaceEdit` to disk.
 
+`codeActionApply` also executes LSP file resource operations, so refactors that
+create/rename/delete files work — notably TypeScript's *Move to a new file*,
+which returns a `CreateFile` + `TextDocumentEdit` pair (file created empty,
+then filled by the following edit). Target parent dirs are created as needed.
+Requires a classic TS ≤6 project: the TS7 native server returns nothing for
+refactor actions by design.
+
 <details>
 <summary>WorkspaceEdit application details</summary>
 
-`applyWorkspaceEdit` (format.ts) handles both forms: `changes` (tsserver) and `documentChanges` (rust-analyzer rename). `documentChanges` is authoritative when both are present (per spec); within a file, edits apply in reverse order to preserve positions. Resource operations (Create/Rename/Delete) are reported unsupported, not executed. An `onFileWritten` callback syncs each file back via `didChange` so round-trip edits use fresh positions.
+`applyWorkspaceEdit` (format.ts) handles both forms: `changes` (tsserver) and `documentChanges` (rust-analyzer rename). `documentChanges` is authoritative when both are present (per spec); within a file, edits apply in reverse order to preserve positions. Resource operations (Create/Rename/Delete) are executed in `documentChanges` order (create/rename first, then the `TextDocumentEdit` that fills the file). An `onFileWritten` callback syncs each file back via `didChange` so round-trip edits use fresh positions.
 
 </details>
 

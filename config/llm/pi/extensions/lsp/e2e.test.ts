@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DocumentSymbol, LspClient } from "./client";
-import { createClient, fileToUri, syncFile } from "./client";
+import { createClient, fileToUri, incomingCalls, outgoingCalls, prepareCallHierarchy, syncFile } from "./client";
 import { detectTsFlavor, resolveServerTarget } from "./devcontainer";
 import { configForTsFlavor, KNOWN_SERVERS } from "./servers";
 
@@ -158,6 +158,37 @@ d("e2e", () => {
     const flat = Array.isArray(def) ? def : [def];
     const uris = flat.map((l) => l?.uri ?? l?.targetUri ?? "");
     expect(uris.some((u) => u.endsWith("target.ts"))).toBe(true);
+  }, 90_000);
+
+  test("typescript (host, classic): call hierarchy incoming/outgoing", async () => {
+    // Validates the call-hierarchy protocol layer the post-edit caller warning
+    // is built on: prepareCallHierarchy on a declaration, then incoming/outgoing.
+    const dir = mkFixture("ch", {
+      "package.json": '{"name":"e2e-ch","type":"module"}',
+      "a.ts":
+        "export function top(): number {\n  return child();\n}\nexport function child(): number {\n  return 1;\n}\nexport function other(): number {\n  return top();\n}\n",
+    });
+    const client = await startHostTs(dir);
+    const file = path.join(dir, "a.ts");
+    await syncFile(client, file);
+    const uri = fileToUri(file);
+
+    // Position on `child` in `export function child() {` (line 3 0-based, char 16).
+    const items = await prepareCallHierarchy(client, uri, { line: 3, character: 16 });
+    expect(items.some((i) => i.name === "child")).toBe(true);
+    const child = items.filter((i) => i.name === "child")[0];
+    expect(child).toBeTruthy();
+
+    // child() is called from top().
+    const inc = await incomingCalls(client, child);
+    expect(inc.some((c) => c.from.name === "top")).toBe(true);
+
+    // top() calls child().
+    const topItems = await prepareCallHierarchy(client, uri, { line: 0, character: 16 });
+    const top = topItems.filter((i) => i.name === "top")[0];
+    expect(top).toBeTruthy();
+    const out = await outgoingCalls(client, top);
+    expect(out.some((c) => c.to.name === "child")).toBe(true);
   }, 90_000);
 
   const ts7Root = process.env.LSP_E2E_TS7_ROOT ?? "";
