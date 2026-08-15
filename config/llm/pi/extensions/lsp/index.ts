@@ -609,7 +609,11 @@ async function editCallerWarnings(filePath: string, cwd: string): Promise<string
   const pair = await getClientForFile(abs);
   if (!pair) return null;
   const { client } = pair;
-  if (!client.capabilities.documentSymbolProvider || !client.capabilities.callHierarchyProvider) return null;
+  // Gate on documentSymbol only: callHierarchyProvider is UNDERVERTISED by
+  // several servers (classic typescript-language-server omits it from the
+  // initialize response yet answers prepareCallHierarchy fine), so the flag
+  // is an unreliable proxy — per-symbol try/catch handles unsupported servers.
+  if (!client.capabilities.documentSymbolProvider) return null;
 
   await openFile(client, abs);
   await syncFile(client, abs);
@@ -1190,10 +1194,13 @@ export default function (pi: ExtensionAPI) {
           }
 
           case "codeAction": {
-            // Query available code actions at the cursor position
+            // Query available code actions at the cursor position. Use the
+            // RESOLVED symbol position (the identifier, not line-start) —
+            // servers like tsserver only offer declaration refactors
+            // (e.g. move-to-file) when the cursor is on the declaration name.
             const raw = await requestCodeActions(client, uri, abs, {
-              start: { line: resolved.line, character: 0 },
-              end: { line: resolved.line, character: 0 },
+              start: { line: resolved.line, character: resolved.character },
+              end: { line: resolved.line, character: resolved.character },
             });
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
@@ -1223,10 +1230,11 @@ export default function (pi: ExtensionAPI) {
               return text("Error: index parameter required. Use 'codeAction' first to see available actions.");
             }
 
-            // Query available code actions
+            // Query available code actions (same resolved-name position as
+            // the listing above, so declaration refactors surface).
             const raw = await requestCodeActions(client, uri, abs, {
-              start: { line: resolved.line, character: 0 },
-              end: { line: resolved.line, character: 0 },
+              start: { line: resolved.line, character: resolved.character },
+              end: { line: resolved.line, character: resolved.character },
             });
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
