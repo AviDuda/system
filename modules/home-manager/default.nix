@@ -196,6 +196,7 @@ in
         nixd # Nix language server (full-featured)
         bash-language-server # Bash/shell language server
         yaml-language-server # YAML language server
+        pyright # Python language server
         slint-lsp # Slint UI language server
         rsync # File transfer
         sd # Modern sed replacement
