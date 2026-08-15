@@ -49,6 +49,13 @@ export interface UsageStats {
   turns: number;
 }
 
+/** A user steering message sent mid-run, positioned at the completed-turn count when it arrived. */
+export interface UserInput {
+  text: string;
+  /** Completed turns at steer time (turn_end count). Displayed before turn+1. */
+  turn: number;
+}
+
 export interface SingleResult {
   agent: string;
   agentSource: "user" | "project" | "unknown";
@@ -57,6 +64,7 @@ export interface SingleResult {
   messages: Message[];
   stderr: string;
   usage: UsageStats;
+  userInputs?: UserInput[];
   role?: string; // role name used for model resolution
   model?: string; // resolved model ref
   stopReason?: string;
@@ -116,20 +124,32 @@ export function getFinalOutput(messages: Message[]): string {
 }
 
 export type DisplayItem =
+  | { type: "thinking"; text: string }
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
-export function getDisplayItems(messages: Message[]): DisplayItem[] {
-  const items: DisplayItem[] = [];
+export interface DisplayTurn {
+  /** 1-based turn number (one per assistant message). */
+  turn: number;
+  items: DisplayItem[];
+}
+
+/** Group assistant messages into turns, preserving thinking/text/toolCall parts. */
+export function getDisplayTurns(messages: Message[]): DisplayTurn[] {
+  const turns: DisplayTurn[] = [];
+  let turn = 0;
   for (const msg of messages) {
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") items.push({ type: "text", text: part.text });
-        else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
-      }
+    if (msg.role !== "assistant") continue;
+    turn++;
+    const items: DisplayItem[] = [];
+    for (const part of msg.content) {
+      if (part.type === "text" && part.text) items.push({ type: "text", text: part.text });
+      else if (part.type === "thinking" && part.thinking) items.push({ type: "thinking", text: part.thinking });
+      else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
     }
+    turns.push({ turn, items });
   }
-  return items;
+  return turns;
 }
 
 export function formatToolCall(
@@ -145,8 +165,9 @@ export function formatToolCall(
   switch (toolName) {
     case "bash": {
       const command = (args.command as string) || "...";
-      const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
-      return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
+      // Full command — continuation lines indented so multi-line commands stay readable.
+      const display = command.replace(/\n/g, "\n  ");
+      return themeFg("muted", "$ ") + themeFg("toolOutput", display);
     }
     case "read": {
       const rawPath = (args.file_path || args.path || "...") as string;
@@ -194,9 +215,8 @@ export function formatToolCall(
       );
     }
     default: {
-      const argsStr = JSON.stringify(args);
-      const preview = argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-      return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
+      // Unknown tool — show the full args; the tool name is the label, args are the payload.
+      return themeFg("accent", toolName) + themeFg("dim", ` ${JSON.stringify(args)}`);
     }
   }
 }
@@ -377,15 +397,21 @@ export async function runSingleAgent(
     messages: [],
     stderr: "",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+    userInputs: [],
     role,
     step,
   };
 
   // RPC state tracking
   let isStreaming = false;
-  let currentAssistantContent: { type: string; text?: string }[] = [];
-  // Track tool calls with the text length at insertion point, for correct interleaving
-  const streamingToolCalls: Array<{ name: string; args: Record<string, unknown>; textLenBefore: number }> = [];
+  // Ordered log of everything the subagent produced (thinking, text, tool calls) —
+  // rebuilt into content on every update. Exact order, no length-based interleaving.
+  const streamEvents: Array<
+    | { kind: "thinking"; text: string }
+    | { kind: "text"; text: string }
+    | { kind: "toolCall"; name: string; args: Record<string, unknown> }
+    | { kind: "user"; text: string }
+  > = [];
   let wasAborted = false;
   let agentEndReceived = false; // tracks whether agent_end fired (normal completion)
   let eventCount = 0;
@@ -414,28 +440,17 @@ export async function runSingleAgent(
   const emitUpdate = () => {
     if (onUpdate) {
       updateCount++;
-      // Live display: show accumulated streaming text if available
-      const streamingText = currentAssistantContent
-        .filter((c) => c.type === "text" || c.type === "thinking")
-        .map((c) => c.text || "")
+      const streamText = streamEvents
+        .filter((e) => e.kind !== "toolCall")
+        .map((e) => e.text)
         .join("");
       const finalOutput = getFinalOutput(currentResult.messages);
-      const displayText = streamingText || finalOutput || "(running...)";
-      // Build full content: display text interleaved with all tool calls
-      const content: Array<{ type: string; text?: string; name?: string; args?: Record<string, unknown> }> = [];
-      let lastIdx = 0;
-      for (const tc of streamingToolCalls) {
-        const textBefore = displayText.slice(lastIdx, tc.textLenBefore);
-        if (textBefore) {
-          content.push({ type: "text", text: textBefore });
-        }
-        content.push({ type: "toolCall", name: tc.name, args: tc.args });
-        lastIdx = tc.textLenBefore;
-      }
-      const textAfter = displayText.slice(lastIdx);
-      if (textAfter) {
-        content.push({ type: "text", text: textAfter });
-      }
+      const displayText = streamText || finalOutput || "(running...)";
+      // Live display: rebuild content from the ordered event log.
+      const content: Array<{ type: string; text?: string; name?: string; args?: Record<string, unknown> }> =
+        streamEvents.map((e) =>
+          e.kind === "toolCall" ? { type: "toolCall", name: e.name, args: e.args } : { type: e.kind, text: e.text },
+        );
       if (content.length === 0) {
         content.push({ type: "text", text: displayText });
       }
@@ -456,6 +471,11 @@ export async function runSingleAgent(
     steer: async (message: string) => {
       if (!isStreaming) return;
       writeRpcCommand(proc, { type: "steer", message });
+      // Record the input so it shows in the live feed and the result display,
+      // interleaved at the turn boundary it arrived at.
+      streamEvents.push({ kind: "user", text: message });
+      currentResult.userInputs?.push({ text: message, turn: turnCount });
+      emitUpdate();
     },
     isStreaming: () => isStreaming,
     abort: () => {
@@ -509,9 +529,7 @@ export async function runSingleAgent(
         if (eventType === "agent_start") {
           // Reset streaming state for live display
           isStreaming = false;
-          currentAssistantContent = [];
-          // Reset for new run
-          streamingToolCalls.length = 0;
+          streamEvents.length = 0;
         }
 
         // ── Streaming events (for live display only) ──
@@ -524,28 +542,23 @@ export async function runSingleAgent(
 
           if (deltaType === "text_delta") {
             const text = (assistantEvent.delta as string) || "";
-            currentAssistantContent.push({ type: "text", text });
+            streamEvents.push({ kind: "text", text });
             emitUpdate();
           } else if (deltaType === "thinking_delta") {
             const text = (assistantEvent.delta as string) || "";
-            currentAssistantContent.push({ type: "thinking", text });
+            streamEvents.push({ kind: "thinking", text });
             emitUpdate();
           }
         }
 
         // ── Tool execution start (for live tool call display) ──
         if (eventType === "tool_execution_start") {
-          // Capture current text length so renderResult can interleave tool calls correctly
-          const streamingText = currentAssistantContent
-            .filter((c) => c.type === "text" || c.type === "thinking")
-            .map((c) => c.text || "")
-            .join("");
-          streamingToolCalls.push({
+          streamEvents.push({
+            kind: "toolCall",
             name: (event.toolName as string) || "unknown",
             args: (event.args as Record<string, unknown>) || {},
-            textLenBefore: streamingText.length,
           });
-          debugLog("tool_start", 0, { toolName: event.toolName, totalCalls: streamingToolCalls.length });
+          debugLog("tool_start", 0, { toolName: event.toolName, totalCalls: streamEvents.length });
           emitUpdate();
         }
 

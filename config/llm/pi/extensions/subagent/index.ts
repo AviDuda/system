@@ -324,8 +324,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           const successCount = results.filter((r) => r.exitCode === 0).length;
           const summaries = results.map((r) => {
             const output = getFinalOutput(r.messages);
-            const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-            return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+            return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}:\n${output || "(no output)"}`;
           });
           return {
             content: [
