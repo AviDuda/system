@@ -1,6 +1,8 @@
 /**
  * Post-edit caller warning: which top-level symbols an edit touched (via a
- * line diff) and how to surface their callers to the agent.
+ * line diff) and how to surface their callers to the agent. Caller sites that
+ * land on the edit's own changed lines (same-file new references) are skipped
+ * as non-blast-radius; only external call sites are reported.
  *
  * Pure (node:path only, no pi imports) — the LSP calls (documentSymbol,
  * prepareCallHierarchy, incomingCalls) live in index.ts / client.ts. Changing
@@ -57,6 +59,22 @@ function symbolOverlapsRange(changedSet: Set<number>, start: number, end: number
     if (changedSet.has(l)) return true;
   }
   return false;
+}
+
+/**
+ * True when a caller site is the edit's own new reference — a call inside the
+ * edited file sitting on a changed line (e.g. a newly added function plus the
+ * call to it). Those the diff already shows, so they're not blast radius.
+ * Cross-file callers always return false: their line numbers can't collide
+ * with this file's diff. `line0` is 0-based; `changed` are 1-based new-side.
+ */
+export function isEditedLineCaller(
+  hostFile: string,
+  line0: number,
+  absFile: string,
+  changed: readonly number[],
+): boolean {
+  return hostFile === absFile && changed.includes(line0 + 1);
 }
 
 /** One symbol's caller summary for the agent. Caller locations are already

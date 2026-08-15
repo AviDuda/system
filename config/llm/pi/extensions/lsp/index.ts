@@ -22,6 +22,7 @@ import {
   formatCallerLocation,
   formatCallerWarnings,
   identifierAt,
+  isEditedLineCaller,
   MAX_CALLER_SYMBOLS,
   MAX_CALLERS_PER_SYMBOL,
   touchedSymbols,
@@ -266,6 +267,28 @@ async function getClient(serverName: string): Promise<LspClient | null> {
 
 function getServersForFile(filePath: string): DetectedServer[] {
   return serversForFile(filePath, detectedServers);
+}
+
+/**
+ * Read-time warming: when the agent `read`s a code file, open it in its LSP
+ * server in the background (didOpen) so the first interactive call
+ * (symbols/hover/incoming) is warm instead of paying cold-parse latency.
+ * Fire-and-forget — never blocks the read.
+ *
+ * Gated to pre-detected servers only: a `read` never triggers lazy discovery
+ * (that stays an `lsp` tool concern). The server itself starts on demand if
+ * not already running, matching session-start warming.
+ */
+async function warmRead(abs: string): Promise<void> {
+  const servers = getServersForFile(abs);
+  if (servers.length === 0) return;
+  for (const server of servers) {
+    const client = await getClientAt(server.name, rootForServer(server, abs));
+    if (client) {
+      await openFile(client, abs);
+      return;
+    }
+  }
 }
 
 /**
@@ -662,7 +685,8 @@ async function editCallerWarnings(filePath: string, cwd: string): Promise<string
   if (!raw || raw.length === 0 || !("selectionRange" in raw[0])) return null;
   const symbols = raw as DocumentSymbol[];
 
-  const touched = touchedSymbols(symbols, changedLines(pre, post)).slice(0, MAX_CALLER_SYMBOLS);
+  const changed = changedLines(pre, post);
+  const touched = touchedSymbols(symbols, changed).slice(0, MAX_CALLER_SYMBOLS);
   if (touched.length === 0) return null;
 
   const warnings: CallerWarningSymbol[] = [];
@@ -673,15 +697,27 @@ async function editCallerWarnings(filePath: string, cwd: string): Promise<string
       const item = items.find((it) => it.name === sym.name) ?? items[0];
       const calls = await incomingCalls(client, item);
       if (calls.length === 0) continue;
-      const callers = calls.slice(0, MAX_CALLERS_PER_SYMBOL).map((c) => {
+      // A caller item's `selectionRange` is the caller's own declaration — for
+      // module-level call sites that's the file top (useless as a location).
+      // The real call-site coordinates live in `fromRanges`; fall back for
+      // servers that don't fill it.
+      const sites: { hostFile: string; line0: number }[] = [];
+      for (const c of calls) {
         const hostFile = uriToFile(translateLocationUri(c.from.uri, client.pathMap));
-        return formatCallerLocation(hostFile, c.from.selectionRange.start.line, cwd);
-      });
+        const ranges = c.fromRanges.length > 0 ? c.fromRanges : [c.from.selectionRange];
+        for (const r of ranges) sites.push({ hostFile, line0: r.start.line });
+      }
+      // Skip the edit's own new references (call sites on changed lines in the
+      // edited file) — the diff already shows those. Keep external blast
+      // radius: callers in unchanged parts of the file or other files.
+      const kept = sites.filter((s) => !isEditedLineCaller(s.hostFile, s.line0, abs, changed));
+      if (kept.length === 0) continue;
+      const callers = kept.slice(0, MAX_CALLERS_PER_SYMBOL).map((s) => formatCallerLocation(s.hostFile, s.line0, cwd));
       warnings.push({
         name: sym.name,
         line: sym.selectionRange.start.line + 1,
         callers,
-        totalCallers: calls.length,
+        totalCallers: kept.length,
       });
     } catch {
       // Per-symbol best-effort: one failing lookup shouldn't drop the others.
@@ -729,9 +765,17 @@ export default function (pi: ExtensionAPI) {
     await shutdownAll();
   });
 
-  // ── Capture pre-edit content for the post-edit caller warning ──
+  // ── tool_call: read-time warming + pre-edit capture ──
 
   pi.on("tool_call", (event, ctx) => {
+    // Read-time warming: background-open a read file in its LSP server so the
+    // first interactive LSP call is already warm. Best-effort, never blocks.
+    if (event.toolName === "read") {
+      const p = (event.input as { path?: string } | undefined)?.path;
+      if (p) void warmRead(path.resolve(ctx.cwd, p));
+      return;
+    }
+
     // Only file-mutating tools can invalidate callers.
     if (!EDIT_LIKE_TOOLS.includes(event.toolName)) return;
     const paths = collectToolPaths(event.toolName, event.input as Record<string, unknown>);
@@ -1124,17 +1168,26 @@ export default function (pi: ExtensionAPI) {
             if (calls.length === 0) {
               return text(action === "incoming" ? `No callers found${posInfo}` : `No outgoing calls found${posInfo}`);
             }
-            // Call hierarchy never needs to dump every site; cap like references.
+            // Caller items' `selectionRange` is the caller's own declaration;
+            // for module-level call sites that's the file top. Use fromRanges
+            // (the precise call-site coordinates) when present, so the line
+            // shown is where the call actually happens.
             const MAX_HIERARCHY_RESULTS = 30;
             const nodes =
               action === "incoming"
-                ? (calls as CallHierarchyIncomingCall[]).map((c) => c.from)
-                : (calls as CallHierarchyOutgoingCall[]).map((c) => c.to);
-            const lines = nodes.slice(0, MAX_HIERARCHY_RESULTS).map((item) => {
+                ? (calls as CallHierarchyIncomingCall[]).map((c) => ({
+                    item: c.from,
+                    line0: (c.fromRanges[0] ?? c.from.selectionRange).start.line,
+                  }))
+                : (calls as CallHierarchyOutgoingCall[]).map((c) => ({
+                    item: c.to,
+                    line0: c.to.selectionRange.start.line,
+                  }));
+            const lines = nodes.slice(0, MAX_HIERARCHY_RESULTS).map(({ item, line0 }) => {
               const hostFile = uriToFile(translateLocationUri(item.uri, client.pathMap));
-              return `  ${formatCallerLocation(hostFile, item.selectionRange.start.line, ctx.cwd)} — ${item.name}`;
+              return `  ${formatCallerLocation(hostFile, line0, ctx.cwd)} — ${item.name}`;
             });
-            if (calls.length > MAX_HIERARCHY_RESULTS) lines.push(`  ... ${calls.length - MAX_HIERARCHY_RESULTS} more`);
+            if (nodes.length > MAX_HIERARCHY_RESULTS) lines.push(`  ... ${nodes.length - MAX_HIERARCHY_RESULTS} more`);
             const verb = action === "incoming" ? "callers" : "calls";
             return text(`Found ${calls.length} ${verb}${posInfo}:\n${lines.join("\n")}`);
           }

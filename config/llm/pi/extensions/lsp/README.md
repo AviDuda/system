@@ -15,6 +15,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 9. **Code actions** — `codeAction` lists available refactorings/fixes at a position, `codeActionApply` executes one by its index. Supports `codeAction/resolve` for deferred edits.
 10. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
 11. **Devcontainer support** — when a project has a running `.devcontainer/`, language servers can run inside it (with host↔container path translation), so the host doesn't need the project's dependencies. See [Devcontainer support](#devcontainer-support).
+12. **Read-time warming** — when the agent `read`s a code file, it's opened in its LSP server in the background so the first interactive `symbols`/`hover`/`incoming` call is already warm. Invisible to the model and non-blocking. See [Read-time warming](#read-time-warming).
 
 ## Supported servers
 
@@ -48,6 +49,20 @@ Successfully edited src/main.ts
 src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
 ```
 
+## Read-time warming
+
+When the agent `read`s a code file, the extension opens it in its LSP server in
+the background (`textDocument/didOpen`), so the first interactive call
+(`symbols`, `hover`, `incoming`, ...) on that file is warm instead of paying
+cold-parse latency.
+
+Best-effort and non-blocking: the read completes immediately and failures are
+ignored. Only files a detected server already handles are warmed — a `read`
+never triggers new server discovery (that stays an `lsp` tool concern). A
+server not yet running starts on demand, matching session-start warming. The
+model sees no change to read output, but the first LSP call on the file answers
+fast.
+
 ## Post-edit caller warning
 
 Diagnostics catch what *broke*; they don't catch what an edit might have *broken*. Changing a function's body or signature can invalidate its callers even when
@@ -55,8 +70,13 @@ it still type-checks. After every edit-like tool, the extension:
 
 1. Captures the file's pre-edit content at `tool_call`
 2. Diffs pre vs post content to find which top-level symbols the edit touched
-3. For each touched symbol (up to 4), lists its incoming callers via call
-   hierarchy (up to 6 sites each), appended to the tool result
+3. For each touched symbol (up to 4), lists its incoming call sites via call
+   hierarchy (up to 6 per symbol), appended to the tool result
+
+Caller sites that land on the edit's own changed lines are skipped — those are
+the edit's new references (e.g. a newly added function plus the call to it),
+which the diff already shows. Only the external blast radius is reported:
+callers in unchanged parts of the file or other files.
 
 The model sees call sites to check without hunting for them:
 

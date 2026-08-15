@@ -3,6 +3,7 @@ import {
   changedLines,
   formatCallerLocation,
   formatCallerWarnings,
+  isEditedLineCaller,
   MAX_CALLER_SYMBOLS,
   touchedSymbols,
 } from "./callers";
@@ -67,6 +68,29 @@ describe("formatCallerWarnings", () => {
 describe("formatCallerLocation", () => {
   test("relative path with 1-based line", () => {
     expect(formatCallerLocation("/work/x/proj/src/a.ts", 0, "/work/x/proj")).toBe("src/a.ts:1");
+  });
+});
+
+describe("isEditedLineCaller", () => {
+  const abs = "/work/proj/a.ts";
+  const changed = [2, 5, 17]; // 1-based new-side
+
+  test("same-file caller on a changed line → edited (skip)", () => {
+    // 0-based line 1 → 1-based 2, which is in `changed`.
+    expect(isEditedLineCaller(abs, 1, abs, changed)).toBe(true);
+    expect(isEditedLineCaller("/work/proj/a.ts", 4, abs, changed)).toBe(true);
+  });
+
+  test("same-file caller on an unchanged line → keep", () => {
+    expect(isEditedLineCaller(abs, 3, abs, changed)).toBe(false); // 1-based 4
+  });
+
+  test("cross-file caller is never edited (diff lines can't collide)", () => {
+    expect(isEditedLineCaller("/work/proj/b.ts", 1, abs, changed)).toBe(false);
+  });
+
+  test("empty changed list → never edited", () => {
+    expect(isEditedLineCaller(abs, 1, abs, [])).toBe(false);
   });
 });
 
