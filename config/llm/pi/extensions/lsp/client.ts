@@ -898,7 +898,17 @@ export async function createClient(
       initResult.capabilities.diagnosticProvider !== undefined && initResult.capabilities.diagnosticProvider !== null,
     openFiles,
     diagnostics,
-    diagnosticsVersion,
+    // Live, not a snapshot: the push-diagnostics handler below increments the
+    // closure variable, so the property must read it at access time or the
+    // engine's "did the server respond?" check (diagnosticsVersion > prev)
+    // never fires for push servers. A plain shorthand would copy the value at
+    // construction and stay 0 forever. The setter backs the pull path's `++`.
+    get diagnosticsVersion() {
+      return diagnosticsVersion;
+    },
+    set diagnosticsVersion(v: number) {
+      diagnosticsVersion = v;
+    },
     registeredWatchers,
     progress: progressMap,
     onProgress: undefined,

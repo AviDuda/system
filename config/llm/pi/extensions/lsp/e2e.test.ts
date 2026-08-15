@@ -15,6 +15,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { runAction } from "./actions";
 import type { DocumentSymbol, LspClient } from "./client";
 import {
   createClient,
@@ -25,17 +26,25 @@ import {
   prepareCallHierarchy,
   syncFile,
 } from "./client";
+import { restartAllClients } from "./client-mgmt";
 import { detectTsFlavor, resolveServerTarget } from "./devcontainer";
 import { formatDriftLines } from "./drift";
+import { startSession, stopSession } from "./file-events";
+import { postBashResult, postEditResult } from "./hooks";
 import { configForTsFlavor, KNOWN_SERVERS } from "./servers";
+import { createState, type EngineState, type LspHost } from "./state";
+import { statusReport } from "./status";
+import { WatchChangeType } from "./watcher";
 
 const E2E = process.env.LSP_E2E === "1";
 const d = E2E ? describe : describe.skip;
 d("e2e", () => {
   const tmpDirs: string[] = [];
   const clients: LspClient[] = [];
+  const engineStates: EngineState[] = [];
   afterAll(() => {
     for (const c of clients) void c.shutdown();
+    for (const s of engineStates) void stopSession(s);
     for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
   });
 
@@ -552,5 +561,211 @@ d("e2e", () => {
         (s) => s.some((x) => x.name === "Main"),
       ),
     180_000,
+  );
+
+  // ── Engine-driven tests: the full pipeline through the engine modules ──
+  // (session start → postEditResult drain → runAction) against a real server.
+
+  function startEngineSession(fixture: string): {
+    state: EngineState;
+    statusCalls: Array<{ progress: unknown[]; running: string[] }>;
+  } {
+    const statusCalls: Array<{ progress: unknown[]; running: string[] }> = [];
+    const host: LspHost = { notify: () => {}, setStatus: (d) => statusCalls.push(d) };
+    const state = createState(host);
+    engineStates.push(state);
+    startSession(state, fixture);
+    expect(state.detectedServers.length).toBeGreaterThan(0);
+    return { state, statusCalls };
+  }
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: postEditResult drain reports a write-injected type error, then clears",
+    async () => {
+      const fixture = mkFixture("engine-edit", {
+        "package.json": "{}",
+        "src.ts": "export const n: number = 1;\n",
+      });
+      const { state } = startEngineSession(fixture);
+
+      // Introduce a type error via a `write` tool_result drain.
+      fs.writeFileSync(path.join(fixture, "src.ts"), "export const n: number = 'not a number';\n");
+      const broken = await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(broken).not.toBeNull();
+      expect(broken?.appended).toContain("[LSP diagnostics (");
+      expect(broken?.errored).toBe(true);
+      expect(broken?.notify).toContain("not assignable");
+
+      // Fix the file: the drain reports clean and raises no notification.
+      fs.writeFileSync(path.join(fixture, "src.ts"), "export const n: number = 1;\n");
+      const clean = await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(clean).not.toBeNull();
+      expect(clean?.appended).toContain("no errors, no warnings");
+      expect(clean?.notify).toBeNull();
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: consecutive drains collapse an unchanged error (dedup ledger)",
+    async () => {
+      const fixture = mkFixture("engine-ledger", {
+        "package.json": "{}",
+        "src.ts": "export const n: number = 1;\n",
+      });
+      const { state } = startEngineSession(fixture);
+
+      // Two different broken contents, same error message: the second drain
+      // must RUN (not be cold-skipped) and classify the error as unchanged.
+      fs.writeFileSync(path.join(fixture, "src.ts"), "export const n: number = 'a';\n");
+      const first = await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(first?.notify).toContain("not assignable");
+
+      fs.writeFileSync(path.join(fixture, "src.ts"), "export const n: number = 'b';\n");
+      const second = await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(second).not.toBeNull();
+      expect(second?.appended).toContain("0 new, 1 unchanged");
+      // Unchanged errors still notify, but in collapsed form (per README).
+      expect(second?.notify).toContain("1 unchanged");
+      expect(second?.notify).not.toContain("not assignable");
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: runAction symbols/hover/diagnostics/references/workspace_symbol/restart against a live server",
+    async () => {
+      const fixture = mkFixture("engine-actions", {
+        "package.json": "{}",
+        "src.ts":
+          '/** Greets the user. */\nexport function greet(name: string): string {\n  return "hello " + name;\n}\ngreet("world");\n',
+      });
+      const { state } = startEngineSession(fixture);
+
+      const symbols = await runAction(state, { action: "symbols", file: "src.ts" }, fixture);
+      expect(symbols).toContain("Symbols in src.ts:");
+      expect(symbols).toContain("greet");
+
+      const hover = await runAction(state, { action: "hover", file: "src.ts", line: 2, symbol: "greet" }, fixture);
+      expect(hover).toContain("string");
+
+      const diags = await runAction(state, { action: "diagnostics", file: "src.ts" }, fixture);
+      expect(diags).toBe("No diagnostics"); // the fixture file is clean
+
+      const refs = await runAction(state, { action: "references", file: "src.ts", line: 2, symbol: "greet" }, fixture);
+      expect(refs).toContain("reference(s)");
+      expect(refs).toContain("greet");
+
+      const ws = await runAction(state, { action: "workspace_symbol", query: "greet" }, fixture);
+      expect(ws).toContain('Workspace symbols matching "greet"');
+      expect(ws).toContain("greet");
+
+      const report = statusReport(state);
+      expect(report).toContain("ts ("); // display name + file types
+      expect(report).toContain("running");
+
+      const restarted = await restartAllClients(state);
+      expect(restarted).toBe("Restarted 1 server(s): typescript-language-server");
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: codeAction lists and applies a quickfix (remove unused declaration)",
+    async () => {
+      const fixture = mkFixture("engine-codeaction", {
+        "package.json": "{}",
+        "tsconfig.json": '{ "compilerOptions": { "noUnusedLocals": true } }',
+        "src.ts": "const unusedVar = 1;\nexport const used = 2;\n",
+      });
+      const { state } = startEngineSession(fixture);
+      const file = path.join(fixture, "src.ts");
+
+      // Warm the server + populate its diagnostics for this file.
+      const drained = await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(drained?.errored).toBe(true);
+
+      const listed = await runAction(state, { action: "codeAction", file: "src.ts", line: 1 }, fixture);
+      expect(listed).toContain("Remove unused declaration");
+
+      const applied = await runAction(
+        state,
+        { action: "codeActionApply", file: "src.ts", line: 1, name: "Remove unused declaration" },
+        fixture,
+      );
+      expect(applied).toContain("Applied");
+      expect(applied).toContain("src.ts");
+      expect(fs.readFileSync(file, "utf-8")).not.toContain("unusedVar");
+
+      const after = await runAction(state, { action: "diagnostics", file: "src.ts" }, fixture);
+      expect(after).toBe("No diagnostics");
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: rename updates the file and its call site",
+    async () => {
+      const fixture = mkFixture("engine-rename", {
+        "package.json": "{}",
+        "src.ts": 'export function greet(name: string): string {\n  return "hello " + name;\n}\ngreet("world");\n',
+      });
+      const { state } = startEngineSession(fixture);
+
+      const renamed = await runAction(
+        state,
+        { action: "rename", file: "src.ts", line: 1, symbol: "greet", new_name: "salute" },
+        fixture,
+      );
+      expect(renamed).toContain('Renamed to "salute"');
+      const content = fs.readFileSync(path.join(fixture, "src.ts"), "utf-8");
+      expect(content).toContain("salute(");
+      expect(content).not.toContain("greet");
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: postBashResult drains watcher-buffered changes",
+    async () => {
+      const fixture = mkFixture("engine-bash", {
+        "package.json": "{}",
+        "src.ts": "export const n: number = 1;\n",
+      });
+      const { state } = startEngineSession(fixture);
+      const abs = path.join(fixture, "src.ts");
+
+      // Warm the server on this file first (via an edit drain), then simulate
+      // a bash command that broke it: a watcher event lands in recentChanges.
+      await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      fs.writeFileSync(abs, "export const n: number = 'broken';\n");
+      state.recentChanges.set(abs, { type: WatchChangeType.Changed, ts: Date.now() });
+
+      const result = await postBashResult(state, fixture);
+      expect(result).not.toBeNull();
+      expect(result?.appended).toContain("[LSP diagnostics (");
+      expect(result?.errored).toBe(true);
+      expect(result?.notify).toContain("not assignable");
+    },
+    90_000,
+  );
+
+  test.skipIf(!hasBinary("typescript-language-server"))(
+    "engine: status facts push running servers to the host",
+    async () => {
+      const fixture = mkFixture("engine-status", {
+        "package.json": "{}",
+        "src.ts": "export const n: number = 1;\n",
+      });
+      const { state, statusCalls } = startEngineSession(fixture);
+
+      await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      // The text report reflects the live client...
+      expect(statusReport(state)).toContain("running");
+      // ...and a status push (here via restart) carries the running server name.
+      await restartAllClients(state);
+      expect(statusCalls.some((s) => s.running.includes("ts"))).toBe(true);
+    },
+    90_000,
   );
 });

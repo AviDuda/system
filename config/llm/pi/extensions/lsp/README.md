@@ -175,11 +175,23 @@ For files outside the session cwd, `findProjectRoot` walks up to the nearest roo
 
 ## Files
 
+The extension splits into a thin pi adapter (`index.ts`) and a harness-agnostic
+engine (everything else — no pi imports, reusable with another agent harness).
+The engine returns plain text; a harness that wants a different format (e.g.
+HTML) renders the same data itself.
+
 | File | Purpose |
 |------|---------|
+| index.ts | Pi adapter only: session events, tool/command registration, UI notifications, footer status rendering |
+| state.ts | Engine state + shared types (LspHost, LSP_ACTIONS, EngineStatusData, constants) |
+| client-mgmt.ts | Server/client resolution (getClientForFile, getClientAt, restart), path overrides, gated linters |
+| diagnostics.ts | Diagnostic collection pipeline (getDiagnosticsForFile), diagBlock rendering |
+| hooks.ts | tool_call/tool_result hooks: read warming, pre-edit capture, post-edit/post-bash drains, caller warnings |
+| file-events.ts | Watcher routing (didChangeWatchedFiles), session start/stop |
+| status.ts | Status facts (updateStatusData), statusReport, dedup toggle |
+| actions.ts | The `lsp` tool's action implementations (runAction switch) |
 | watcher.ts | File system watcher (fs.watch recursive, git check-ignore filtering, debounce) |
 | watcher.test.ts | Tests for file watcher |
-| index.ts | Extension entry point, tool registration, tool_result hooks, file change routing, cold server gating |
 | client.ts | JSON-RPC client over stdio, LSP protocol handling, server request handlers, progress tracking (10s request timeout) |
 | servers.ts | Known server configs, auto-detection, dynamic tsserver memory scaling |
 | linters.ts | CLI linter configs (golangci-lint), detection, JSON output parsing |
@@ -190,6 +202,8 @@ For files outside the session cwd, `findProjectRoot` walks up to the nearest roo
 | servers.test.ts | Tests for server configs, file matching, memory scaling |
 | linters.test.ts | Tests for linter configs, golangci-lint output parsing |
 | client.test.ts | Tests for project root detection |
+| engine.test.ts | Engine orchestration tests with a mock host (no real servers) |
+| e2e.test.ts | Live server tests (gated by `LSP_E2E=1`), incl. engine-driven pipeline tests |
 
 ## Per-project configuration (`.lsp/` directory)
 
