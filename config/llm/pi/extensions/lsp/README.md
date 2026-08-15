@@ -25,6 +25,7 @@ Auto-detects common language servers from project markers (TypeScript, Rust, Go,
 
 - `/lsp` — show detected servers and status
 - `/lsp-restart` — restart all LSP servers (user command)
+- `/lsp-dedup` — toggle collapsing of unchanged diagnostics in post-edit blocks (on by default; state is in-memory, resets on reload)
 
 The agent can also restart servers via `lsp(action="restart")` (all servers) or `lsp(action="restart", file="...")` (server for a specific file's project).
 
@@ -37,6 +38,7 @@ When the model uses `edit`, `write`, or `patch` on a file that has an active lan
 3. For new files (not yet opened by any server), a `workspace/didChangeWatchedFiles` Created notification is sent first, with a longer 6s timeout for re-indexing
 4. Diagnostics are collected (up to 3s timeout for existing files, 6s for new files)
 5. A status line is appended to the tool result: the errors/warnings if any, or `no errors, no warnings` when clean. The model sees the result inline — no explicit `lsp diagnostics` call needed after edits.
+6. Diagnostics already shown in an earlier post-edit block collapse: unchanged errors (same source, code, and message — position ignored, since an edit above an error shifts its line) shrink to a single location line, and only new diagnostics get full detail. The summary counts both, so an unfixed error is never invisible. The ledger is per-file, per-session; a file that goes clean is forgotten, and a new session re-reports everything once. Explicit `lsp diagnostics` calls always show the full set.
 
 The file watcher also handles changes made via bash (e.g., `rm`, `echo >`, `git checkout`). When a file is deleted, `didClose` is sent before the deletion notification so servers like tsserver drop their cached state.
 
@@ -48,6 +50,19 @@ Successfully edited src/main.ts
 [LSP diagnostics (typescript-language-server): 1 error(s)]
 src/main.ts:42:5 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
 ```
+
+When an edit doesn't change the diagnostic picture, the already-shown errors collapse:
+
+```
+[LSP diagnostics (typescript-language-server): 2 error(s) — 1 new, 1 unchanged]
+src/main.ts:40:3 [error] (ts) [2345] Argument of type 'string' is not assignable to parameter of type 'number'
+  unchanged: src/main.ts:42
+```
+
+UI notifications carry the same collapsed form — the user is reminded something
+is wrong without getting the same wall of messages re-listed on every edit.
+Toggle the behavior with `/lsp-dedup` (off: unchanged errors are reported in
+full again; `lsp status` shows the state while off).
 
 ## Read-time warming
 

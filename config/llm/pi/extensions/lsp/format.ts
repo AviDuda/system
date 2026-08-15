@@ -65,6 +65,22 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
 }
 
 /**
+ * One collapsed line for diagnostics the agent has already seen, e.g.
+ * `  unchanged: src/a.ts:10, 22, 45 (+2 more)`. Locations only — the messages
+ * were shown before; this refreshes where they are. All diagnostics share one
+ * file (the ledger is per-file), so the relPath appears once, then bare lines.
+ * `line` is 1-based via range.start.line + 1, matching formatDiagnostic.
+ */
+export function formatUnchangedLine(diagnostics: Diagnostic[], relPath: string, cap = 6): string {
+  const lines = diagnostics.map((d) => String(d.range.start.line + 1));
+  const first = lines[0];
+  const rest = lines.slice(1, cap).join(", ");
+  const more = lines.length > cap ? ` (+${lines.length - cap} more)` : "";
+  const linesPart = rest ? `${first}, ${rest}` : first;
+  return `  unchanged: ${relPath}:${linesPart}${more}`;
+}
+
+/**
  * Sort diagnostics in-place: by severity (errors first), then by line,
  * then by column for diagnostics on the same line.
  */

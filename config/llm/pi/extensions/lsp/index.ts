@@ -55,6 +55,7 @@ import {
   uriToFile,
   type WorkspaceEdit,
 } from "./client";
+import { DiagnosticsLedger } from "./dedup";
 import {
   type ContainerTarget,
   detectTsFlavor,
@@ -71,6 +72,7 @@ import {
   formatLocation,
   formatLocationWithContext,
   formatSymbolInformation,
+  formatUnchangedLine,
   normalizeLocations,
   readLocationContext,
   resolveSymbolPosition,
@@ -92,6 +94,19 @@ import { createFileWatcher, type FileChange, type FileWatcher, WatchChangeType }
 
 /** Active LSP clients, keyed by `serverName::rootPath` */
 const clients = new Map<string, LspClient>();
+
+/**
+ * Diagnostics the agent has already been shown in post-edit blocks, so
+ * repeated reports collapse unchanged errors to a single line. Cleared on
+ * session start (a new conversation hasn't seen anything).
+ */
+const diagLedger = new DiagnosticsLedger();
+
+/**
+ * Whether the post-edit block collapses unchanged diagnostics (see diagLedger).
+ * Toggled by `/lsp-dedup`; in-memory, resets on reload. Default on.
+ */
+let dedupEnabled = true;
 
 /**
  * Resolved devcontainer targets per `serverName::rootPath`. Discovery (docker
@@ -548,9 +563,22 @@ async function getDiagnosticsForFile(
     timeoutMs?: number;
     /** If true, send workspace/didChangeWatchedFiles Created notification */
     isNewFile?: boolean;
+    /**
+     * If true (post-edit auto path), run the dedup ledger: only diagnostics
+     * not previously shown are returned in `messages`, the rest in
+     * `unchanged`. Explicit `lsp diagnostics` calls skip this — a deliberate
+     * query always shows the full set.
+     */
+    dedupe?: boolean;
   } = {},
-): Promise<{ messages: string[]; summary: string; errored: boolean; server?: string } | null> {
-  const { explicit = false, timeoutMs, isNewFile = false } = opts;
+): Promise<{
+  messages: string[];
+  summary: string;
+  errored: boolean;
+  server?: string;
+  unchanged?: Diagnostic[];
+} | null> {
+  const { explicit = false, timeoutMs, isNewFile = false, dedupe = false } = opts;
   const abs = path.resolve(cwd, filePath);
   let servers = getServersForFile(abs);
 
@@ -643,11 +671,22 @@ async function getDiagnosticsForFile(
 
   sortDiagnostics(unique);
   const relPath = path.relative(cwd, abs);
-  const messages = unique.map((d) => formatDiagnostic(d, relPath));
   const summary = formatDiagnosticsSummary(unique);
   const errored = unique.some((d) => d.severity === 1);
+  const server = sourceNames.join(", ");
 
-  return { messages, summary, errored, server: sourceNames.join(", ") };
+  if (dedupe && dedupEnabled) {
+    const split = diagLedger.reduce(abs, unique);
+    return {
+      messages: split.fresh.map((d) => formatDiagnostic(d, relPath)),
+      summary,
+      errored,
+      server,
+      unchanged: split.unchanged,
+    };
+  }
+
+  return { messages: unique.map((d) => formatDiagnostic(d, relPath)), summary, errored, server };
 }
 
 /**
@@ -743,6 +782,7 @@ export default function (pi: ExtensionAPI) {
     sessionCtx = ctx;
     detectedServers = detectServers(currentCwd);
     detectedLinters = detectLinters(currentCwd);
+    diagLedger.clear();
 
     if (detectedServers.length === 0 && detectedLinters.length === 0) {
       // Don't spam -- just stay quiet if nothing found
@@ -825,16 +865,26 @@ export default function (pi: ExtensionAPI) {
     for (const filePath of paths) {
       const isNewFile = isWrite && !isFileOpenInAnyClient(filePath, ctx.cwd);
       try {
-        const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile });
+        const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile, dedupe: true });
         if (result) {
-          const label = multi ? ` ${path.relative(ctx.cwd, path.resolve(ctx.cwd, filePath))}` : "";
-          if (result.messages.length === 0) {
+          const abs = path.resolve(ctx.cwd, filePath);
+          const relPath = path.relative(ctx.cwd, abs);
+          const label = multi ? ` ${relPath}` : "";
+          const unchanged = result.unchanged ?? [];
+          const unchangedCount = unchanged.length;
+          if (result.messages.length === 0 && unchangedCount === 0) {
             diagParts.push(`[LSP diagnostics (${result.server})${label}: no errors, no warnings]`);
           } else {
             if (result.errored) anyErrored = true;
-            diagParts.push(
-              `[LSP diagnostics (${result.server})${label}: ${result.summary}]\n${result.messages.join("\n")}`,
-            );
+            // Collapse diagnostics the agent already saw: full detail only for
+            // new ones; unchanged ones shrink to one location line.
+            const delta = unchangedCount > 0 ? ` — ${result.messages.length} new, ${unchangedCount} unchanged` : "";
+            const lines = [
+              `[LSP diagnostics (${result.server})${label}: ${result.summary}${delta}]`,
+              ...result.messages,
+            ];
+            if (unchangedCount > 0) lines.push(formatUnchangedLine(unchanged, relPath));
+            diagParts.push(lines.join("\n"));
           }
         }
       } catch {
@@ -1494,6 +1544,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("lsp-dedup", {
+    description: "Toggle collapsing of unchanged diagnostics in post-edit blocks",
+    handler: async (_args, ctx) => {
+      dedupEnabled = !dedupEnabled;
+      ctx.ui.notify(`LSP: unchanged diagnostics ${dedupEnabled ? "collapse" : "reported in full"} after edits`, "info");
+    },
+  });
+
   pi.registerCommand("lsp-restart", {
     description: "Restart all LSP servers and re-detect linters",
     handler: async (_args, ctx) => {
@@ -1584,6 +1642,10 @@ function statusReport(): string | null {
     for (const l of detectedLinters) {
       lines.push(`  ${l.name} (${l.config.fileTypes.join(", ")}) — cli`);
     }
+  }
+  if (!dedupEnabled) {
+    lines.push(``);
+    lines.push(`Diagnostic collapse: off (unchanged errors reported in full after every edit)`);
   }
   return lines.join("\n");
 }

@@ -6,6 +6,7 @@ import {
   formatDiagnosticsSummary,
   formatDocumentSymbol,
   formatLocation,
+  formatUnchangedLine,
   normalizeLocations,
   resolveSymbolPosition,
   sortDiagnostics,
@@ -40,6 +41,29 @@ describe("formatDiagnostic", () => {
       message: "Something",
     };
     expect(formatDiagnostic(d, "x.ts")).toContain("[info]");
+  });
+});
+
+describe("formatUnchangedLine", () => {
+  const at = (line: number): Diagnostic => ({
+    range: { start: { line, character: 0 }, end: { line, character: 1 } },
+    severity: 1,
+    source: "ts",
+    code: "2322",
+    message: "x",
+  });
+
+  test("single location: file once, line once", () => {
+    expect(formatUnchangedLine([at(9)], "src/a.ts")).toBe("  unchanged: src/a.ts:10");
+  });
+
+  test("multiple lines: file once, then bare lines", () => {
+    expect(formatUnchangedLine([at(9), at(21), at(44)], "src/a.ts")).toBe("  unchanged: src/a.ts:10, 22, 45");
+  });
+
+  test("capped with overflow count", () => {
+    const diags = [0, 1, 2, 3, 4, 5, 6, 7].map(at);
+    expect(formatUnchangedLine(diags, "src/a.ts")).toBe("  unchanged: src/a.ts:1, 2, 3, 4, 5, 6 (+2 more)");
   });
 });
 
