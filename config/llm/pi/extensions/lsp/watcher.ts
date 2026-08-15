@@ -133,9 +133,17 @@ export interface FileWatcher {
  *
  * @param root - Directory to watch (usually cwd)
  * @param handler - Called with batched file changes after debounce
+ * @param onRaw - Optional: called immediately per deduped event (no debounce),
+ *   for consumers that need prompt change signals (post-bash diagnostics) —
+ *   the debounced batch lands ~300ms after the last event, too late for a
+ *   tool_result hook that drains right after a bash command finishes.
  * @returns FileWatcher with close() method
  */
-export function createFileWatcher(root: string, handler: FileChangeHandler): FileWatcher {
+export function createFileWatcher(
+  root: string,
+  handler: FileChangeHandler,
+  onRaw?: (changes: FileChange[]) => void,
+): FileWatcher {
   const pending = new Map<string, WatchChangeType>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
@@ -168,6 +176,7 @@ export function createFileWatcher(root: string, handler: FileChangeHandler): Fil
 
     // Deduplicate: last event wins within the debounce window
     pending.set(fullPath, changeType);
+    onRaw?.([{ absolutePath: fullPath, type: changeType }]);
 
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, DEBOUNCE_MS);

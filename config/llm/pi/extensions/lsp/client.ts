@@ -66,7 +66,7 @@ export interface LspClient {
   /** Callback invoked when progress state changes */
   onProgress: ((progress: WorkDoneProgress) => void) | undefined;
   /** Send a JSON-RPC request and wait for response */
-  request: (method: string, params?: unknown) => Promise<unknown>;
+  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
   /** Send a JSON-RPC notification (no response expected) */
   notify: (method: string, params?: unknown) => void;
   /** Shut down gracefully */

@@ -16,6 +16,9 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 10. **Progress reporting** — tracks `window/workDoneProgress` from servers and shows progress (title, percentage) in the footer status bar. Stale progress entries are expired after 30s.
 11. **Devcontainer support** — when a project has a running `.devcontainer/`, language servers can run inside it (with host↔container path translation), so the host doesn't need the project's dependencies. See [Devcontainer support](#devcontainer-support).
 12. **Read-time warming** — when the agent `read`s a code file, it's opened in its LSP server in the background so the first interactive `symbols`/`hover`/`incoming` call is already warm. Invisible to the model and non-blocking. See [Read-time warming](#read-time-warming).
+13. **Post-bash diagnostics** — after a `bash` command that changed files (formatter, checkout, codegen), diagnostics for the changed files are appended to the result (capped at 5, with a `…and N more` tail). The agent rarely calls `lsp diagnostics` after bash; the file watcher knows what changed.
+14. **Format drift report** — after an edit, repo-gated formatter servers (biome) are asked what the formatter would change (`textDocument/formatting`); the changed line ranges are reported in the diagnostics block. Non-mutating — the agent decides whether to run the formatter.
+15. **Quickfix hints** — after an edit, servers are asked which of the file's diagnostics have an available quickfix (`textDocument/codeAction`); the titles are appended as `quickfix: <title> — apply via lsp codeActionApply`. Server-agnostic (tsserver "Add import…" and biome rule fixes both). Non-mutating.
 
 ## Supported servers
 
@@ -41,6 +44,8 @@ When the model uses `edit`, `write`, or `patch` on a file that has an active lan
 4. Diagnostics are collected (up to 3s timeout for existing files, 6s for new files)
 5. A status line is appended to the tool result: the errors/warnings if any, or `no errors, no warnings` when clean. The model sees the result inline — no explicit `lsp diagnostics` call needed after edits.
 6. Diagnostics already shown in an earlier post-edit block collapse: unchanged errors (same source, code, and message — position ignored, since an edit above an error shifts its line) shrink to a single location line, and only new diagnostics get full detail. The summary counts both, so an unfixed error is never invisible. The ledger is per-file, per-session; a file that goes clean is forgotten, and a new session re-reports everything once. Explicit `lsp diagnostics` calls always show the full set.
+7. Format drift (post-edit only): if a repo-gated server (biome — its config marker opts the project into the formatter) would change the file, the changed line ranges are appended as `format drift: 2-4`. Reported, never applied — the agent runs the formatter itself; the point is that its next patch must target formatted content, not the stale text it last wrote.
+8. Quickfix hints (post-edit only): for each server's diagnostics on the file, the extension asks which have an available quickfix (`textDocument/codeAction`) and appends `quickfix: <title> — apply via lsp codeActionApply`. Server-agnostic; suppress/disable actions are filtered out; capped at 3 hints per file.
 
 The file watcher also handles changes made via bash (e.g., `rm`, `echo >`, `git checkout`). When a file is deleted, `didClose` is sent before the deletion notification so servers like tsserver drop their cached state.
 
@@ -178,6 +183,8 @@ For files outside the session cwd, `findProjectRoot` walks up to the nearest roo
 | client.ts | JSON-RPC client over stdio, LSP protocol handling, server request handlers, progress tracking (10s request timeout) |
 | servers.ts | Known server configs, auto-detection, dynamic tsserver memory scaling |
 | linters.ts | CLI linter configs (golangci-lint), detection, JSON output parsing |
+| drift.ts | Format drift detection: `textDocument/formatting` → changed line ranges |
+| drift.test.ts | Tests for collapseRanges |
 | format.ts | Formatting utilities (diagnostics, locations, symbols, hover, workspace edit application) |
 | format.test.ts | Tests for formatting |
 | servers.test.ts | Tests for server configs, file matching, memory scaling |

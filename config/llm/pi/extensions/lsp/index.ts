@@ -64,6 +64,7 @@ import {
   readServerContainerConfig,
   resolveServerTarget,
 } from "./devcontainer";
+import { formatDriftLines } from "./drift";
 import {
   applyWorkspaceEdit,
   extractHoverText,
@@ -156,6 +157,14 @@ const pendingPreEdit = new Map<string, string>();
 const MAX_PENDING_EDIT = 200;
 
 /**
+ * Files the watcher saw change, timestamped, drained on the next bash tool
+ * result for post-bash diagnostics. TTL bounds staleness (a long-running bash
+ * doesn't report files from before it started).
+ */
+const recentChanges = new Map<string, { type: WatchChangeType; ts: number }>();
+const RECENT_CHANGE_TTL_MS = 5_000;
+
+/**
  * Host-relative paths applied by the server via inbound `workspace/applyEdit`
  * during the most recent executeCommand (e.g. command-only actions like
  * move-to-file that typescript-language-server applies itself). Reset before
@@ -190,6 +199,42 @@ async function requestCodeActions(
   if (raw && raw.length > 0) return raw;
   return query(["quickfix", "refactor", "source"]);
 }
+/** Max quickfix hint lines shown per file — bounds block noise, not query cost. */
+const MAX_QUICKFIX_HINTS = 3;
+
+/** Suppress/disable code actions are noise — hint only real fixes. */
+const SUPPRESS_TITLE_RE = /^(suppress|disable)/i;
+
+/**
+ * Ask a server which quickfixes (codeAction with edits or commands) exist for
+ * its diagnostics on a file. One request per server: a merged range spanning
+ * the diagnostics + all of them in context returns every quickfix at once.
+ * Returns real-fix titles only, suppress/disable excluded. Short timeout:
+ * this is a hint, not worth blocking the tool result on.
+ */
+async function availableQuickfixTitles(client: LspClient, abs: string, diags: Diagnostic[]): Promise<string[]> {
+  if (diags.length === 0) return [];
+  const range = {
+    start: { line: Math.min(...diags.map((d) => d.range.start.line)), character: 0 },
+    end: { line: Math.max(...diags.map((d) => d.range.end.line)), character: 9999 },
+  };
+  try {
+    const raw = (await client.request(
+      "textDocument/codeAction",
+      {
+        textDocument: { uri: serverUriFor(client, abs) },
+        range,
+        context: { diagnostics: diags, only: ["quickfix"] },
+      },
+      2000,
+    )) as CodeAction[] | null;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((a) => (a.edit || a.command) && !SUPPRESS_TITLE_RE.test(a.title)).map((a) => a.title);
+  } catch {
+    return [];
+  }
+}
+
 async function getClientAt(serverName: string, root: string): Promise<LspClient | null> {
   const key = clientKey(serverName, root);
   const existing = clients.get(key);
@@ -478,6 +523,8 @@ const WatchKind = { Create: 1, Change: 2, Delete: 4 } as const;
  * falling back to file type extensions from detected servers.
  */
 function handleFileChanges(changes: FileChange[]): void {
+  recordRecentChanges(changes);
+
   // Group changes by client
   type ChangeType = (typeof FileChangeType)[keyof typeof FileChangeType];
   const clientChanges = new Map<string, Array<{ uri: string; type: ChangeType; absolutePath: string }>>();
@@ -547,7 +594,7 @@ function handleFileChanges(changes: FileChange[]): void {
 function startFileWatcher(): void {
   stopFileWatcher();
   if (!currentCwd) return;
-  fileWatcher = createFileWatcher(currentCwd, handleFileChanges);
+  fileWatcher = createFileWatcher(currentCwd, handleFileChanges, (raw) => recordRecentChanges(raw));
 }
 
 function stopFileWatcher(): void {
@@ -608,6 +655,17 @@ async function getDiagnosticsForFile(
      * query always shows the full set.
      */
     dedupe?: boolean;
+    /**
+     * If true (post-edit auto path), check repo-gated servers (biome) for
+     * format drift and report where the project formatter would change the
+     * file. Non-mutating; see drift.ts.
+     */
+    checkDrift?: boolean;
+    /**
+     * If true (post-edit auto path), ask servers which of the file's
+     * diagnostics have an available quickfix and hint the titles. Non-mutating.
+     */
+    checkQuickfixes?: boolean;
   } = {},
 ): Promise<{
   messages: string[];
@@ -615,8 +673,17 @@ async function getDiagnosticsForFile(
   errored: boolean;
   server?: string;
   unchanged?: Diagnostic[];
+  drift?: string;
+  quickfixes?: string[];
 } | null> {
-  const { explicit = false, timeoutMs, isNewFile = false, dedupe = false } = opts;
+  const {
+    explicit = false,
+    timeoutMs,
+    isNewFile = false,
+    dedupe = false,
+    checkDrift = false,
+    checkQuickfixes = false,
+  } = opts;
   const abs = path.resolve(cwd, filePath);
   let servers = getServersForFile(abs);
 
@@ -678,6 +745,43 @@ async function getDiagnosticsForFile(
     allDiags.push(...diags);
   }
 
+  // Format drift (post-edit only): repo-gated servers (allowLazy: false —
+  // biome) opt in to a formatter via config marker; report where it would
+  // change the file so the agent's next patch doesn't target stale content.
+  // Non-mutating — reports, never applies. Other servers (rust-analyzer,
+  // gopls) are skipped; revisit if rustfmt/gofmt drift proves worth reporting.
+  let drift: string | null = null;
+  if (checkDrift) {
+    for (const server of servers) {
+      if (server.config.allowLazy !== false) continue;
+      const client = await getClientAt(server.name, rootForServer(server, abs));
+      if (!client) continue;
+      const ranges = await formatDriftLines(client, abs);
+      if (ranges) {
+        drift = `line ${ranges} (${serverDisplayName(server.name)})`;
+        break;
+      }
+    }
+  }
+
+  // Quickfix hints (post-edit only): for each server, ask which of its
+  // diagnostics on this file have an available quickfix (codeAction with
+  // edits) and report the titles — the agent sees "this is auto-fixable"
+  // without calling the lsp tool. Server-agnostic (tsserver "Add import…"
+  // works the same as biome's rule fixes). One query per server; suppress/
+  // disable actions are filtered out. Display-capped in diagBlock.
+  let quickfixes: string[] = [];
+  if (checkQuickfixes) {
+    const hints = new Set<string>();
+    for (const server of servers) {
+      const client = await getClientAt(server.name, rootForServer(server, abs));
+      if (!client) continue;
+      const titles = await availableQuickfixTitles(client, abs, client.diagnostics.get(fileToUri(abs)) ?? []);
+      for (const t of titles) hints.add(t);
+    }
+    quickfixes = [...hints];
+  }
+
   // CLI linter diagnostics
   let linters = lintersForFile(abs, detectedLinters);
   if (linters.length === 0) {
@@ -721,10 +825,62 @@ async function getDiagnosticsForFile(
       errored,
       server,
       unchanged: split.unchanged,
+      drift: drift ?? undefined,
+      quickfixes,
     };
   }
 
-  return { messages: unique.map((d) => formatDiagnostic(d, relPath)), summary, errored, server };
+  return {
+    messages: unique.map((d) => formatDiagnostic(d, relPath)),
+    summary,
+    errored,
+    server,
+    drift: drift ?? undefined,
+    quickfixes,
+  };
+}
+
+/**
+ * Render a diagnostics result into the post-tool block: the header, fresh
+ * messages, the unchanged-collapse line, and the format-drift line. Returns
+ * "" for null results.
+ */
+function diagBlock(
+  result: NonNullable<Awaited<ReturnType<typeof getDiagnosticsForFile>>>,
+  relPath: string,
+  label: string,
+): string {
+  const unchangedCount = (result.unchanged ?? []).length;
+  const header =
+    result.messages.length === 0 && unchangedCount === 0
+      ? `[LSP diagnostics (${result.server})${label}: no errors, no warnings]`
+      : `[LSP diagnostics (${result.server})${label}: ${result.summary}${
+          unchangedCount > 0 ? ` — ${result.messages.length} new, ${unchangedCount} unchanged` : ""
+        }]`;
+  const lines = [header, ...result.messages];
+  const qs = result.quickfixes ?? [];
+  for (const q of qs.slice(0, MAX_QUICKFIX_HINTS)) lines.push(`  quickfix: ${q} — apply via lsp codeActionApply`);
+  if (qs.length > MAX_QUICKFIX_HINTS) lines.push(`  …and ${qs.length - MAX_QUICKFIX_HINTS} more quickfixes available`);
+  if (unchangedCount > 0) lines.push(formatUnchangedLine(result.unchanged ?? [], relPath));
+  if (result.drift) lines.push(`  format drift: ${result.drift}`);
+  return lines.join("\n");
+}
+
+/**
+ * Record watcher changes for post-bash diagnostics. Raw events (no debounce)
+ * land here first via the watcher's onRaw callback — the debounced batch that
+ * handleFileChanges receives arrives ~300ms later, too late for a bash
+ * tool_result hook that drains right after the command finishes.
+ */
+function recordRecentChanges(changes: FileChange[]): void {
+  const now = Date.now();
+  for (const change of changes) {
+    if (change.type === WatchChangeType.Deleted) continue;
+    recentChanges.set(change.absolutePath, { type: change.type, ts: now });
+  }
+  for (const [p, v] of recentChanges) {
+    if (now - v.ts > RECENT_CHANGE_TTL_MS) recentChanges.delete(p);
+  }
 }
 
 /**
@@ -874,6 +1030,76 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event, ctx) => {
     const toolName = event.toolName;
+
+    // Shell tools can change files too (formatter, checkout, codegen) and the
+    // agent rarely calls `lsp diagnostics` after bash. Surface diagnostics for
+    // files the watcher saw change recently, capped — a bash command that
+    // touches hundreds of files (git checkout) reports on the first few. The
+    // buffer is TTL-bounded rather than command-bounded: FSEvents delivery
+    // latency is unreliable (ms to seconds), so attributing an event to the
+    // exact bash that wrote the file would miss late deliveries.
+    if (toolName === "bash") {
+      // Fast commands can beat fs.watch delivery (the raw event lands a few ms
+      // after the write) — poll briefly before giving up so `printf > f` is
+      // caught. Non-writing commands pay this small wait.
+      if (recentChanges.size === 0) {
+        const deadline = Date.now() + 150;
+        while (recentChanges.size === 0 && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 40));
+        }
+      }
+      const now = Date.now();
+      const changed = [...recentChanges.entries()]
+        .filter(([, v]) => now - v.ts <= RECENT_CHANGE_TTL_MS)
+        .map(([abs, v]) => ({ abs, type: v.type }));
+      if (changed.length === 0) return;
+      for (const abs of changed.map((c) => c.abs)) recentChanges.delete(abs);
+
+      const MAX_BASH_DIAG_FILES = 5;
+      const diagParts: string[] = [];
+      let anyErrored = false;
+      // Parallel + bounded: the drain runs inside the tool_result hook, so it
+      // delays the bash result — several sequential 6s waits (new-file path)
+      // would stall every file-writing command. Run per-file diagnostics
+      // concurrently and cap each server wait at 1.5s; deep semantic checks on
+      // brand-new files may not finish here (they surface on the next edit).
+      // Quickfix queries are skipped — their 2s timeouts add latency for a
+      // hint the agent can get on demand via `lsp codeAction`.
+      await Promise.all(
+        changed.slice(0, MAX_BASH_DIAG_FILES).map(async ({ abs, type }) => {
+          try {
+            const result = await getDiagnosticsForFile(abs, ctx.cwd, {
+              isNewFile: type === WatchChangeType.Created,
+              dedupe: true,
+              checkDrift: true,
+              timeoutMs: 1500,
+            });
+            if (result) {
+              const block = diagBlock(result, path.relative(ctx.cwd, abs), "");
+              if (block) {
+                if (result.errored) anyErrored = true;
+                diagParts.push(block);
+              }
+            }
+          } catch {
+            // Non-fatal per file
+          }
+        }),
+      );
+      if (diagParts.length === 0) return;
+      const more = changed.length - Math.min(changed.length, MAX_BASH_DIAG_FILES);
+      const hasIssues = diagParts.some((p) => !p.includes("no errors, no warnings"));
+      if (hasIssues) {
+        ctx.ui.notify(`LSP: ${diagParts.join("\n\n")}`, anyErrored ? "error" : "warning");
+      }
+      const tail =
+        more > 0 ? `\n\n…and ${more} more file(s) changed by bash (diagnostics capped at ${MAX_BASH_DIAG_FILES})` : "";
+      const existingText = event.content[0]?.type === "text" ? event.content[0].text : "";
+      return {
+        content: [{ type: "text" as const, text: `${existingText}\n\n${diagParts.join("\n\n")}${tail}` }],
+      };
+    }
+
     // LSP diagnostics only make sense after a file-mutating tool. The shared
     // set covers write/edit + the custom `patch` tool so diagnostics run after
     // patch too (else the reactive `}}`/`;;` catching silently skips it).
@@ -896,27 +1122,19 @@ export default function (pi: ExtensionAPI) {
     for (const filePath of paths) {
       const isNewFile = isWrite && !isFileOpenInAnyClient(filePath, ctx.cwd);
       try {
-        const result = await getDiagnosticsForFile(filePath, ctx.cwd, { isNewFile, dedupe: true });
+        const result = await getDiagnosticsForFile(filePath, ctx.cwd, {
+          isNewFile,
+          dedupe: true,
+          checkDrift: true,
+          checkQuickfixes: true,
+        });
         if (result) {
           const abs = path.resolve(ctx.cwd, filePath);
           const relPath = path.relative(ctx.cwd, abs);
           const label = multi ? ` ${relPath}` : "";
-          const unchanged = result.unchanged ?? [];
-          const unchangedCount = unchanged.length;
-          if (result.messages.length === 0 && unchangedCount === 0) {
-            diagParts.push(`[LSP diagnostics (${result.server})${label}: no errors, no warnings]`);
-          } else {
-            if (result.errored) anyErrored = true;
-            // Collapse diagnostics the agent already saw: full detail only for
-            // new ones; unchanged ones shrink to one location line.
-            const delta = unchangedCount > 0 ? ` — ${result.messages.length} new, ${unchangedCount} unchanged` : "";
-            const lines = [
-              `[LSP diagnostics (${result.server})${label}: ${result.summary}${delta}]`,
-              ...result.messages,
-            ];
-            if (unchangedCount > 0) lines.push(formatUnchangedLine(unchanged, relPath));
-            diagParts.push(lines.join("\n"));
-          }
+          if (result.errored) anyErrored = true;
+          const block = diagBlock(result, relPath, label);
+          if (block) diagParts.push(block);
         }
       } catch {
         // Non-fatal per file: continue with the rest

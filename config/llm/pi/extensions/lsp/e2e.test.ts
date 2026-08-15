@@ -26,6 +26,7 @@ import {
   syncFile,
 } from "./client";
 import { detectTsFlavor, resolveServerTarget } from "./devcontainer";
+import { formatDriftLines } from "./drift";
 import { configForTsFlavor, KNOWN_SERVERS } from "./servers";
 
 const E2E = process.env.LSP_E2E === "1";
@@ -366,11 +367,27 @@ d("e2e", () => {
       await new Promise((r) => setTimeout(r, 2000));
       expect((client.diagnostics.get(fileToUri(file)) ?? []).every((d) => !d.message.includes("debugger"))).toBe(true);
       // introduce a lint via change + save (the extension's post-edit path)
-      const broken = "export function greet(name: string): string {\n  debugger;\n  return name;\n}\n";
+      const broken =
+        'export function greet(name: string): string {\n  const s = "a" + name;\n  debugger;\n  return name;\n}\n';
       await syncFile(client, file, broken);
       notifySaved(client, file, broken);
-      const diags = await waitForDiagnostics(client, file, 1, 20_000);
+      const diags = await waitForDiagnostics(client, file, 2, 20_000);
       expect(diags.some((d) => d.message.includes("debugger"))).toBe(true);
+      // quickfix hint: the useTemplate diagnostic offers a real fix, not just
+      // suppress actions — this is what the post-edit block reports.
+      const templ = diags.find((d) => String(d.code ?? "").includes("useTemplate"));
+      if (!templ) throw new Error("expected useTemplate diagnostic");
+      const acts = (await client.request("textDocument/codeAction", {
+        textDocument: { uri: fileToUri(file) },
+        range: templ.range,
+        context: { diagnostics: [templ], only: ["quickfix"] },
+      })) as Array<{ title: string; edit?: unknown; command?: unknown }>;
+      expect(acts.some((a) => a.title.includes("template literal") && (a.edit || a.command))).toBe(true);
+      // format drift: the 2-space file diverges from biome's default tab
+      // formatter — the drift check must report changed lines, never apply.
+      const drift = await formatDriftLines(client, file);
+      expect(drift).not.toBeNull();
+      expect(drift).toMatch(/^\d/);
     },
     60_000,
   );
