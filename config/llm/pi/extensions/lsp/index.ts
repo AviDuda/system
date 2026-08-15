@@ -47,6 +47,7 @@ import {
   openFile,
   outgoingCalls,
   prepareCallHierarchy,
+  resolveCommand,
   type SymbolInformation,
   serverUriFor,
   syncFile,
@@ -79,6 +80,7 @@ import {
   sortDiagnostics,
 } from "./format";
 import { type DetectedLinter, detectLinters, findLinterByExtension, lintersForFile, lintFile } from "./linters";
+import { loadPathOverrides, matchPathOverride } from "./overrides";
 import {
   configForTsFlavor,
   type DetectedServer,
@@ -281,7 +283,19 @@ async function getClient(serverName: string): Promise<LspClient | null> {
 }
 
 function getServersForFile(filePath: string): DetectedServer[] {
-  return serversForFile(filePath, detectedServers);
+  const base = serversForFile(filePath, detectedServers);
+  // Per-repo path overrides (.lsp/config.json `paths`): a glob may map a file
+  // to a server its name hides (e.g. generated text holding SQL).
+  const override = matchPathOverride(filePath, loadPathOverrides(currentCwd));
+  if (!override) return base;
+  const existing = detectedServers.find((s) => s.name === override);
+  if (existing) return base.includes(existing) ? base : [...base, existing];
+  const config = KNOWN_SERVERS[override];
+  const resolved = config ? resolveCommand(config.command, currentCwd) : null;
+  if (!resolved) return base;
+  const ds: DetectedServer = { name: override, config, resolvedCommand: resolved };
+  detectedServers.push(ds);
+  return [...base, ds];
 }
 
 /**
@@ -351,16 +365,6 @@ const PROGRESS_STALE_MS = 30_000;
 function updateStatusBar(): void {
   if (!sessionCtx) return;
 
-  // Collect unique server names from both detected and dynamically-started clients
-  const activeNames = new Set<string>();
-  for (const key of clients.keys()) {
-    const { serverName } = parseClientKey(key);
-    activeNames.add(serverDisplayName(serverName));
-  }
-  for (const s of detectedServers) activeNames.add(serverDisplayName(s.name));
-  for (const l of detectedLinters) activeNames.add(l.name);
-  if (activeNames.size === 0) return;
-
   // Expire stale progress entries (servers that sent 'begin' but never 'end')
   const now = Date.now();
   for (const client of clients.values()) {
@@ -371,7 +375,7 @@ function updateStatusBar(): void {
     }
   }
 
-  // Check for active progress from any server
+  // Active progress takes over the pill (transient, user-relevant).
   const progressParts: string[] = [];
   for (const client of clients.values()) {
     if (client.dead) continue;
@@ -380,14 +384,23 @@ function updateStatusBar(): void {
       progressParts.push(`${serverDisplayName(client.name)} ${wp.title}${pct}`);
     }
   }
-
-  let status: string;
   if (progressParts.length > 0) {
-    status = sessionCtx.ui.theme.fg("accent", `lsp:${progressParts.join(", ")}`);
-  } else {
-    status = sessionCtx.ui.theme.fg("muted", `lsp:${[...activeNames].join(",")}`);
+    sessionCtx.ui.setStatus("lsp", sessionCtx.ui.theme.fg("accent", `lsp:${progressParts.join(", ")}`));
+    return;
   }
-  sessionCtx.ui.setStatus("lsp", status);
+
+  // Otherwise show only RUNNING servers, capped. Detected-but-idle servers
+  // and linters belong in `lsp status`, not the footer — with ~20 registered
+  // servers a name list of everything detectable is pure noise.
+  const running = [...new Set([...clients.values()].filter((c) => !c.dead).map((c) => serverDisplayName(c.name)))];
+  if (running.length === 0) {
+    sessionCtx.ui.setStatus("lsp", undefined);
+    return;
+  }
+  const MAX_FOOTER_SERVERS = 4;
+  const shown = running.slice(0, MAX_FOOTER_SERVERS).join(",");
+  const more = running.length > MAX_FOOTER_SERVERS ? `,+${running.length - MAX_FOOTER_SERVERS}` : "";
+  sessionCtx.ui.setStatus("lsp", sessionCtx.ui.theme.fg("muted", `lsp:${shown}${more}`));
 }
 
 /** Throttled version of updateStatusBar for high-frequency progress updates. */
@@ -791,18 +804,11 @@ export default function (pi: ExtensionAPI) {
 
     updateStatusBar();
 
-    // Warm up servers in background, then start file watcher
-    setTimeout(async () => {
-      for (const server of detectedServers) {
-        try {
-          await getClient(server.name);
-        } catch {
-          // Non-fatal: server will be started on demand
-        }
-      }
-      // Start after servers are warm so registered watcher patterns are available
-      startFileWatcher();
-    }, 500);
+    // File watcher routes external changes (bash, git, other editors) to the
+    // servers that care. Servers start on demand instead — read-time warming
+    // and the lsp tool cover responsiveness, and eager-starting every
+    // detected server (incl. JVM/.NET ones) at session start is waste.
+    setTimeout(() => startFileWatcher(), 500);
   });
 
   pi.on("session_shutdown", async () => {

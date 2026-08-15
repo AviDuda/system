@@ -98,6 +98,7 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     displayName: "lua-ls",
     args: [],
     fileTypes: [".lua"],
+    languageId: "lua",
     rootMarkers: [".luarc.json", ".luarc.jsonc", ".stylua.toml"],
     settings: {
       Lua: {
@@ -143,6 +144,7 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     command: "taplo",
     args: ["lsp", "stdio"],
     fileTypes: [".toml"],
+    languageId: "toml",
     rootMarkers: [".taplo.toml", "taplo.toml", ".git"],
   },
 
@@ -150,7 +152,74 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     command: "marksman",
     args: ["server"],
     fileTypes: [".md", ".markdown"],
+    languageId: "markdown",
     rootMarkers: [".marksman.toml", ".git"],
+  },
+
+  "roslyn-ls": {
+    command: "Microsoft.CodeAnalysis.LanguageServer",
+    args: ["--stdio", "--autoLoadProjects"],
+    fileTypes: [".cs"],
+    languageId: "csharp",
+    rootMarkers: [".sln", "*.csproj"],
+    startupTimeoutMs: 30_000,
+  },
+
+  css: {
+    command: "vscode-css-language-server",
+    args: ["--stdio"],
+    fileTypes: [".css", ".scss", ".less"],
+    rootMarkers: [".git"],
+  },
+
+  dockerfile: {
+    command: "docker-langserver",
+    args: ["--stdio"],
+    fileTypes: ["Dockerfile", ".dockerfile"],
+    languageId: "dockerfile",
+    rootMarkers: ["Dockerfile"],
+  },
+
+  html: {
+    command: "vscode-html-language-server",
+    args: ["--stdio"],
+    fileTypes: [".html", ".htm"],
+    languageId: "html",
+    rootMarkers: [".git"],
+  },
+
+  jdtls: {
+    command: "jdtls",
+    args: ["-data", "$HOME/.cache/jdtls-workspace"],
+    fileTypes: [".java"],
+    languageId: "java",
+    rootMarkers: ["pom.xml", "build.gradle", "settings.gradle"],
+    startupTimeoutMs: 90_000,
+  },
+
+  json: {
+    command: "vscode-json-language-server",
+    args: ["--stdio"],
+    fileTypes: [".json", ".jsonc"],
+    languageId: "json",
+    rootMarkers: [".git"],
+  },
+
+  lemminx: {
+    command: "lemminx",
+    args: [],
+    fileTypes: [".xml", ".xsd", ".xsl"],
+    languageId: "xml",
+    rootMarkers: [".git"],
+  },
+
+  powershell: {
+    command: "powershell-editor-services",
+    args: ["-Stdio"],
+    fileTypes: [".ps1", ".psm1", ".psd1"],
+    languageId: "powershell",
+    rootMarkers: [".git"],
+    startupTimeoutMs: 30_000,
   },
 
   clangd: {
@@ -164,6 +233,7 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     command: "zls",
     args: [],
     fileTypes: [".zig"],
+    languageId: "zig",
     rootMarkers: ["build.zig", "build.zig.zon"],
   },
 
@@ -259,7 +329,8 @@ export function detectServers(cwd: string): DetectedServer[] {
  */
 export function serversForFile(filePath: string, detected: DetectedServer[]): DetectedServer[] {
   const ext = path.extname(filePath).toLowerCase();
-  return detected.filter((s) => s.config.fileTypes.includes(ext));
+  const base = path.basename(filePath);
+  return detected.filter((s) => s.config.fileTypes.includes(ext) || (ext === "" && s.config.fileTypes.includes(base)));
 }
 
 /**
@@ -269,10 +340,12 @@ export function serversForFile(filePath: string, detected: DetectedServer[]): De
  */
 export function findServerByExtension(filePath: string, cwd: string): DetectedServer | null {
   const ext = path.extname(filePath).toLowerCase();
+  const base = path.basename(filePath);
   const disabled = readDisabledServers(cwd);
 
   for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
-    if (!config.fileTypes.includes(ext)) continue;
+    const matches = config.fileTypes.includes(ext) || (ext === "" && config.fileTypes.includes(base));
+    if (!matches) continue;
     if (disabled.has(name)) continue;
 
     const resolved = resolveCommand(config.command, cwd);

@@ -219,6 +219,18 @@ A linter runs only where its root marker is present by default. `enabled` forces
 
 Suppresses servers per-project. Servers don't need an `enabled` list — they lazy-start by file extension.
 
+### `.lsp/config.json` — path overrides
+
+Map a file path to a server regardless of extension, for files whose content is
+a language their name hides (e.g. generated text files holding SQL):
+
+```jsonc
+{ "paths": { "config/*.conf": "taplo" } }
+```
+
+Globs match against the absolute path; the first match wins. Content sniffing
+isn't a substitute — enry and pygments both read SQL-in-`.txt` as plain text.
+
 ## Devcontainer support
 
 When a project has a running `.devcontainer/`, language servers can run **inside the container** (with host↔container path translation) so the host doesn't need the project's dependencies — e.g. a named volume hiding `node_modules` from the host would otherwise leave a host-side tsserver unable to resolve any imports.

@@ -320,4 +320,166 @@ d("e2e", () => {
     },
     60_000,
   );
+
+  test.skipIf(!hasBinary("taplo"))(
+    "taplo: toml document symbols",
+    () =>
+      expectSymbols(
+        "taplo",
+        "toml",
+        { "config.toml": '[server]\nhost = "localhost"\nport = 8080\n\n[database]\nurl = "postgres://x"\n' },
+        "config.toml",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("marksman"))(
+    "marksman: markdown document symbols (headings)",
+    () =>
+      expectSymbols("marksman", "md", { "doc.md": "# Title\n\nintro\n\n## Section\n\nbody\n" }, "doc.md", (s) =>
+        s.some((x) => x.name.includes("Title")),
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("lemminx"))(
+    "lemminx: xml document symbols",
+    () =>
+      expectSymbols(
+        "lemminx",
+        "xml",
+        {
+          "project.xml":
+            '<project>\n  <module name="core">\n    <artifactId>core</artifactId>\n  </module>\n</project>\n',
+        },
+        "project.xml",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("vscode-css-language-server"))(
+    "vscode-css: scss document symbols",
+    () =>
+      expectSymbols(
+        "css",
+        "scss",
+        { "style.scss": ".container {\n  display: flex;\n  .item {\n    color: red;\n  }\n}\n" },
+        "style.scss",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("vscode-html-language-server"))(
+    "vscode-html: html document symbols",
+    () =>
+      expectSymbols(
+        "html",
+        "html",
+        { "page.html": "<html>\n  <body>\n    <h1>Hi</h1>\n    <p>Hello</p>\n  </body>\n</html>\n" },
+        "page.html",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("vscode-json-language-server"))(
+    "vscode-json: json document symbols",
+    () =>
+      expectSymbols("json", "json", { "conf.json": '{\n  "name": "e2e",\n  "nested": { "x": 1 }\n}\n' }, "conf.json"),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("lua-language-server"))(
+    "lua-language-server: lua document symbols",
+    () =>
+      expectSymbols(
+        "lua-language-server",
+        "lua",
+        {
+          "script.lua":
+            "local function greet(name)\n  print('hello ' .. name)\nend\n\nlocal M = {}\nfunction M:method() end\nreturn M\n",
+        },
+        "script.lua",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("docker-langserver"))(
+    "docker-langserver: Dockerfile document symbols",
+    () =>
+      expectSymbols(
+        "dockerfile",
+        "docker",
+        { Dockerfile: "FROM node:22-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm ci\n" },
+        "Dockerfile",
+      ),
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("zls"))(
+    "zls: zig document symbols",
+    () =>
+      expectSymbols(
+        "zls",
+        "zig",
+        {
+          "build.zig":
+            'const std = @import("std");\nfn add(a: i32, b: i32) i32 { return a + b; }\npub fn main() void {}\n',
+        },
+        "build.zig",
+        (s) => s.some((x) => x.name === "add"),
+      ),
+    120_000,
+  );
+
+  test.skipIf(!hasBinary("powershell-editor-services"))(
+    "powershell-editor-services: ps1 document symbols",
+    () =>
+      expectSymbols(
+        "powershell",
+        "ps",
+        { "script.ps1": "function Get-Version {\n  return '1.0'\n}\n\nGet-Version\n" },
+        "script.ps1",
+      ),
+    120_000,
+  );
+
+  test.skipIf(!hasBinary("Microsoft.CodeAnalysis.LanguageServer"))(
+    "roslyn-ls: C# document symbols",
+    async () => {
+      const root = mkFixture("cs", {
+        "Project.csproj":
+          '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>\n</Project>\n',
+        "Order.cs":
+          "public class OrderService {\n    private readonly IRepo _repo;\n    public OrderService(IRepo repo) { _repo = repo; }\n    public async Task<Order> GetOrderAsync(int id) => await _repo.FindAsync(id);\n}\npublic interface IRepo { Task<Order> FindAsync(int id); }\n",
+      });
+      const client = await startServer("roslyn-ls", root);
+      const file = path.join(root, "Order.cs");
+      await syncFile(client, file);
+      // Roslyn loads the workspace in the background; give it a moment.
+      await new Promise((r) => setTimeout(r, 3000));
+      const symbols = (await client.request("textDocument/documentSymbol", {
+        textDocument: { uri: fileToUri(file) },
+      })) as DocumentSymbol[];
+      expect(symbols.some((x) => x.name.includes("OrderService"))).toBe(true);
+    },
+    120_000,
+  );
+
+  test.skipIf(!hasBinary("jdtls"))(
+    "jdtls: Java document symbols",
+    () =>
+      expectSymbols(
+        "jdtls",
+        "java",
+        {
+          "pom.xml":
+            '<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>e2e</groupId><artifactId>e2e</artifactId><version>1</version>\n</project>\n',
+          "Main.java":
+            'public class Main {\n    public static void main(String[] args) { System.out.println("hi"); }\n}\n',
+        },
+        "Main.java",
+        (s) => s.some((x) => x.name === "Main"),
+      ),
+    180_000,
+  );
 });

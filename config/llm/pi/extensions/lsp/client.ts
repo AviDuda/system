@@ -41,6 +41,8 @@ export interface LspClient {
   proc: ChildProcess;
   /** Server name (for logging) */
   name: string;
+  /** LSP languageId for this server's files; preferred over detectLanguageId's map when set. */
+  languageId?: string;
   /** Effective spawn command (command + args, e.g. "tsc --lsp --stdio") — may differ from the server key's default when flavor detection or `_command` overrides picked another binary. */
   command: string;
   /** Host↔container path map (null = host-local server, no translation). */
@@ -317,13 +319,13 @@ function createTransport(proc: ChildProcess) {
     stdin.write(header + body);
   }
 
-  function request(method: string, params?: unknown): Promise<unknown> {
+  function request(method: string, params?: unknown, timeoutMs: number = LSP_REQUEST_TIMEOUT_MS): Promise<unknown> {
     const id = nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(`LSP request timed out: ${method} (${LSP_REQUEST_TIMEOUT_MS / 1000}s)`));
-      }, LSP_REQUEST_TIMEOUT_MS);
+        reject(new Error(`LSP request timed out: ${method} (${timeoutMs / 1000}s)`));
+      }, timeoutMs);
 
       pending.set(id, {
         resolve: (value) => {
@@ -414,8 +416,21 @@ export interface ServerConfig {
   rootMarkers: string[];
   /** Short name for status/footer/diagnostic-header rendering. Keys stay canonical (`.lsp/<key>.json` discovery). */
   displayName?: string;
+  /**
+   * LSP languageId for this server's files. Preferred over the extension map
+   * in detectLanguageId when set — declare it for single-language servers so
+   * a new server doesn't need a map entry. Multi-language servers (ts, css)
+   * rely on the map (one server, several languageIds).
+   */
+  languageId?: string;
   initOptions?: Record<string, unknown>;
   settings?: Record<string, unknown>;
+  /**
+   * Grace period for the initialize request (ms). Some servers are slow to
+   * boot (JVM/.NET/scripting hosts take 10-60s+ cold); the default 10s request
+   * timeout would kill them. Only the initialize call uses this.
+   */
+  startupTimeoutMs?: number;
 }
 
 export function fileToUri(filePath: string): string {
@@ -492,6 +507,7 @@ export async function outgoingCalls(client: LspClient, item: CallHierarchyItem):
  */
 export function detectLanguageId(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
+  const base = path.basename(filePath);
   const map: Record<string, string> = {
     ".ts": "typescript",
     ".tsx": "typescriptreact",
@@ -527,13 +543,22 @@ export function detectLanguageId(filePath: string): string {
     ".cxx": "cpp",
     ".hpp": "cpp",
     ".java": "java",
+    ".cs": "csharp",
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+    ".psd1": "powershell",
+    ".zig": "zig",
+    ".xml": "xml",
+    ".xsd": "xml",
+    ".xsl": "xml",
+    ".dockerfile": "dockerfile",
     ".rb": "ruby",
     ".ex": "elixir",
     ".exs": "elixir",
     ".hs": "haskell",
     ".swift": "swift",
   };
-  return map[ext] ?? "plaintext";
+  return map[ext] ?? (base === "Dockerfile" ? "dockerfile" : "plaintext");
 }
 
 /**
@@ -644,7 +669,7 @@ export async function createClient(
   target?: ContainerTarget | null,
   opts?: { timeoutMs?: number } & ClientHandlers,
 ): Promise<LspClient> {
-  const { timeoutMs = 10_000, onApplyEdit, onRename } = opts ?? {};
+  const { timeoutMs = config.startupTimeoutMs ?? 10_000, onApplyEdit, onRename } = opts ?? {};
   const pathMap = target?.pathMap ?? null;
   // The server's view of its root: container path when in a devcontainer, host cwd otherwise.
   const serverRoot = pathToServer(cwd, pathMap);
@@ -666,7 +691,12 @@ export async function createClient(
     if (!resolvedCommand) {
       throw new Error(`LSP server binary not found: ${config.command}`);
     }
-    proc = spawn(resolvedCommand, config.args ?? [], {
+    // Expand `$HOME` in args (e.g. jdtls `-data $HOME/.cache/jdtls`): args
+    // reach spawn() verbatim with no shell, so a literal `~` or `$HOME`
+    // would otherwise go to the server as-is.
+    const home = process.env.HOME ?? "";
+    const args = (config.args ?? []).map((a) => (home ? a.replaceAll("$HOME", home) : a));
+    proc = spawn(resolvedCommand, args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NODE_NO_WARNINGS: "1" },
@@ -743,15 +773,19 @@ export async function createClient(
     : (config.initOptions ?? {});
 
   const initResult = (await Promise.race([
-    transport.request("initialize", {
-      // Container servers can't see the host pid; some vscode-* servers crash
-      // monitoring it. Null is the safe value across all servers.
-      processId: target ? null : process.pid,
-      capabilities: CLIENT_CAPABILITIES,
-      rootUri: fileToUri(serverRoot),
-      workspaceFolders: [{ uri: fileToUri(serverRoot), name: path.basename(cwd) }],
-      initializationOptions: initOptions,
-    }),
+    transport.request(
+      "initialize",
+      {
+        // Container servers can't see the host pid; some vscode-* servers crash
+        // monitoring it. Null is the safe value across all servers.
+        processId: target ? null : process.pid,
+        capabilities: CLIENT_CAPABILITIES,
+        rootUri: fileToUri(serverRoot),
+        workspaceFolders: [{ uri: fileToUri(serverRoot), name: path.basename(cwd) }],
+        initializationOptions: initOptions,
+      },
+      timeoutMs,
+    ),
     new Promise((_, reject) =>
       setTimeout(() => reject(new Error(`LSP initialize timed out after ${timeoutMs}ms`)), timeoutMs),
     ),
@@ -833,6 +867,7 @@ export async function createClient(
     createdAt: Date.now(),
     proc,
     name,
+    languageId: config.languageId,
     command: [config.command, ...(config.args ?? [])].join(" "),
     pathMap,
     containerName: target?.containerName,
@@ -949,7 +984,7 @@ export async function openFile(client: LspClient, filePath: string): Promise<voi
   if (client.openFiles.has(hostUri)) return;
 
   const content = await fs.promises.readFile(filePath, "utf-8");
-  const languageId = detectLanguageId(filePath);
+  const languageId = client.languageId ?? detectLanguageId(filePath);
   client.openFiles.set(hostUri, 1);
 
   client.notify("textDocument/didOpen", {
@@ -968,7 +1003,7 @@ export async function syncFile(client: LspClient, filePath: string, content?: st
   const uri = serverUriFor(client, filePath);
 
   if (!client.openFiles.has(hostUri)) {
-    const languageId = detectLanguageId(filePath);
+    const languageId = client.languageId ?? detectLanguageId(filePath);
     client.openFiles.set(hostUri, 1);
     client.notify("textDocument/didOpen", {
       textDocument: { uri, languageId, version: 1, text },
