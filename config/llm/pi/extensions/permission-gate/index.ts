@@ -600,7 +600,6 @@ export default function permissionGate(pi: ExtensionAPI) {
     let decision = decide(event.toolName, event.input as Record<string, unknown>, ctx.cwd, state);
     let tirithWarning: string | undefined;
     let tirithNote: string | undefined;
-    let tirithBlocked = false;
 
     // tirith safety net (bash only): inspects the FULL command for homograph
     // URLs, pipe-to-shell, exfil, known-bad packages — things the gate's prefix
@@ -620,7 +619,6 @@ export default function permissionGate(pi: ExtensionAPI) {
               reason: `${tirithNote}\nThe command was NOT executed. Do not retry unless the user asks.`,
             };
           }
-          tirithBlocked = true;
           tirithWarning = formatFindingSummary(verdict.findings);
         } else if (verdict.action === "warn") {
           tirithNote = tirithAnnotation("warn", verdict.findings);
@@ -756,8 +754,13 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
     }
 
-    // Normal path: build explanation provider (fires concurrently with dialog)
-    const explanation = tirithBlocked ? undefined : makeExplanation(event.toolName, input, ctx, rawDiff);
+    // Normal path: build explanation provider (fires concurrently with dialog).
+    // tirith findings NEVER suppress the sidecar explanation — the dialog keeps
+    // the tirith banner and its Block-default cursor (strongest-signal-wins),
+    // and the AI take is additive: for a long bash call the human needs to know
+    // what the command actually does to judge a tirith finding, not just that
+    // a heuristic flagged it. Auto-allow is already suppressed above.
+    const explanation = makeExplanation(event.toolName, input, ctx, rawDiff);
     return await showConfirmDialog(ctx, event, decision, explanation, diffBody, detailsBody, tirithWarning, tirithNote);
   });
 

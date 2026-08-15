@@ -137,8 +137,11 @@ prefix logic, the sidecar classifier, and a human reviewer all miss these
 - **LLM feedback:** the tirith verdict is returned to the LLM in the block reason
   (self-explanatory — names tirith as a command-safety checker, with severity,
   rule, and remediation), and for warn-and-allowed commands via tool_result. The
-  sidecar classification call is skipped when tirith blocks — a deterministic HIGH
-  makes it redundant.
+  sidecar AUTO-ALLOW is skipped when tirith flags a command (a deterministic HIGH
+  shouldn't be overridden by a semantic allow), but the sidecar EXPLANATION still
+  runs and appears in the dialog — for a long bash call the human needs to know
+  what the command actually does to judge the finding, not just that a heuristic
+  flagged it. The Block-default cursor stays regardless.
 - **Graceful degradation:** tirith not installed → gate behaves exactly as without
   it. tirith error/timeout → fail-open-to-gate (the confirm flow is a backstop).
 - **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls; avoids duplicating
