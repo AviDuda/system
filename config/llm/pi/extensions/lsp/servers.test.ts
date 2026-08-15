@@ -5,10 +5,11 @@ import * as path from "node:path";
 import type { DetectedServer } from "./servers";
 import {
   configForTsFlavor,
+  findGatedLintersForFile,
   findServerByExtension,
   getTsServerMemory,
   KNOWN_SERVERS,
-  readDisabledServers,
+  readServerOverrides,
   serverDisplayName,
   serversForFile,
 } from "./servers";
@@ -57,6 +58,18 @@ describe("KNOWN_SERVERS", () => {
     expect(slint.command).toBe("slint-lsp");
     expect(slint.args).toEqual([]);
     expect(slint.rootMarkers).toContain("Cargo.toml");
+  });
+  test("has oxlint, repo-gated and never lazy-starts", () => {
+    const ox = KNOWN_SERVERS.oxlint;
+    expect(ox).toBeDefined();
+    expect(ox.command).toBe("oxlint");
+    expect(ox.args).toEqual(["--lsp"]);
+    expect(ox.fileTypes).toContain(".ts");
+    expect(ox.fileTypes).toContain(".js");
+    for (const m of [".oxlintrc.json", ".oxlintrc.jsonc", "oxlint.config.ts", "oxlint.config.mts"]) {
+      expect(ox.rootMarkers).toContain(m);
+    }
+    expect(ox.allowLazy).toBe(false);
   });
 });
 
@@ -149,17 +162,62 @@ describe("findServerByExtension", () => {
   });
 });
 
-describe("readDisabledServers", () => {
-  test("parses disabled list; missing file = empty", () => {
+describe("findGatedLintersForFile", () => {
+  test("oxlint fires only when a marker is up-tree from the file", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-gated-"));
+    try {
+      fs.mkdirSync(path.join(tmp, "src"));
+      const file = path.join(tmp, "src", "bad.ts");
+      fs.writeFileSync(file, "");
+      // no marker anywhere → must not fire
+      expect(findGatedLintersForFile(file, tmp)).toHaveLength(0);
+      // marker at the tree root → oxlint becomes eligible
+      fs.writeFileSync(path.join(tmp, ".oxlintrc.json"), "{}");
+      const gated = findGatedLintersForFile(file, tmp);
+      if (gated.length > 0) expect(gated[0].name).toBe("oxlint");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+  test("enabled override without a marker also unlocks a gated linter", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-gated-"));
+    try {
+      fs.writeFileSync(path.join(tmp, "bad.ts"), "");
+      fs.mkdirSync(path.join(tmp, ".lsp"));
+      fs.writeFileSync(path.join(tmp, ".lsp", "servers.json"), JSON.stringify({ enabled: ["oxlint"] }));
+      const gated = findGatedLintersForFile(path.join(tmp, "bad.ts"), tmp);
+      if (gated.length > 0) expect(gated[0].name).toBe("oxlint");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+  test("disabled suppresses even with an enabled override", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-gated-"));
+    try {
+      fs.writeFileSync(path.join(tmp, ".oxlintrc.json"), "{}");
+      fs.mkdirSync(path.join(tmp, ".lsp"));
+      fs.writeFileSync(path.join(tmp, ".lsp", "servers.json"), JSON.stringify({ disabled: ["oxlint"] }));
+      expect(findGatedLintersForFile(path.join(tmp, "bad.ts"), tmp)).toHaveLength(0);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+describe("readServerOverrides", () => {
+  test("parses enabled + disabled; missing file = both empty", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-srv-"));
     try {
-      expect(readDisabledServers(tmp)).toEqual(new Set());
+      const empty = { enabled: new Set<string>(), disabled: new Set<string>() };
+      expect(readServerOverrides(tmp)).toEqual(empty);
       fs.mkdirSync(path.join(tmp, ".lsp"));
       fs.writeFileSync(
         path.join(tmp, ".lsp", "servers.json"),
-        JSON.stringify({ disabled: ["nixd", "bashls"], ignored: 1 }),
+        JSON.stringify({ enabled: ["oxlint"], disabled: ["nixd", "bashls"], ignored: 1 }),
       );
-      expect(readDisabledServers(tmp)).toEqual(new Set(["nixd", "bashls"]));
+      expect(readServerOverrides(tmp)).toEqual({
+        enabled: new Set(["oxlint"]),
+        disabled: new Set(["nixd", "bashls"]),
+      });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

@@ -417,6 +417,13 @@ export interface ServerConfig {
   /** Short name for status/footer/diagnostic-header rendering. Keys stay canonical (`.lsp/<key>.json` discovery). */
   displayName?: string;
   /**
+   * Whether findServerByExtension may start this server on touch, without a
+   * root marker. Default true — code-intel servers intentionally lazy-start
+   * in marker-less dirs (scratch files). Mark false for repo-gated providers
+   * (linters like oxlint) so they only run when a config opts them in.
+   */
+  allowLazy?: boolean;
+  /**
    * LSP languageId for this server's files. Preferred over the extension map
    * in detectLanguageId when set — declare it for single-language servers so
    * a new server doesn't need a map entry. Multi-language servers (ts, css)

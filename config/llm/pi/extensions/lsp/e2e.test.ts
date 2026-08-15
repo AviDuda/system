@@ -16,7 +16,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DocumentSymbol, LspClient } from "./client";
-import { createClient, fileToUri, incomingCalls, outgoingCalls, prepareCallHierarchy, syncFile } from "./client";
+import {
+  createClient,
+  fileToUri,
+  incomingCalls,
+  notifySaved,
+  outgoingCalls,
+  prepareCallHierarchy,
+  syncFile,
+} from "./client";
 import { detectTsFlavor, resolveServerTarget } from "./devcontainer";
 import { configForTsFlavor, KNOWN_SERVERS } from "./servers";
 
@@ -317,6 +325,29 @@ d("e2e", () => {
       await syncFile(client, file);
       const diags = await waitForDiagnostics(client, file);
       expect(diags.length).toBeGreaterThan(0);
+    },
+    60_000,
+  );
+
+  test.skipIf(!hasBinary("oxlint"))(
+    "oxlint: push diagnostics on open, and re-push on change",
+    async () => {
+      const root = mkFixture("oxlint", {
+        "package.json": "{}",
+        "bad.ts": "export function greet(name: string): string {\n  return name;\n}\n", // clean
+      });
+      const client = await startServer("oxlint", root);
+      const file = path.join(root, "bad.ts");
+      await syncFile(client, file); // open clean
+      // let the server settle, then confirm no no-debugger lint yet
+      await new Promise((r) => setTimeout(r, 2000));
+      expect((client.diagnostics.get(fileToUri(file)) ?? []).every((d) => !d.message.includes("debugger"))).toBe(true);
+      // introduce a lint via change + save (the extension's post-edit path)
+      const broken = "export function greet(name: string): string {\n  debugger;\n  return name;\n}\n";
+      await syncFile(client, file, broken);
+      notifySaved(client, file, broken);
+      const diags = await waitForDiagnostics(client, file, 1, 20_000);
+      expect(diags.some((d) => d.message.includes("debugger"))).toBe(true);
     },
     60_000,
   );

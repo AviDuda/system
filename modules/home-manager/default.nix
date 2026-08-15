@@ -254,7 +254,9 @@ in
         ncdu # Disk usage analyzer
         neovim # Vim fork
         nmap # Network scanner
+        oxfmt # JavaScript/TypeScript formatter
         oxipng # PNG optimizer (multithreaded)
+        oxlint # JavaScript/TypeScript linter
         pandoc # Markdown to PDF converter
         poppler-utils # PDF CLI tools (pdftotext, pdfinfo, pdftoppm)
         catdoc # Extract text from .doc files

@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ServerConfig } from "./client";
-import { hasRootMarkers, resolveCommand } from "./client";
+import { findProjectRoot, hasRootMarkers, resolveCommand } from "./client";
 import type { TsFlavor } from "./devcontainer";
 import { findDevcontainerRoot } from "./devcontainer";
 
@@ -38,6 +38,21 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
         includeInlayVariableTypeHints: true,
       },
     },
+  },
+
+  // JS/TS linter over the LSP protocol. Overlaps the typescript server's
+  // fileTypes but is complementary: tsserver reports type errors, oxlint
+  // reports style/correctness (unused vars, no-debugger, floating promises
+  // with --type-aware). Repo-gated on oxlint's config file — a project only
+  // opts in to oxlint by shipping one, so it never lints a repo that doesn't
+  // use it (disable via .lsp/servers.json `disabled` too).
+  oxlint: {
+    command: "oxlint",
+    displayName: "oxlint",
+    args: ["--lsp"],
+    fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+    rootMarkers: [".oxlintrc.json", ".oxlintrc.jsonc", "oxlint.config.ts", "oxlint.config.mts"],
+    allowLazy: false,
   },
 
   "rust-analyzer": {
@@ -285,24 +300,48 @@ export interface DetectedServer {
 }
 
 /**
- * Read `.lsp/servers.json` `{ "disabled": ["nixd", ...] }` from the devcontainer
- * root (git root) when present, else cwd. Servers don't need an `enabled` list —
- * they lazy-start by file extension — so only `disabled` is honored. Mirrors the
- * `.lsp/linters.json` mechanism.
+ * Read `.lsp/servers.json` `{ "enabled": [...], "disabled": [...] }` from the devcontainer
+ * root (git root) when present, else cwd. Same `.lsp/` convention as linters.json.
+ * `enabled` forces a server without a marker; `disabled` always suppresses.
  */
-export function readDisabledServers(cwd: string): Set<string> {
+export interface ServerOverrides {
+  /** Force-run these servers even without a root marker present. */
+  enabled: Set<string>;
+  /** Suppress these servers even when a root marker IS present. */
+  disabled: Set<string>;
+}
+
+/**
+ * Read `.lsp/servers.json` (`{ "enabled": [...], "disabled": [...] }`) from the
+ * devcontainer root (git root) when present, else cwd. Same `.lsp/` location
+ * convention as servers. Returns empty sets when absent or unparseable.
+ */
+export function readServerOverrides(cwd: string): ServerOverrides {
   const base = findDevcontainerRoot(cwd) ?? cwd;
+  const asSet = (v: unknown): Set<string> =>
+    Array.isArray(v) ? new Set(v.filter((n): n is string => typeof n === "string")) : new Set<string>();
   try {
     const parsed = JSON.parse(fs.readFileSync(path.join(base, ".lsp", "servers.json"), "utf-8")) as {
+      enabled?: unknown;
       disabled?: unknown;
     };
-    if (Array.isArray(parsed.disabled)) {
-      return new Set(parsed.disabled.filter((n): n is string => typeof n === "string"));
-    }
+    return { enabled: asSet(parsed.enabled), disabled: asSet(parsed.disabled) };
   } catch {
     // no file or parse error
   }
-  return new Set();
+  return { enabled: new Set(), disabled: new Set() };
+}
+
+/**
+ * Decide whether a server should run, applying `.lsp/servers.json` overrides on
+ * top of the default marker gate: `disabled` wins, then `enabled`, else the
+ * marker presence decides. Mirrors the linters gate.
+ */
+function isServerWanted(name: string, cwd: string, hasMarker: boolean): boolean {
+  const { enabled, disabled } = readServerOverrides(cwd);
+  if (disabled.has(name)) return false;
+  if (enabled.has(name)) return true;
+  return hasMarker;
 }
 
 /**
@@ -310,12 +349,11 @@ export function readDisabledServers(cwd: string): Set<string> {
  * Checks root markers first, then verifies the binary exists.
  */
 export function detectServers(cwd: string): DetectedServer[] {
-  const disabled = readDisabledServers(cwd);
   const detected: DetectedServer[] = [];
 
   for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
-    if (disabled.has(name)) continue;
-    if (!hasRootMarkers(cwd, config.rootMarkers)) continue;
+    const hasMarker = hasRootMarkers(cwd, config.rootMarkers);
+    if (!isServerWanted(name, cwd, hasMarker)) continue;
 
     // Check if binary exists
     const resolved = resolveCommand(config.command, cwd);
@@ -344,12 +382,19 @@ export function serversForFile(filePath: string, detected: DetectedServer[]): De
 export function findServerByExtension(filePath: string, cwd: string): DetectedServer | null {
   const ext = path.extname(filePath).toLowerCase();
   const base = path.basename(filePath);
-  const disabled = readDisabledServers(cwd);
+  const { enabled, disabled } = readServerOverrides(cwd);
 
   for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
     const matches = config.fileTypes.includes(ext) || (ext === "" && config.fileTypes.includes(base));
     if (!matches) continue;
     if (disabled.has(name)) continue;
+    if (config.allowLazy === false) {
+      // Repo-gated linter: only lazy-start when opted in — an `enabled` override,
+      // or a config marker present up-tree from the file. The marker walk keeps
+      // it from firing in random directories while still covering subprojects.
+      const hasRoot = findProjectRoot(filePath, config.rootMarkers) !== null;
+      if (!enabled.has(name) && !hasRoot) continue;
+    }
 
     const resolved = resolveCommand(config.command, cwd);
     if (!resolved) continue;
@@ -358,4 +403,31 @@ export function findServerByExtension(filePath: string, cwd: string): DetectedSe
   }
 
   return null;
+}
+
+/**
+ * Gated providers (`allowLazy: false`, repo-gated linters like oxlint) that
+ * should serve a specific file: those with an `enabled` override, or a config
+ * marker present up-tree from the file. Unlike `findServerByExtension` (the
+ * single-server lazy fallback), this returns ALL matches so a gated linter can
+ * join the diagnostic pipeline alongside a code-intel server already serving
+ * the same extension (e.g. oxlint next to the TypeScript server on a .ts).
+ */
+export function findGatedLintersForFile(filePath: string, cwd: string): DetectedServer[] {
+  const { enabled, disabled } = readServerOverrides(cwd);
+  const result: DetectedServer[] = [];
+
+  for (const [name, config] of Object.entries(KNOWN_SERVERS)) {
+    if (config.allowLazy !== false) continue;
+    if (disabled.has(name)) continue;
+    const hasRoot = findProjectRoot(filePath, config.rootMarkers) !== null;
+    if (!enabled.has(name) && !hasRoot) continue;
+
+    const resolved = resolveCommand(config.command, cwd);
+    if (!resolved) continue;
+
+    result.push({ name, config, resolvedCommand: resolved });
+  }
+
+  return result;
 }

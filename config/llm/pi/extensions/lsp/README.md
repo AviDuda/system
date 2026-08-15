@@ -21,6 +21,8 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 
 Auto-detects common language servers from project markers (TypeScript, Rust, Go, Python, Nix, Swift, Lua, Bash, YAML, TOML, Markdown, C/C++, Zig, and more). The server binary must be on PATH. The full list with file types and root markers lives in `servers.ts` (`KNOWN_SERVERS`).
 
+Linters that speak LSP (oxlint, later Biome) are registered as servers but repo-gated: they only start when the project ships their config marker (`.oxlintrc.json` / `oxlint.config.ts` etc.), and never lazy-start on touch. For a repo without the config that still wants one, force it via `.lsp/servers.json` `{ "enabled": ["oxlint"] }`.
+
 ## Commands
 
 - `/lsp` — show detected servers and status

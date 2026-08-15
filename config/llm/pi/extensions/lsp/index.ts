@@ -85,6 +85,7 @@ import {
   configForTsFlavor,
   type DetectedServer,
   detectServers,
+  findGatedLintersForFile,
   findServerByExtension,
   KNOWN_SERVERS,
   serverDisplayName,
@@ -287,15 +288,39 @@ function getServersForFile(filePath: string): DetectedServer[] {
   // Per-repo path overrides (.lsp/config.json `paths`): a glob may map a file
   // to a server its name hides (e.g. generated text holding SQL).
   const override = matchPathOverride(filePath, loadPathOverrides(currentCwd));
-  if (!override) return base;
-  const existing = detectedServers.find((s) => s.name === override);
-  if (existing) return base.includes(existing) ? base : [...base, existing];
-  const config = KNOWN_SERVERS[override];
-  const resolved = config ? resolveCommand(config.command, currentCwd) : null;
-  if (!resolved) return base;
-  const ds: DetectedServer = { name: override, config, resolvedCommand: resolved };
-  detectedServers.push(ds);
-  return [...base, ds];
+  let result: DetectedServer[];
+  if (override) {
+    const existing = detectedServers.find((s) => s.name === override);
+    if (existing) {
+      result = base.includes(existing) ? base : [...base, existing];
+    } else {
+      const config = KNOWN_SERVERS[override];
+      const resolved = config ? resolveCommand(config.command, currentCwd) : null;
+      if (!resolved) return base;
+      const ds: DetectedServer = { name: override, config, resolvedCommand: resolved };
+      detectedServers.push(ds);
+      result = [...base, ds];
+    }
+  } else {
+    result = base;
+  }
+  return appendGatedLinters(filePath, result);
+}
+
+/**
+ * Repo-gated linters (oxlint, later biome) serve any file whose tree carries
+ * their config marker (or an `enabled` override), even when the session started
+ * in a different directory. Detect on first touch and cache in detectedServers
+ * so later calls are stable.
+ */
+function appendGatedLinters(filePath: string, base: DetectedServer[]): DetectedServer[] {
+  let result = base;
+  for (const ds of findGatedLintersForFile(filePath, currentCwd)) {
+    if (detectedServers.some((s) => s.name === ds.name)) continue;
+    detectedServers.push(ds);
+    result = [...result, ds];
+  }
+  return result;
 }
 
 /**
