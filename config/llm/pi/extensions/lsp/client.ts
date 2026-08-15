@@ -279,17 +279,24 @@ function createTransport(proc: ChildProcess) {
             }
           }
         } else if (msg.method && msg.id !== undefined) {
-          // Server-to-client request (needs response)
+          // Server-to-client request (needs response). Handlers may be async;
+          // resolve them before replying so inbound workspace/applyEdit and
+          // typescript/rename complete before the server proceeds.
           const reqHandler = requestHandlers.get(msg.method);
           if (reqHandler) {
-            try {
-              const result = reqHandler(msg.params);
-              send({ jsonrpc: "2.0", id: msg.id, result: result ?? null });
-            } catch (e) {
-              send({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(e) } });
-            }
+            Promise.resolve()
+              .then(() => reqHandler(msg.params))
+              .then((result) => send({ jsonrpc: "2.0", id: msg.id, result: result ?? null }))
+              .catch((e) => send({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(e) } }));
           } else {
-            send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
+            // Name the method: a generic "Method not found" here is always
+            // OUR gap (a server request we don't serve), which is otherwise
+            // indistinguishable from a server-side failure.
+            send({
+              jsonrpc: "2.0",
+              id: msg.id,
+              error: { code: -32601, message: `Unhandled inbound request: ${msg.method}` },
+            });
           }
         } else if (msg.method) {
           // Server-to-client notification (no response)
@@ -623,13 +630,21 @@ export function findProjectRoot(filePath: string, rootMarkers: string[]): string
  * `processId` is sent as null (container servers can't see the host pid — some
  * vscode-* servers crash monitoring it). When omitted, runs the server on the host.
  */
+export interface ClientHandlers {
+  /** Apply a server-initiated workspace edit (inbound `workspace/applyEdit`) to disk. */
+  onApplyEdit?: (edit: WorkspaceEdit) => Promise<boolean>;
+  /** Serve a server-initiated rename refresh (inbound `_typescript.rename`). */
+  onRename?: (params: { textDocument: { uri: string }; position: Position }) => Promise<unknown>;
+}
+
 export async function createClient(
   name: string,
   config: ServerConfig,
   cwd: string,
   target?: ContainerTarget | null,
-  timeoutMs = 10_000,
+  opts?: { timeoutMs?: number } & ClientHandlers,
 ): Promise<LspClient> {
+  const { timeoutMs = 10_000, onApplyEdit, onRename } = opts ?? {};
   const pathMap = target?.pathMap ?? null;
   // The server's view of its root: container path when in a devcontainer, host cwd otherwise.
   const serverRoot = pathToServer(cwd, pathMap);
@@ -758,6 +773,24 @@ export async function createClient(
     // Just acknowledge -- the actual progress comes via $/progress
     return null;
   });
+
+  // Command-only actions (e.g. TypeScript's move-to-file) have the SERVER apply
+  // the edit: typescript-language-server sends an inbound workspace/applyEdit
+  // request and expects { applied }. Serve it by applying to disk + syncing.
+  if (onApplyEdit) {
+    transport.onRequest("workspace/applyEdit", async (params) => {
+      const edit = (params as { edit?: WorkspaceEdit })?.edit;
+      if (!edit) return { applied: false };
+      const ok = await onApplyEdit(edit);
+      return { applied: ok };
+    });
+  }
+  // tls follows applyEdit with an inbound `_typescript.rename` refresh request.
+  if (onRename) {
+    transport.onRequest("_typescript.rename", (params) =>
+      onRename(params as Parameters<NonNullable<ClientHandlers["onRename"]>>[0]),
+    );
+  }
 
   transport.onNotification("$/progress", (params: unknown) => {
     const p = params as { token: string | number; value: Record<string, unknown> };

@@ -21,6 +21,7 @@ import {
   changedLines,
   formatCallerLocation,
   formatCallerWarnings,
+  identifierAt,
   MAX_CALLER_SYMBOLS,
   MAX_CALLERS_PER_SYMBOL,
   touchedSymbols,
@@ -135,6 +136,14 @@ let fileWatcher: FileWatcher | null = null;
 const pendingPreEdit = new Map<string, string>();
 const MAX_PENDING_EDIT = 200;
 
+/**
+ * Host-relative paths applied by the server via inbound `workspace/applyEdit`
+ * during the most recent executeCommand (e.g. command-only actions like
+ * move-to-file that typescript-language-server applies itself). Reset before
+ * each executeCommand so codeActionApply can report what actually landed.
+ */
+let lastServerAppliedPaths: string[] | null = null;
+
 // ── Client management ──
 
 /**
@@ -211,7 +220,36 @@ async function getClientAt(serverName: string, root: string): Promise<LspClient 
   }
 
   try {
-    const client = await createClient(serverName, effective, root, target);
+    let client: LspClient;
+    client = await createClient(serverName, effective, root, target, {
+      // Command-only actions (move-to-file et al.) have the server push the edit
+      // back via inbound workspace/applyEdit; apply it and record what landed so
+      // codeActionApply can report it (the executeCommand result itself is void).
+      onApplyEdit: async (edit) => {
+        const { applied } = await applyWorkspaceEdit(translateWorkspaceEdit(edit, client.pathMap), root, (editPath) => {
+          syncFile(client, editPath);
+        });
+        lastServerAppliedPaths = applied.map((r) => r.path);
+        return applied.length > 0;
+      },
+      // tls follows applyEdit with an inbound `_typescript.rename` refresh: rename
+      // the symbol at the given location to itself (a no-op on content) so the
+      // server's rename pipeline settles.
+      onRename: async (params) => {
+        try {
+          const hostFile = uriToFile(translateLocationUri(params.textDocument.uri, client.pathMap));
+          const name = identifierAt(hostFile, params.position);
+          if (!name) return null;
+          return await client.request("textDocument/rename", {
+            textDocument: params.textDocument,
+            position: params.position,
+            newName: name,
+          });
+        } catch {
+          return null; // best-effort refresh; the refactor edits already landed
+        }
+      },
+    });
     client.onProgress = () => updateStatusBarThrottled();
     clients.set(key, client);
     return client;
@@ -1303,14 +1341,26 @@ export default function (pi: ExtensionAPI) {
               return text(`Applied "${selected.title}":\n${await apply(resolvedAction.edit)}`);
             }
 
-            // Command-only action (e.g. Move to a new file): execute the
-            // command and apply the WorkspaceEdit it returns. The action's
-            // own arguments carry the position/range.
+            // Command-only action (e.g. Move to a new file): execute the command
+            // and apply the WorkspaceEdit it returns. The action's own arguments
+            // carry the position/range. Two outcomes: the server returns the edit
+            // as the result, OR (typescript-language-server) the server pushes it
+            // back via inbound workspace/applyEdit and the result is void — those
+            // applied paths are recorded on lastServerApplied.
             if (resolvedAction.command) {
+              lastServerAppliedPaths = null;
               const result = (await client.request("workspace/executeCommand", {
                 command: resolvedAction.command.command,
                 arguments: resolvedAction.command.arguments ?? [],
               })) as WorkspaceEdit | null;
+              const serverApplied = lastServerAppliedPaths as string[] | null;
+              if (serverApplied && serverApplied.length > 0) {
+                return text(
+                  `Executed "${selected.title}" (${resolvedAction.command.command}):\n${serverApplied
+                    .map((p) => `  ${p}`)
+                    .join("\n")}`,
+                );
+              }
               if (
                 result &&
                 ((result.changes && Object.keys(result.changes).length > 0) || result.documentChanges?.length)

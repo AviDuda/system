@@ -8,6 +8,7 @@
  * type-checks, which is the gap diagnostics don't cover.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { changedLineNumbers } from "../shared/diff";
 import type { DocumentSymbol } from "./client";
@@ -85,4 +86,26 @@ export function formatCallerWarnings(serverDisplay: string, relFile: string, tou
 /** Format a caller item's location as `rel/path:line` given its host file path. */
 export function formatCallerLocation(hostFile: string, line0: number, cwd: string): string {
   return `${path.relative(cwd, hostFile)}:${line0 + 1}`;
+}
+
+/** The identifier under a 0-based column of a line (null when none). */
+export function identifierAtLine(line: string, character: number): string | null {
+  const isId = (c: string) => /[A-Za-z0-9_$]/.test(c);
+  if (character < 0 || character > line.length) return null;
+  let start = character;
+  while (start > 0 && isId(line[start - 1])) start--;
+  let end = character;
+  while (end < line.length && isId(line[end])) end++;
+  const name = line.slice(start, end);
+  return name.length > 0 ? name : null;
+}
+
+/** The identifier at a 0-based file position (null when unreadable/none). */
+export function identifierAt(filePath: string, position: { line: number; character: number }): string | null {
+  try {
+    const line = fs.readFileSync(filePath, "utf-8").split("\n")[position.line];
+    return line === undefined ? null : identifierAtLine(line, position.character);
+  } catch {
+    return null;
+  }
 }
