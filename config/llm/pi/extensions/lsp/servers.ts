@@ -220,6 +220,9 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     languageId: "powershell",
     rootMarkers: [".git"],
     startupTimeoutMs: 30_000,
+    // PowerShellEditorServices writes session state into its cwd — keep it
+    // out of the project root.
+    cwd: "$HOME/.cache/pwsh-lsp",
   },
 
   clangd: {

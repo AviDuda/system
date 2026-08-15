@@ -431,6 +431,13 @@ export interface ServerConfig {
    * timeout would kill them. Only the initialize call uses this.
    */
   startupTimeoutMs?: number;
+  /**
+   * Spawn-directory override (supports `$HOME`). Some servers write session
+   * state into their cwd (e.g. PowerShellEditorServices.json) — pin them to a
+   * cache dir so they don't pollute the project root. The workspace/rootUri
+   * stay the project root regardless.
+   */
+  cwd?: string;
 }
 
 export function fileToUri(filePath: string): string {
@@ -696,8 +703,16 @@ export async function createClient(
     // would otherwise go to the server as-is.
     const home = process.env.HOME ?? "";
     const args = (config.args ?? []).map((a) => (home ? a.replaceAll("$HOME", home) : a));
+    // Pinned spawn cwd: servers that write session state into their cwd
+    // (PowerShellEditorServices.json) get a cache dir instead of the project
+    // root. Create it — spawn fails on a missing cwd.
+    let spawnCwd = cwd;
+    if (config.cwd) {
+      spawnCwd = home ? config.cwd.replaceAll("$HOME", home) : config.cwd;
+      fs.mkdirSync(spawnCwd, { recursive: true });
+    }
     proc = spawn(resolvedCommand, args, {
-      cwd,
+      cwd: spawnCwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NODE_NO_WARNINGS: "1" },
     });
