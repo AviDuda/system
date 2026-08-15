@@ -597,8 +597,13 @@ async function getDiagnosticsForFile(
     const waitMs = timeoutMs ?? (isNewFile ? DIAG_WAIT_NEW_FILE_MS : DIAG_WAIT_MS);
     const diags = await waitForDiagnostics(client, uri, waitMs, prevVersion);
 
-    if (!explicit && diags.length === 0) {
-      // Timed out or empty -- mark cold, retry after WARMUP_RETRY_MS
+    // Cold only when the server never responded to this change (timed out):
+    // the diagnostics version didn't advance. Marking cold on an EMPTY result
+    // treated a genuinely clean file as a hung server — the next edit then
+    // skipped the server and reported a false "no errors" even when the edit
+    // had broken the file.
+    const responded = client.diagnosticsVersion > prevVersion;
+    if (!explicit && !responded) {
       coldServers.set(server.name, Date.now());
     } else {
       // Got results -- server is warm
