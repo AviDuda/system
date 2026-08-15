@@ -832,6 +832,12 @@ export default function (pi: ExtensionAPI) {
         Type.String({ description: "Search query for workspace_symbol action (substring match, case-insensitive)" }),
       ),
       index: Type.Optional(Type.Number({ description: "Index of the code action to apply (from codeAction listing)" })),
+      name: Type.Optional(
+        Type.String({
+          description:
+            "For codeActionApply: apply the action whose title contains this substring (case-insensitive) instead of by index",
+        }),
+      ),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1220,14 +1226,17 @@ export default function (pi: ExtensionAPI) {
             lines.push(`Context around line ${displayLine}:`);
             lines.push(context);
             lines.push("");
-            lines.push("To apply: use action 'codeActionApply' with the index of the action you want.");
+            lines.push(
+              "To apply: use action 'codeActionApply' with the index of the action (or `name` for a substring of the title).",
+            );
             return text(lines.join("\n"));
           }
 
           case "codeActionApply": {
             const idx = params.index;
-            if (idx === undefined || idx < 0) {
-              return text("Error: index parameter required. Use 'codeAction' first to see available actions.");
+            const name = params.name;
+            if ((idx === undefined || idx < 0) && !name) {
+              return text("Error: index or name parameter required. Use 'codeAction' first to see available actions.");
             }
 
             // Query available code actions (same resolved-name position as
@@ -1238,9 +1247,26 @@ export default function (pi: ExtensionAPI) {
             });
 
             if (!raw || raw.length === 0) return text("No code actions available at this position");
-            if (idx >= raw.length) return text(`Invalid index ${idx}. Available actions: 0-${raw.length - 1}`);
 
-            const selected = raw[idx];
+            // Select by name (substring, case-insensitive) when given — index
+            // ordering can shift between queries — else by index.
+            let selected: CodeAction;
+            if (name) {
+              const q = name.toLowerCase();
+              const found = raw.find((a) => a.title.toLowerCase().includes(q));
+              if (!found) {
+                return text(
+                  `No code action matching "${name}". Available: ${raw.map((a) => `"${a.title}"`).join(", ")}`,
+                );
+              }
+              selected = found;
+            } else {
+              if (idx === undefined || idx >= raw.length) {
+                return text(`Invalid index ${idx}. Available actions: 0-${raw.length - 1}`);
+              }
+              selected = raw[idx];
+            }
+
             if (selected.disabled) {
               return text(`Code action "${selected.title}" is disabled: ${selected.disabled.reason}`);
             }
@@ -1257,25 +1283,48 @@ export default function (pi: ExtensionAPI) {
               }
             }
 
-            if (!resolvedAction.edit) {
+            const apply = async (edit: WorkspaceEdit): Promise<string> => {
+              const { applied, unsupported } = await applyWorkspaceEdit(
+                translateWorkspaceEdit(edit, client.pathMap),
+                ctx.cwd,
+                (editPath) => {
+                  syncFile(client, editPath);
+                },
+              );
+              const appliedLines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
+              if (unsupported.length > 0) {
+                appliedLines.push(`  (skipped unsupported resource ops: ${unsupported.join(", ")})`);
+              }
+              return appliedLines.join("\n");
+            };
+
+            // Declarative edit → apply it directly.
+            if (resolvedAction.edit) {
+              return text(`Applied "${selected.title}":\n${await apply(resolvedAction.edit)}`);
+            }
+
+            // Command-only action (e.g. Move to a new file): execute the
+            // command and apply the WorkspaceEdit it returns. The action's
+            // own arguments carry the position/range.
+            if (resolvedAction.command) {
+              const result = (await client.request("workspace/executeCommand", {
+                command: resolvedAction.command.command,
+                arguments: resolvedAction.command.arguments ?? [],
+              })) as WorkspaceEdit | null;
+              if (
+                result &&
+                ((result.changes && Object.keys(result.changes).length > 0) || result.documentChanges?.length)
+              ) {
+                return text(
+                  `Executed "${selected.title}" (${resolvedAction.command.command}):\n${await apply(result)}`,
+                );
+              }
               return text(
-                `Code action "${selected.title}" has no edit. It may be a command-only action.\n\nTry running it via the command: ${selected.command?.title ?? selected.title}`,
+                `Command "${resolvedAction.command.command}" executed but returned no edits. It may require editor-side confirmation or act outside the workspace.`,
               );
             }
 
-            // Apply the workspace edit, syncing each modified file back to the server
-            const { applied, unsupported } = await applyWorkspaceEdit(
-              translateWorkspaceEdit(resolvedAction.edit, client.pathMap),
-              ctx.cwd,
-              (editPath) => {
-                syncFile(client, editPath);
-              },
-            );
-            const appliedLines = applied.map((r) => `  ${r.path}: ${r.count} edit(s)`);
-            if (unsupported.length > 0) {
-              appliedLines.push(`  (skipped unsupported resource ops: ${unsupported.join(", ")})`);
-            }
-            return text(`Applied "${selected.title}":\n${appliedLines.join("\n")}`);
+            return text(`Code action "${selected.title}" has no edit and no executable command.`);
           }
 
           default:
