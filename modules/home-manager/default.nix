@@ -198,6 +198,17 @@ in
         yaml-language-server # YAML language server
         pyright # Python language server
         slint-lsp # Slint UI language server
+        taplo # TOML language server
+        marksman # Markdown language server
+        lemminx # XML language server
+        roslyn-ls # C# language server (needs dotnet-sdk to locate)
+        dotnet-sdk # .NET SDK (C# language server dependency)
+        vscode-langservers-extracted # CSS/SCSS/HTML/JSON language servers
+        jdt-language-server # Java language server
+        zls # Zig language server
+        lua-language-server # Lua language server
+        dockerfile-language-server # Dockerfile language server
+        powershell-editor-services # PowerShell language server
         rsync # File transfer
         sd # Modern sed replacement
         speedtest-cli # Internet speed test
