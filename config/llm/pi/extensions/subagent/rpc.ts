@@ -390,6 +390,8 @@ export async function runSingleAgent(
   let agentEndReceived = false; // tracks whether agent_end fired (normal completion)
   let eventCount = 0;
   let updateCount = 0; // how many times emitUpdate was called
+  let turnCount = 0; // completed turns (turn_end events) — drives the maxTurns cap
+  let maxTurnsReached = false; // child was aborted at the turn cap
 
   // ── Extension UI relay ──
   // Subagent's ctx.ui.confirm()/select()/input() emit extension_ui_request events on stdout.
@@ -570,25 +572,41 @@ export async function runSingleAgent(
           }
         }
 
+        // ── Turn end (drives the maxTurns cap) ──
+        // pi has no turn limit of its own, so the cap is enforced here: when the
+        // turn count reaches maxTurns, send the RPC abort command. The child
+        // aborts its active run and emits agent_end with the messages so far
+        // (stopReason "aborted"), which the agent_end handler below collects.
+        if (eventType === "turn_end") {
+          turnCount++;
+          if (turnCount >= maxTurns) {
+            maxTurnsReached = true;
+            writeRpcCommand(proc, { type: "abort" });
+            // Fallback: if agent_end doesn't arrive (abort raced a natural
+            // completion), force-kill so the parent doesn't hang.
+            if (killTimer) clearTimeout(killTimer);
+            killTimer = setTimeout(() => {
+              if (!proc.killed) {
+                proc.kill("SIGTERM");
+                if (!proc.killed) proc.kill("SIGKILL");
+              }
+            }, 3000);
+          }
+        }
+
         // ── Agent end (source of truth — pi provides complete messages) ──
         if (eventType === "agent_end") {
           agentEndReceived = true;
           const agentMessages = event.messages as Record<string, unknown>[] | undefined;
           if (agentMessages && agentMessages.length > 0) {
-            // Clear and rebuild from pi's complete messages (truncate to limit)
+            // Rebuild from pi's complete messages. No post-hoc truncation: the
+            // run is bounded by the live maxTurns abort (turn_end handler), so a
+            // completed run's full report is preserved.
             currentResult.messages = [];
 
-            let assistantCount = 0;
             for (const rawMsg of agentMessages) {
               const role = rawMsg.role as string;
-
               if (role === "assistant") {
-                // Truncate: keep only up to maxTurns assistant messages
-                if (assistantCount >= maxTurns) {
-                  currentResult.stopReason = "max_turns_exceeded";
-                  break;
-                }
-                assistantCount++;
                 // pi's assistant messages already have all required fields
                 // Cast from Record to Message — pi constructs these internally
                 const msg = rawMsg as unknown as Message;
@@ -604,6 +622,11 @@ export async function runSingleAgent(
                 }
               }
             }
+
+            // Real outcome from pi's last assistant message (stop/aborted/error),
+            // not a fabricated count. The maxTurns override happens after the run.
+            const lastAssistant = [...currentResult.messages].reverse().find((m) => m.role === "assistant");
+            if (lastAssistant?.role === "assistant") currentResult.stopReason = lastAssistant.stopReason;
 
             // Update usage from agent_end stats
             const stats = event.stats as Record<string, unknown> | undefined;
@@ -791,9 +814,15 @@ export async function runSingleAgent(
     });
 
     currentResult.exitCode = exitCode;
-    // Only throw if user aborted BEFORE agent_end completed.
-    // After agent_end, we send abort as cleanup — wasAborted is true but it's normal.
-    if (wasAborted && !agentEndReceived) throw new Error("Subagent was aborted");
+    if (maxTurnsReached) {
+      // Capped: report max_turns_exceeded unless the run genuinely completed
+      // (the abort raced a natural agent_end with stopReason "stop").
+      if (currentResult.stopReason !== "stop") currentResult.stopReason = "max_turns_exceeded";
+    } else if (wasAborted && !agentEndReceived) {
+      // Only throw if user aborted BEFORE agent_end completed.
+      // After agent_end, we send abort as cleanup — wasAborted is true but it's normal.
+      throw new Error("Subagent was aborted");
+    }
     return currentResult;
   } finally {
     cleanup();
