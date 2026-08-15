@@ -226,19 +226,16 @@ Add entries to `KNOWN_LINTERS` in `linters.ts` and a runner function. See `runBi
 
 ## Code actions
 
-`codeAction` lists actions at a position (kind, title, preferred/disabled, with context lines). `codeActionApply` runs one by index — re-queries for freshness, resolves via `codeAction/resolve` if deferred, applies the `WorkspaceEdit` to disk.
+`codeAction` lists actions at a position (kind, title, preferred/disabled, with context lines). `codeActionApply` runs one by index (or `name` — a substring of the title) — re-queries for freshness, resolves via `codeAction/resolve` if deferred, applies the edit to disk. Command-only actions (no edit attached) are executed via `workspace/executeCommand`; the server applies the refactor and the affected paths are reported back.
 
-`codeActionApply` also executes LSP file resource operations, so refactors that
-create/rename/delete files work — notably TypeScript's *Move to a new file*,
-which returns a `CreateFile` + `TextDocumentEdit` pair (file created empty,
-then filled by the following edit). Target parent dirs are created as needed.
-Requires a classic TS ≤6 project: the TS7 native server returns nothing for
-refactor actions by design.
+Caveat: the TS7 native server returns nothing for refactor actions by design (typescript-go#4005), so move-to-file and similar only work against classic TS ≤6.
 
 <details>
 <summary>WorkspaceEdit application details</summary>
 
 `applyWorkspaceEdit` (format.ts) handles both forms: `changes` (tsserver) and `documentChanges` (rust-analyzer rename). `documentChanges` is authoritative when both are present (per spec); within a file, edits apply in reverse order to preserve positions. Resource operations (Create/Rename/Delete) are executed in `documentChanges` order (create/rename first, then the `TextDocumentEdit` that fills the file). An `onFileWritten` callback syncs each file back via `didChange` so round-trip edits use fresh positions.
+
+For command-only actions, typescript-language-server applies the refactor itself: it sends an inbound `workspace/applyEdit` request (served by the client — apply to disk, sync files, record the touched paths) followed by an inbound `_typescript.rename` refresh. The `executeCommand` result is void; the reported paths come from the served applyEdit.
 
 </details>
 
@@ -282,4 +279,4 @@ The collapsed tool call display shows the action, file, line, symbol, and rename
 - **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
 - **yamlls on large files**: `symbols` times out on YAML files >400 lines (now surfaces the graceful 'still indexing' message rather than a raw error). Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
 - **Files outside cwd**: the file watcher only covers cwd. Files in other directories get server-side watching via the LSP server's own watchers (registered via `client/registerCapability`), but bash-side file changes (e.g., `rm`, `echo >`) in external projects won't trigger notifications. Cross-file references within external projects work correctly via multi-root support — the server is rooted at the project's Cargo.toml/package.json/go.mod ancestor, not the session cwd.
-- **Code actions**: command-only actions (no edit, just a command) are not applied — the model is told to run them manually. Resource operations in `documentChanges` (CreateFile/RenameFile/DeleteFile) are reported as unsupported rather than executed; `TextDocumentEdit` edits (including rust-analyzer `rename`) are applied.
+- **Code actions**: servers that return command-only actions without implementing `workspace/executeCommand` can't be applied here — the client would have to interpret the command itself. The TS7 native server returns nothing for refactor actions at all (typescript-go#4005).
