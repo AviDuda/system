@@ -166,6 +166,9 @@ in
 
           # Built-in openrouter provider — tags and ZDR config for model-policy extension.
           # No models array = keeps all built-in models, only overrides provider-level fields.
+          # Covers both main models and the sidecar (roles.local.json routes sidecar
+          # roles through this builtin provider).
+          # Per-model routing tweaks (e.g. sort/throughput floors) live in modelOverrides.
           openrouter = {
             tags = [
               "zdr"
@@ -175,6 +178,22 @@ in
               openRouterRouting = {
                 zdr = true;
                 data_collection = "deny";
+              };
+            };
+            # Per-model routing tweaks: sort by price with a throughput floor so
+            # slow cheap endpoints become fallbacks (rolling 5-min percentiles,
+            # not hard caps). Refresh values via `scripts/model-scan.ts --endpoints ...`.
+            modelOverrides = {
+              "deepseek/deepseek-v4-flash-0731" = {
+                compat = {
+                  openRouterRouting = {
+                    sort = "price"; # single model per request, partition is a no-op
+                    preferred_min_throughput = {
+                      p50 = 40; # typical requests clear 40 tok/s
+                      p90 = 50; # worst-case (90th pct) still clears 50 tok/s
+                    };
+                  };
+                };
               };
             };
           };
