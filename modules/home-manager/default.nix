@@ -129,6 +129,7 @@ in
         assimp # 3D model importer
         bat # Cat with syntax highlighting
         binwalk # Firmware analysis
+        check-jsonschema # JSON schema validator
         chromaprint # Audio fingerprinting
         cmus # Terminal music player
         csvlens # CSV viewer TUI
