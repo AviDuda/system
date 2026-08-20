@@ -92,6 +92,8 @@ const parsed = parseArgs({
     drift: { type: "boolean", default: false },
     local: { type: "boolean", default: false },
     model: { type: "string", default: [], short: "m", multiple: true },
+    endpoints: { type: "string", default: "", short: "e" },
+    quant: { type: "string", default: "" },
     json: { type: "boolean", default: false },
     quiet: { type: "boolean", default: false },
     verbose: { type: "boolean", default: false, short: "v" },
@@ -113,6 +115,8 @@ ${BOLD}OPTIONS${RESET}
   --drift       Check current pi.nix config for price/spec drift
   --local       Find trending MLX models via oMLX admin API
   --model, -m   Estimate specific HF repo (repeatable, e.g. --model mlx-community/Qwen3.6-27B-4bit)
+  --endpoints, -e  Fetch OpenRouter provider endpoints for a model (throughput/latency/pricing)
+  --quant         With --endpoints: comma-separated quantization filter (e.g. fp8,bf16)
   --json        Output machine-readable JSON instead of formatted table
   --quiet       Suppress status messages on stderr
   --verbose, -v Include low-scoring models in output
@@ -131,6 +135,7 @@ ${BOLD}DATA SOURCES${RESET}
 const modeDrift = parsed.values.drift;
 const modeLocal = parsed.values.local;
 const modeModels = parsed.values.model;
+const modeEndpoints = parsed.values.endpoints;
 const modeJson = parsed.values.json;
 const modeQuiet = parsed.values.quiet;
 const verbose = parsed.values.verbose;
@@ -139,9 +144,12 @@ const verbose = parsed.values.verbose;
 
 function getOpenRouterKey(): string {
   try {
-    return execSync("security find-generic-password -s openrouter-pi-main -w", { encoding: "utf-8" }).trim();
+    return execSync(
+      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main'",
+      { encoding: "utf-8" },
+    ).trim();
   } catch {
-    console.error(`${RED}OpenRouter key not found in keychain (openrouter-pi-main)${RESET}`);
+    console.error(`${RED}OpenRouter key not found in 1Password (pi/openrouter-main)${RESET}`);
     process.exit(1);
   }
 }
@@ -165,14 +173,15 @@ function getAAKey(): string {
 
 const CACHE_DIR = join(homedir(), ".cache", "model-scan");
 const CACHE_TTL = 1000 * 60 * 60 * 6; // 6 hours
+const ENDPOINT_CACHE_TTL = 1000 * 60 * 15; // 15 min — endpoint perf/availability drifts fast
 
-function readCache<T>(name: string): T | null {
+function readCache<T>(name: string, ttlMs = CACHE_TTL): T | null {
   const p = join(CACHE_DIR, `${name}.json`);
   if (!existsSync(p)) return null;
   try {
     const fs = require("node:fs");
     const s = fs.statSync(p);
-    if (Date.now() - s.mtimeMs > CACHE_TTL) return null;
+    if (Date.now() - s.mtimeMs > ttlMs) return null;
     return JSON.parse(fs.readFileSync(p, "utf-8")) as T;
   } catch {
     return null;
@@ -641,6 +650,299 @@ async function drift(): Promise<void> {
         console.log(`  ${DIM}${orId}${RESET} (local/provider, not checked)`);
       }
     }
+  }
+}
+
+// ── Endpoints mode ──
+
+interface OREndpoint {
+  name: string;
+  model_id?: string;
+  provider_name: string;
+  tag: string;
+  quantization: string | null;
+  status: number;
+  context_length: number;
+  is_byok: boolean;
+  pricing: { prompt: string; completion: string; input_cache_read?: string };
+  throughput_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
+  latency_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
+  uptime_last_5m: number | null;
+  uptime_last_30m: number | null;
+  uptime_last_1d: number | null;
+}
+
+// ZDR is provider-level: each endpoint's provider data policy decides whether
+// prompts are retained. /endpoints/zdr returns every endpoint that survives
+// ZDR enforcement; we index by (model_id, tag) with a tag-only fallback.
+async function fetchZdrEndpointKeys(key: string): Promise<{ zdr: Set<string>; tags: Set<string> }> {
+  const cached = readCache<{ pairs: string[]; tags: string[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
+  if (cached) {
+    if (!modeQuiet) process.stderr.write(`${DIM}Using cached ZDR endpoint list${RESET}\n`);
+    return { zdr: new Set(cached.pairs), tags: new Set(cached.tags) };
+  }
+  if (!modeQuiet) process.stderr.write(`${DIM}Fetching ZDR-compliant endpoints...${RESET}\n`);
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/endpoints/zdr", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+  } catch {
+    process.stderr.write(`${YELLOW}Warning: could not fetch /endpoints/zdr (network) — ZDR column omitted.${RESET}\n`);
+    return { zdr: new Set(), tags: new Set() };
+  }
+  if (!res.ok) {
+    process.stderr.write(
+      `${YELLOW}Warning: /endpoints/zdr failed (HTTP ${res.status}) — requires auth; using provided key. ZDR column omitted.${RESET}\n`,
+    );
+    return { zdr: new Set(), tags: new Set() };
+  }
+  let data: unknown;
+  try {
+    data = (await res.json()) as { data?: unknown };
+  } catch {
+    process.stderr.write(`${YELLOW}Warning: /endpoints/zdr returned non-JSON — ZDR column omitted.${RESET}\n`);
+    return { zdr: new Set(), tags: new Set() };
+  }
+  const arr = (data as { data?: Array<{ model_id?: string; tag?: string }> }).data;
+  if (!Array.isArray(arr) || arr.length === 0) {
+    process.stderr.write(
+      `${YELLOW}Warning: /endpoints/zdr returned an empty/odd payload — ZDR column omitted.${RESET}\n`,
+    );
+    return { zdr: new Set(), tags: new Set() };
+  }
+  const pairs: string[] = [];
+  const tags: string[] = [];
+  for (const e of arr) {
+    if (e.model_id && e.tag) pairs.push(`${e.model_id}|${e.tag}`);
+    if (e.tag) tags.push(e.tag);
+  }
+  writeCache("or-zdr-endpoints", { pairs, tags });
+  return { zdr: new Set(pairs), tags: new Set(tags) };
+}
+
+async function endpoints(): Promise<void> {
+  const slug = modeEndpoints;
+  const [author, model] = slug.split("/");
+  if (!author || !model) {
+    console.error(`${RED}--endpoints expects "author/slug" (e.g. deepseek/deepseek-v4-flash-0731)${RESET}`);
+    process.exit(1);
+  }
+
+  const key = getOpenRouterKey();
+  const url = `https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(model)}/endpoints`;
+  const quantFilter = parsed.values.quant
+    ? (parsed.values.quant as string).split(",").map((s) => s.trim().toLowerCase())
+    : null;
+
+  const zdrInfo = await fetchZdrEndpointKeys(key);
+
+  if (!modeQuiet) process.stderr.write(`${DIM}Fetching endpoints for ${slug}...${RESET}\n`);
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
+  } catch (e) {
+    throw new Error(`network error fetching ${url}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `GET ${slug}/endpoints failed: HTTP ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`,
+    );
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error(`GET ${slug}/endpoints returned non-JSON body`);
+  }
+
+  // Structure validation with explicit failure messages.
+  const root = body as { data?: unknown };
+  if (!root.data || typeof root.data !== "object") {
+    throw new Error(`GET ${slug}/endpoints response is missing .data (got ${typeof body})`);
+  }
+  const d = root.data as { endpoints?: unknown; id?: string; name?: string };
+  if (!Array.isArray(d.endpoints)) {
+    throw new Error(`GET ${slug}/endpoints response .data.endpoints is not an array (got ${typeof d.endpoints})`);
+  }
+  if (d.endpoints.length === 0) {
+    throw new Error(
+      `GET ${slug}/endpoints returned an empty endpoints array for ${d.id ?? slug} — model likely has no hosted endpoints`,
+    );
+  }
+
+  const required = [
+    "name",
+    "provider_name",
+    "quantization",
+    "pricing",
+    "throughput_last_30m",
+    "latency_last_30m",
+    "context_length",
+    "status",
+  ] as const;
+  const eps = d.endpoints as OREndpoint[];
+  for (const [i, e] of eps.entries()) {
+    const missing = required.filter((k) => !(k in e));
+    if (missing.length > 0) {
+      throw new Error(`endpoint[${i}] (${e.name ?? "?"}) missing fields: ${missing.join(", ")}`);
+    }
+    if (
+      typeof e.pricing !== "object" ||
+      e.pricing === null ||
+      typeof e.pricing.prompt !== "string" ||
+      typeof e.pricing.completion !== "string"
+    ) {
+      throw new Error(`endpoint[${i}] (${e.name ?? "?"}) pricing.prompt/completion missing or not strings`);
+    }
+  }
+
+  const hasPerf = eps.some((e) => e.throughput_last_30m != null);
+  if (!hasPerf) {
+    process.stderr.write(
+      `${YELLOW}Warning: all endpoint throughput/latency stats are null — percentiles require an authenticated API key (this key appears unauthenticated for this call).${RESET}\n`,
+    );
+  }
+
+  const isZdr = (e: OREndpoint): boolean =>
+    (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
+
+  let filtered = eps;
+  if (quantFilter && quantFilter.length > 0) {
+    const before = filtered.length;
+    filtered = filtered.filter((e) => e.quantization != null && quantFilter.includes(e.quantization.toLowerCase()));
+    if (!modeQuiet && filtered.length !== before) {
+      process.stderr.write(
+        `${DIM}Quant filter (${quantFilter.join(",")}): ${before} → ${filtered.length} endpoints${RESET}\n`,
+      );
+    }
+    if (filtered.length === 0) {
+      throw new Error(
+        `--quant ${quantFilter.join(",")} matches no endpoints for ${slug} (available: ${[...new Set(eps.map((e) => e.quantization ?? "unknown"))].sort().join(", ")})`,
+      );
+    }
+  }
+
+  interface Row {
+    Provider: string;
+    Quant: string;
+    ZDR: string;
+    "$in/M": string;
+    "$out/M": string;
+    p50t: string;
+    p90t: string;
+    p50lat: string;
+    up5m: string;
+    ctx: string;
+    status: string;
+  }
+
+  const zdrKnown = zdrInfo.tags.size > 0;
+  const rows: Row[] = filtered
+    .sort((a, b) => parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt))
+    .map((e) => {
+      const pin = parsePrice(e.pricing.prompt);
+      const pout = parsePrice(e.pricing.completion);
+      const t = e.throughput_last_30m;
+      const l = e.latency_last_30m;
+      const statusOk = e.status === 0;
+      const zdr = isZdr(e);
+      return {
+        Provider: `${e.provider_name}${e.is_byok ? ` ${YELLOW}(BYOK)${RESET}` : ""}`,
+        Quant: e.quantization ?? "-",
+        ZDR: zdrKnown ? (zdr ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`) : "",
+        "$in/M": Number.isNaN(pin) ? "(dyn)" : fmtPrice(pin),
+        "$out/M": Number.isNaN(pout) ? "(dyn)" : fmtPrice(pout),
+        p50t: t?.p50 != null ? `${CYAN}${t.p50.toFixed(0)}${RESET}` : "--",
+        p90t: t?.p90 != null ? t.p90.toFixed(0) : "--",
+        p50lat: l?.p50 != null ? `${l.p50.toFixed(0)}ms` : "--",
+        up5m: e.uptime_last_5m != null ? `${e.uptime_last_5m.toFixed(1)}%` : "--",
+        ctx: fmtCtx(e.context_length),
+        status: statusOk ? `${GREEN}ok${RESET}` : `${RED}${e.status}${RESET}`,
+      };
+    });
+
+  if (modeJson) {
+    console.log(
+      JSON.stringify(
+        {
+          model: d.id ?? slug,
+          zdrKnown: zdrKnown ? [...zdrInfo.tags].sort() : null,
+          endpoints: filtered.map((e) => ({ ...e, zdr_compliant: isZdr(e) })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log(
+    `\n${BOLD}${d.id ?? slug} — ${d.name ?? ""}${RESET}  ${DIM}(${filtered.length} endpoints, price-sorted${quantFilter ? `, quant=${quantFilter.join(",")}` : ""})${RESET}`,
+  );
+  console.log(
+    Bun.inspect.table(rows, [
+      "Provider",
+      "Quant",
+      "ZDR",
+      "$in/M",
+      "$out/M",
+      "p50t",
+      "p90t",
+      "p50lat",
+      "up5m",
+      "ctx",
+      "status",
+    ]),
+  );
+
+  // Routing hints. When ZDR info is known, only ZDR-compliant endpoints are
+  // usable (pi sends zdr=true), so the floor must be computed over those.
+  const healthyBase = filtered.filter((e) => e.status === 0 && e.throughput_last_30m != null);
+  const healthy = zdrKnown ? healthyBase.filter(isZdr) : healthyBase;
+  if (healthyBase.length > 0 && zdrKnown && healthy.length === 0) {
+    console.log(
+      `\n${YELLOW}Warning: no ZDR-compliant healthy endpoints with throughput stats — with zdr=true in pi.nix, none of these could actually be used.${RESET}`,
+    );
+  }
+  if (healthy.length > 0) {
+    const cheap = [...healthy].sort((a, b) => parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt))[0];
+    const p50s = healthy
+      .map((e) => e.throughput_last_30m?.p50)
+      .filter((v): v is number => v != null)
+      .sort((a, b) => a - b);
+    const p90s = healthy
+      .map((e) => e.throughput_last_30m?.p90)
+      .filter((v): v is number => v != null)
+      .sort((a, b) => a - b);
+    const med = (xs: number[]) => (xs.length > 0 ? (xs[Math.floor(xs.length / 2)] ?? 0) : 0);
+    console.log(`\n${BOLD}Routing hints${RESET}`);
+    if (cheap?.throughput_last_30m) {
+      console.log(
+        `  Cheapest healthy: ${CYAN}${cheap.provider_name}/${cheap.tag}${RESET} p50=${cheap.throughput_last_30m.p50?.toFixed(0)} p90=${cheap.throughput_last_30m.p90?.toFixed(0)} tok/s`,
+      );
+    }
+    console.log(
+      `  Median across ${healthy.length} healthy: p50=${med(p50s).toFixed(0)}, p90=${med(p90s).toFixed(0)} tok/s`,
+    );
+    const floor = {
+      p50: Math.round(med(p50s) * 0.8),
+      p90: Math.round(med(p90s) * 0.8),
+    };
+    console.log(`  Suggested preferred_min_throughput (80% of median): ${JSON.stringify(floor)}`);
+    const demoted = healthy.filter(
+      (e) =>
+        (e.throughput_last_30m?.p90 != null && e.throughput_last_30m?.p90 < floor.p90) ||
+        (e.throughput_last_30m?.p50 != null && e.throughput_last_30m?.p50 < floor.p50),
+    );
+    if (demoted.length > 0) {
+      console.log(`  Would demote: ${demoted.map((e) => e.provider_name).join(", ")}`);
+    } else {
+      console.log(`  Nobody demoted at that floor — all healthy endpoints keep preferred status`);
+    }
+  } else {
+    console.log(`\n${YELLOW}No healthy endpoints with throughput stats — cannot suggest a routing floor.${RESET}`);
   }
 }
 
@@ -1226,6 +1528,8 @@ async function modelQuery(): Promise<void> {
 async function main(): Promise<void> {
   if (modeDrift) {
     await drift();
+  } else if (modeEndpoints) {
+    await endpoints();
   } else if (modeModels.length > 0) {
     await modelQuery();
   } else if (modeLocal) {
