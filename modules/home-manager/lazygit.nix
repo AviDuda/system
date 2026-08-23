@@ -8,14 +8,15 @@
 
     settings = {
       git = {
-        pagers = [
+        diffRenderers = [
           # Delta: line-based diff with syntax highlighting
           {
-            pager = "delta --dark --paging=never --line-numbers";
+            command = "delta --dark --paging=never --line-numbers";
           }
           # Difftastic: structural/syntax-aware diff
           {
-            externalDiffCommand = "difft --color=always";
+            command = "difft --color=always";
+            type = "extDiff";
           }
         ];
       };
