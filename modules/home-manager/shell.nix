@@ -48,6 +48,18 @@ let
     alias nix-diff='(cd ${systemFlakeDir} && mise nix-diff)'
     alias claude-fresh='LLM_VANILLA=1 claude'
 
+    rg() {
+      for _rg_a in "$@"; do
+        if [[ "$_rg_a" =~ ^\-r[a-z] ]]; then
+          printf '%s\n' "ripgrep guard: '-r' is --replace. '$_rg_a' silently rewrites matches to a literal char." \
+            "  use rg -n (recursive+numbers), -R (follow symlinks), --replace=TEXT" \
+            "  not run; refusing."
+          return 2
+        fi
+      done
+      command rg "$@"
+    }
+
     ${nixpkgsCheckVersion}
   '';
 
