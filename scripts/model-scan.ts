@@ -157,7 +157,7 @@ function getOpenRouterKey(): string {
 function getAAKey(): string {
   try {
     const key = execSync(
-      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/generic/artificialanalysis",
+      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/generic/artificialanalysis'",
       {
         encoding: "utf-8",
       },
