@@ -22,10 +22,18 @@ import { Type } from "typebox";
 import { formatHits } from "../web-search-core/format";
 import { availableProviders, providerLabel, resolveProvider } from "../web-search-core/registry";
 import type { SearchFilters, SearchProvider } from "../web-search-core/types";
-import { closeSession, FetchError, fetchPage, sessionName, truncateContent } from "./web-fetch";
+import { closeSession, FetchError, fetchPage, sessionName, spillToTmp, truncateContent } from "./web-fetch";
 
 function elapsed(start: number): string {
   return `${((performance.now() - start) / 1000).toFixed(1)}s`;
+}
+
+/** Pointer note for oversized fetches: full content spilled to temp, readable via offset/limit. */
+async function spillNote(url: string, content: string): Promise<string> {
+  const p = await spillToTmp(url, content);
+  if (!p) return "";
+  const kb = Math.max(1, Math.round(content.length / 1024));
+  return `\n\n[Full content (${content.length} chars, ${kb} KB) saved to ${p} — use read with offset/limit]`;
 }
 
 interface SearchResult {
@@ -211,13 +219,15 @@ export default function (pi: ExtensionAPI) {
         });
 
         const { text, truncated } = truncateContent(result.content, 100_000);
-        const titleLine = result.title ? `# ${result.title}\n\n` : "";
+        // Feed results render their own title header; prepend only for scrapes.
+        const titleLine = result.title && !result.content.startsWith("# ") ? `# ${result.title}\n\n` : "";
         const redirectNote = result.url !== params.url ? `[Redirected to: ${result.url}]\n\n` : "";
+        const spill = truncated ? await spillNote(result.url, result.content) : "";
         const session = sessionName(ctx.cwd);
         const sessionNote = `\n\n[Browser session: ${session} -- use \`agent-browser --session ${session}\` for further interaction]`;
 
         return {
-          content: [{ type: "text", text: `${titleLine}${redirectNote}${text}${sessionNote}` }],
+          content: [{ type: "text", text: `${titleLine}${redirectNote}${text}${spill}${sessionNote}` }],
           details: {
             url: result.url,
             requestedUrl: params.url,
@@ -284,9 +294,11 @@ export default function (pi: ExtensionAPI) {
         const start = performance.now();
         const result = await fetchPage(url, { cwd: ctx.cwd, headed: fetchHeaded });
         const time = elapsed(start);
-        const { text } = truncateContent(result.content, 100_000);
-        const titleLine = result.title ? `# ${result.title}\n\n` : "";
-        pi.sendUserMessage(`[/fetch ${url} (${time})]\n\n${titleLine}${text}`);
+        const { text, truncated } = truncateContent(result.content, 100_000);
+        // Feed results render their own title header; prepend only for scrapes.
+        const titleLine = result.title && !result.content.startsWith("# ") ? `# ${result.title}\n\n` : "";
+        const spill = truncated ? await spillNote(url, result.content) : "";
+        pi.sendUserMessage(`[/fetch ${url} (${time})]\n\n${titleLine}${text}${spill}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Fetch failed: ${msg}`, "error");

@@ -7,7 +7,10 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { basename } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { tryFeed } from "./feeds/registry";
 import type { FeedContext, HttpFetchOptions } from "./feeds/types";
 
@@ -323,22 +326,31 @@ function htmlToMarkdown(html: string, signal?: AbortSignal): Promise<string> {
 }
 
 /**
- * Replace single-row and single-column <table>s with their cell text, since
- * these are layout wrappers (not data) and pandoc has no clean GFM rendering
- * for them. Tables with >=2 rows AND >=2 columns are left intact.
- *
- * Naive tag matching (no DOM parser) — good enough for well-formed HTML from a
- * browser render, and stays dependency-free. Operates only on <table>...</table>
- * spans so it can't damage surrounding content.
+ * Unwrap layout tables to their cell text: single-row, single-column, and
+ * tables with block-level content in cells (div, lists, p, …). The latter
+ * would be dropped entirely by pandoc's GFM writer ("[TABLE]" placeholder —
+ * pipe-table cells can only hold inline content), so text is strictly better.
+ * Element list mirrors pandoc's drop condition; inline elements (center, span)
+ * render fine and must NOT be added. Operates only on <table> spans; naive
+ * tag matching, no DOM parser.
  */
 export function unwrapLayoutTables(html: string): string {
   return html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (table) => {
     const rows = table.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) ?? [];
     if (rows.length < 2) return cellsAsText(table);
     const maxCols = Math.max(...rows.map((r) => (r.match(/<t[dh]\b[^>]*>/gi) ?? []).length));
-    return maxCols < 2 ? cellsAsText(table) : table;
+    if (maxCols < 2) return cellsAsText(table);
+    // Strip the table's own tags before testing: the regex includes `table` for
+    // NESTED tables (genuinely unrenderable in a cell), and the outer <table>
+    // tag would otherwise self-match on every call.
+    const inner = table.replace(/^<table\b[^>]*>/i, "").replace(/<\/table>\s*$/i, "");
+    if (BLOCK_IN_CELL_RE.test(inner)) return cellsAsText(table);
+    return table;
   });
 }
+
+/** Block elements in a cell make a table unrenderable as a GFM pipe table (pandoc drops it). */
+const BLOCK_IN_CELL_RE = /<(?:div|ul|ol|dl|p|pre|blockquote|table|h[1-6]|hr)\b/i;
 
 /** Extract <td>/<th> cell text from a table, joined by newlines. */
 function cellsAsText(table: string): string {
@@ -399,4 +411,51 @@ export function truncateContent(content: string, maxChars: number): { text: stri
     text: `${content.slice(0, maxChars)}\n\n[Truncated at ${maxChars} characters]`,
     truncated: true,
   };
+}
+
+// ── Oversized-content spill ──
+
+/** Directory for spilled full-content files, under the OS temp dir. */
+const SPILL_DIR = join(tmpdir(), "pi-web-fetch");
+
+/**
+ * Deterministic, filesystem-safe filename for a fetched URL: hostname + path
+ * slug + short hash of the full URL. Re-fetching the same URL overwrites the
+ * same file (idempotent), different URLs never collide.
+ */
+export function filenameForUrl(url: string): string {
+  let host = "site";
+  let slug = "";
+  try {
+    const u = new URL(url);
+    host = u.hostname.replace(/[^a-zA-Z0-9.-]/g, "");
+    slug = u.pathname
+      .split("/")
+      .filter(Boolean)
+      .join("-")
+      .replace(/[^a-zA-Z0-9.-]/g, "")
+      .slice(0, 60);
+  } catch {
+    // unparseable URL — fall back to hash-only naming
+  }
+  const base = `${host}${slug ? `-${slug}` : ""}` || "fetch";
+  const hash = createHash("sha256").update(url).digest("hex").slice(0, 8);
+  return `${base}-${hash}.md`;
+}
+
+/**
+ * Write the full (untruncated) content of an oversized fetch to the OS temp
+ * dir so the agent can read the remainder with offset/limit — same pattern as
+ * pi's read and bash tools for large outputs. Returns the path, or null on
+ * failure (spill is an enhancement; never fail the fetch because of it).
+ */
+export async function spillToTmp(url: string, content: string): Promise<string | null> {
+  try {
+    await mkdir(SPILL_DIR, { recursive: true });
+    const path = `${SPILL_DIR}/${filenameForUrl(url)}`;
+    await writeFile(path, content, "utf8");
+    return path;
+  } catch {
+    return null;
+  }
 }

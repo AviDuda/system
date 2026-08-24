@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import {
   buildNavHeaders,
   cleanMarkdown,
+  filenameForUrl,
   NAV_HEADERS,
   parseEvalString,
   sessionName,
+  spillToTmp,
   spoofUserAgent,
   stripAnsi,
   truncateContent,
@@ -162,6 +165,51 @@ describe("unwrapLayoutTables", () => {
   test("empty cells are dropped", () => {
     const html = "<table><tr><td>  </td></tr><tr><td>kept</td></tr></table>";
     expect(unwrapLayoutTables(html)).toBe("kept");
+  });
+
+  test("unwraps a multi-row multi-col table with block content in cells (pandoc would drop it)", () => {
+    const html =
+      '<table><tr><th>Title</th><th>Link</th></tr><tr><td><div class="titleline"><a href="u">Story</a></div></td><td>x</td></tr></table>';
+    expect(unwrapLayoutTables(html)).toBe("Title\nLink\nStory\nx");
+  });
+
+  test("unwraps a table whose cell holds a list", () => {
+    const html = "<table><tr><td><ul><li>a</li></ul></td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe("a\nb\nc\nd");
+  });
+
+  test("preserves a data table whose cells hold only inline elements (center, span)", () => {
+    const html =
+      "<table><tr><th>a</th><th>b</th></tr><tr><td><center>x</center></td><td><span>y</span></td></tr></table>";
+    expect(unwrapLayoutTables(html)).toBe(html);
+  });
+});
+
+describe("spillToTmp / filenameForUrl", () => {
+  test("filename is deterministic per URL", () => {
+    expect(filenameForUrl("https://news.ycombinator.com/item?id=39865810")).toBe(
+      filenameForUrl("https://news.ycombinator.com/item?id=39865810"),
+    );
+  });
+
+  test("filename embeds host and slug, differs per URL", () => {
+    const a = filenameForUrl("https://lobste.rs/s/abc/story-slug");
+    const b = filenameForUrl("https://lobste.rs/s/def/other-slug");
+    expect(a).toMatch(/^lobste\.rs-s-abc-story-slug-/);
+    expect(b).not.toBe(a);
+  });
+
+  test("spill writes the file under the OS temp dir and returns its path", async () => {
+    const path = await spillToTmp("https://example.com/spill-test", "hello spill");
+    if (path === null) throw new Error("spill returned null");
+    expect(path).toContain("pi-web-fetch");
+    expect(await readFile(path, "utf8")).toBe("hello spill");
+  });
+
+  test("re-spilling the same URL overwrites the same file", async () => {
+    const p1 = await spillToTmp("https://example.com/spill-test", "first");
+    const p2 = await spillToTmp("https://example.com/spill-test", "second");
+    expect(p1).toBe(p2);
   });
 });
 
