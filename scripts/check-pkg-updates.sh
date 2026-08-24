@@ -25,16 +25,8 @@ REGISTRY=(
   "vkquake.nix:MacSourcePorts/MSPBuildSystem:vkQuake_:false:"
 )
 
-# Try authenticated gh (via 1Password plugin), then plain gh, then curl
-if command -v op &>/dev/null; then
-  echo "Authenticating via 1Password (may prompt for biometric)..."
-  if op plugin run -- gh auth status &>/dev/null; then
-    api() { op plugin run -- gh api "$1" 2>/dev/null; }
-  else
-    echo "1Password auth failed, falling back to unauthenticated requests."
-    api() { curl -sf "https://api.github.com$1"; }
-  fi
-elif command -v gh &>/dev/null && gh auth status &>/dev/null; then
+# Try gh, then curl
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
   api() { gh api "$1" 2>/dev/null; }
 else
   api() {
