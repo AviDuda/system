@@ -126,8 +126,8 @@ in
                 };
               }
               {
-                id = "Qwen3.6-27B-4bit";
-                name = "Qwen 3.6 27B 4-bit (oMLX)";
+                id = "Qwen3.8-27B-4bit";
+                name = "Qwen 3.8 27B 4-bit (oMLX)";
                 reasoning = true;
                 input = [
                   "text"
