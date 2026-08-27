@@ -357,14 +357,15 @@ function makeTiers(values: number[], lowerBetter = false): (v: number) => Tier {
     .filter(Number.isFinite)
     .map((v) => (lowerBetter ? -v : v))
     .sort((a, b) => a - b);
-  if (scores.length < 3) return () => "";
-  const q = (p: number): number => scores[Math.floor(p * (scores.length - 1))] ?? 0;
-  const t1 = q(1 / 3);
-  const t2 = q(2 / 3);
+  if (scores.length === 0) return () => "";
+  // Rank-fraction tiers (not thresholds): robust for tiny rowsets and ties.
   return (v: number): Tier => {
     if (!Number.isFinite(v)) return "";
     const n = lowerBetter ? -v : v;
-    return n >= t2 ? "g" : n >= t1 ? "y" : "";
+    let below = 0;
+    for (const s of scores) if (s < n) below++;
+    const frac = scores.length > 1 ? below / (scores.length - 1) : 1;
+    return frac >= 2 / 3 ? "g" : frac >= 1 / 3 ? "y" : "";
   };
 }
 
@@ -1070,7 +1071,44 @@ const isZdrEndpoint =
   (e: OREndpoint): boolean =>
     (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
 
-function endpointRows(filtered: OREndpoint[], zdrInfo: ZdrInfo, modelShort: (e: OREndpoint) => string): EndpointRow[] {
+interface EndpointTierSet {
+  inP: (v: number) => Tier;
+  outP: (v: number) => Tier;
+  t50: (v: number) => Tier;
+  t90: (v: number) => Tier;
+  lat: (v: number) => Tier;
+  up: (v: number) => Tier;
+  ctx: (v: number) => Tier;
+}
+
+/** Tercile heat for an endpoint rowset: cheaper/faster/longer-uptime = greener. */
+function endpointTiers(eps: OREndpoint[]): EndpointTierSet {
+  return {
+    inP: makeTiers(
+      eps.map((e) => parsePrice(e.pricing.prompt)),
+      true,
+    ),
+    outP: makeTiers(
+      eps.map((e) => parsePrice(e.pricing.completion)),
+      true,
+    ),
+    t50: makeTiers(eps.map((e) => e.throughput_last_30m?.p50 ?? NaN)),
+    t90: makeTiers(eps.map((e) => e.throughput_last_30m?.p90 ?? NaN)),
+    lat: makeTiers(
+      eps.map((e) => e.latency_last_30m?.p50 ?? NaN),
+      true,
+    ),
+    up: makeTiers(eps.map((e) => e.uptime_last_5m ?? NaN)),
+    ctx: makeTiers(eps.map((e) => e.context_length)),
+  };
+}
+
+function endpointRows(
+  filtered: OREndpoint[],
+  zdrInfo: ZdrInfo,
+  modelShort: (e: OREndpoint) => string,
+  tiers: EndpointTierSet,
+): EndpointRow[] {
   const zdrKnown = zdrInfo.tags.size > 0;
   const isZdr = isZdrEndpoint(zdrInfo);
   return filtered
@@ -1091,13 +1129,13 @@ function endpointRows(filtered: OREndpoint[], zdrInfo: ZdrInfo, modelShort: (e: 
         Quant: e.quantization ?? "-",
         ZDR: zdrKnown ? (zdr ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`) : "",
         Model: modelShort(e),
-        "$in/M": Number.isNaN(pin) ? "(dyn)" : fmtPrice(pin),
-        "$out/M": Number.isNaN(pout) ? "(dyn)" : fmtPrice(pout),
-        p50t: t?.p50 != null ? `${CYAN}${t.p50.toFixed(0)}${RESET}` : "--",
-        p90t: t?.p90 != null ? t.p90.toFixed(0) : "--",
-        p50lat: l?.p50 != null ? `${l.p50.toFixed(0)}ms` : "--",
-        up5m: e.uptime_last_5m != null ? `${e.uptime_last_5m.toFixed(1)}%` : "--",
-        ctx: fmtCtx(e.context_length),
+        "$in/M": Number.isNaN(pin) ? "(dyn)" : paint(fmtPrice(pin), tiers.inP(pin)),
+        "$out/M": Number.isNaN(pout) ? "(dyn)" : paint(fmtPrice(pout), tiers.outP(pout)),
+        p50t: t?.p50 != null ? paint(t.p50.toFixed(0), tiers.t50(t.p50)) : "--",
+        p90t: t?.p90 != null ? paint(t.p90.toFixed(0), tiers.t90(t.p90)) : "--",
+        p50lat: l?.p50 != null ? paint(`${l.p50.toFixed(0)}ms`, tiers.lat(l.p50)) : "--",
+        up5m: e.uptime_last_5m != null ? paint(`${e.uptime_last_5m.toFixed(1)}%`, tiers.up(e.uptime_last_5m)) : "--",
+        ctx: paint(fmtCtx(e.context_length), tiers.ctx(e.context_length)),
         status: statusOk ? `${GREEN}ok${RESET}` : `${RED}${e.status}${RESET}`,
       };
     });
@@ -1228,7 +1266,7 @@ async function endpoints(): Promise<void> {
     );
     console.log(
       Bun.inspect.table(
-        endpointRows(r.eps, zdrInfo, () => ""),
+        endpointRows(r.eps, zdrInfo, () => "", endpointTiers(r.eps)),
         ROW_COLS.filter((c) => c !== "Model"),
       ),
     );
@@ -1295,13 +1333,10 @@ async function endpoints(): Promise<void> {
 
   // Merged view. Same-provider rows land adjacent, so one provider's pricing of
   // both models is directly comparable down a column.
+  const allEps = results.flatMap((r) => r.eps);
   console.log(
     Bun.inspect.table(
-      endpointRows(
-        results.flatMap((r) => r.eps),
-        zdrInfo,
-        (e) => shortModelName(e.model_id ?? e.name),
-      ),
+      endpointRows(allEps, zdrInfo, (e) => shortModelName(e.model_id ?? e.name), endpointTiers(allEps)),
       ROW_COLS,
     ),
   );
@@ -1309,25 +1344,55 @@ async function endpoints(): Promise<void> {
   console.log(
     `\n${BOLD}Per model${RESET}  ${DIM}(listed prices over routable non-dynamic endpoints · eff = traffic-weighted ${RANGE_LABELS[modeRange] ?? (modeRange || "today")})${RESET}`,
   );
-  const cell = (s: ReturnType<typeof priceStats>, f: (x: number) => string): string =>
-    s ? f(s.med) : `${DIM}--${RESET}`;
+  const aggTiers = {
+    medIn: makeTiers(
+      agg.map((a) => a.stIn?.med ?? NaN),
+      true,
+    ),
+    avgIn: makeTiers(
+      agg.map((a) => a.stIn?.avg ?? NaN),
+      true,
+    ),
+    medOut: makeTiers(
+      agg.map((a) => a.stOut?.med ?? NaN),
+      true,
+    ),
+    effIn: makeTiers(
+      agg.map((a) => a.eff?.weightedInputPrice ?? NaN),
+      true,
+    ),
+    cache: makeTiers(agg.map((a) => a.eff?.weightedCacheHitRate ?? NaN)),
+    vol: makeTiers(agg.map((a) => (a.eff ? a.eff.providerSummaries.reduce((t, p) => t + p.totalTokens, 0) : NaN))),
+    p50: makeTiers(agg.map((a) => a.p50med)),
+    coding: makeTiers(agg.map((a) => a.bench?.coding ?? NaN)),
+    intel: makeTiers(agg.map((a) => a.bench?.intel ?? NaN)),
+  };
+  const cell = (s: ReturnType<typeof priceStats>, f: (x: number) => string, tier: (v: number) => Tier): string =>
+    s ? paint(f(s.med), tier(s.med)) : `${DIM}--${RESET}`;
   console.log(
     Bun.inspect.table(
       agg.map((a) => {
         const wIn = a.eff?.weightedInputPrice;
         const wCache = a.eff?.weightedCacheHitRate;
+        const vol = a.eff ? a.eff.providerSummaries.reduce((t, p) => t + p.totalTokens, 0) : NaN;
         return {
           Model: shortModelName(a.r.id),
           N: a.routable.length,
-          "In med": cell(a.stIn, fmtPrice),
-          "In avg": a.stIn ? fmtPrice(a.stIn.avg) : `${DIM}--${RESET}`,
-          "Out med": cell(a.stOut, fmtPrice),
-          "Eff in": wIn != null ? fmtPrice(wIn) : `${DIM}--${RESET}`,
-          "Cache%": wCache != null ? `${(wCache * 100).toFixed(0)}%` : "--",
-          Vol: a.eff ? humanTokens(a.eff.providerSummaries.reduce((t, p) => t + p.totalTokens, 0)) : "--",
-          p50t: Number.isNaN(a.p50med) ? `${DIM}--${RESET}` : a.p50med.toFixed(0),
-          Coding: a.bench?.coding != null ? fmtScore(a.bench.coding) : `${DIM}--${RESET}`,
-          Intel: a.bench?.intel != null ? fmtScore(a.bench.intel) : `${DIM}--${RESET}`,
+          "In med": cell(a.stIn, fmtPrice, aggTiers.medIn),
+          "In avg": a.stIn ? paint(fmtPrice(a.stIn.avg), aggTiers.avgIn(a.stIn.avg)) : `${DIM}--${RESET}`,
+          "Out med": cell(a.stOut, fmtPrice, aggTiers.medOut),
+          "Eff in": wIn != null ? paint(fmtPrice(wIn), aggTiers.effIn(wIn)) : `${DIM}--${RESET}`,
+          "Cache%": wCache != null ? paint(`${(wCache * 100).toFixed(0)}%`, aggTiers.cache(wCache)) : "--",
+          Vol: Number.isFinite(vol) ? paint(humanTokens(vol), aggTiers.vol(vol)) : "--",
+          p50t: Number.isNaN(a.p50med) ? `${DIM}--${RESET}` : paint(a.p50med.toFixed(0), aggTiers.p50(a.p50med)),
+          Coding:
+            a.bench?.coding != null
+              ? paint(a.bench.coding.toFixed(1).padStart(5), aggTiers.coding(a.bench.coding))
+              : `${DIM}${"".padStart(5)}${RESET}`,
+          Intel:
+            a.bench?.intel != null
+              ? paint(a.bench.intel.toFixed(1).padStart(5), aggTiers.intel(a.bench.intel))
+              : `${DIM}${"".padStart(5)}${RESET}`,
         };
       }),
       ["Model", "N", "In med", "In avg", "Out med", "Eff in", "Cache%", "Vol", "p50t", "Coding", "Intel"],
