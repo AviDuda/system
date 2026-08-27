@@ -34,7 +34,13 @@ import {
 import { getClientForFile, getServersForFile, isFileOpenInAnyClient, warmRead } from "./client-mgmt";
 import { diagBlock, getDiagnosticsForFile } from "./diagnostics";
 import { serverDisplayName } from "./servers";
-import { type EngineState, MAX_PENDING_EDIT, type PostToolResult, RECENT_CHANGE_TTL_MS } from "./state";
+import {
+  type DiagnosticsResult,
+  type EngineState,
+  MAX_PENDING_EDIT,
+  type PostToolResult,
+  RECENT_CHANGE_TTL_MS,
+} from "./state";
 import { WatchChangeType } from "./watcher";
 
 /**
@@ -74,6 +80,35 @@ export function handleToolCall(state: EngineState, toolName: string, input: unkn
   }
 }
 
+/** One drained watcher-buffered file and its diagnostics result. */
+export interface CollectedDiag {
+  relPath: string;
+  result: DiagnosticsResult;
+}
+
+/**
+ * Render a post-bash batch as ONE report: full per-file blocks for files with
+ * signal (messages, unchanged-collapse lines, or format drift), one collapsed
+ * line for the clean rest. Bash blocks carry no file label, so N clean headers
+ * are indistinguishable noise; dirty message lines already carry path:line, so
+ * aggregation loses nothing. Drift-only files render a full block but don't
+ * raise a notification.
+ */
+export function bashDiagBlocks(collected: CollectedDiag[]): { parts: string[]; hasIssues: boolean } {
+  const hasSignal = (r: DiagnosticsResult) =>
+    r.messages.length > 0 || (r.unchanged?.length ?? 0) > 0 || r.drift !== undefined;
+  const dirty = collected.filter((c) => hasSignal(c.result));
+  const clean = collected.filter((c) => !hasSignal(c.result));
+
+  const parts = dirty.map(({ relPath, result }) => diagBlock(result, relPath, ` ${relPath}`));
+  if (clean.length > 0) {
+    const servers = [...new Set(clean.map((c) => c.result.server))].join(", ");
+    parts.push(`[LSP diagnostics (${servers}): ${clean.length} file${clean.length === 1 ? "" : "s"} clean]`);
+  }
+  const hasIssues = collected.some((c) => c.result.messages.length > 0 || (c.result.unchanged?.length ?? 0) > 0);
+  return { parts, hasIssues };
+}
+
 /**
  * tool_result hook for bash: drain watcher-buffered changes into
  * diagnostics appended to the result. Returns null when nothing to report
@@ -104,8 +139,7 @@ export async function postBashResult(state: EngineState, cwd: string): Promise<P
   for (const abs of changed.map((c) => c.abs)) state.recentChanges.delete(abs);
 
   const MAX_BASH_DIAG_FILES = 5;
-  const diagParts: string[] = [];
-  let anyErrored = false;
+  const collected: CollectedDiag[] = [];
   // Parallel + bounded: the drain runs inside the tool_result hook, so it
   // delays the bash result — several sequential 6s waits (new-file path)
   // would stall every file-writing command. Run per-file diagnostics
@@ -122,27 +156,23 @@ export async function postBashResult(state: EngineState, cwd: string): Promise<P
           checkDrift: true,
           timeoutMs: 1500,
         });
-        if (result) {
-          const block = diagBlock(result, path.relative(cwd, abs), "");
-          if (block) {
-            if (result.errored) anyErrored = true;
-            diagParts.push(block);
-          }
-        }
+        if (result) collected.push({ relPath: path.relative(cwd, abs), result });
       } catch {
         // Non-fatal per file
       }
     }),
   );
-  if (diagParts.length === 0) return null;
+  if (collected.length === 0) return null;
+  collected.sort((a, b) => a.relPath.localeCompare(b.relPath));
+
+  const { parts: diagParts, hasIssues } = bashDiagBlocks(collected);
   const more = changed.length - Math.min(changed.length, MAX_BASH_DIAG_FILES);
   const tail =
     more > 0 ? `\n\n…and ${more} more file(s) changed by bash (diagnostics capped at ${MAX_BASH_DIAG_FILES})` : "";
-  const hasIssues = diagParts.some((p) => !p.includes("no errors, no warnings"));
   return {
     appended: `\n\n${diagParts.join("\n\n")}${tail}`,
     notify: hasIssues ? `LSP: ${diagParts.join("\n\n")}` : null,
-    errored: anyErrored,
+    errored: collected.some((c) => c.result.errored),
   };
 }
 

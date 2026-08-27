@@ -746,6 +746,13 @@ d("e2e", () => {
       expect(result?.appended).toContain("[LSP diagnostics (");
       expect(result?.errored).toBe(true);
       expect(result?.notify).toContain("not assignable");
+
+      // Fix the file and drain again: a clean bash batch collapses to one line.
+      fs.writeFileSync(abs, "export const n: number = 1;\n");
+      state.recentChanges.set(abs, { type: WatchChangeType.Changed, ts: Date.now() });
+      const clean = await postBashResult(state, fixture);
+      expect(clean?.appended).toContain("1 file clean");
+      expect(clean?.notify).toBeNull();
     },
     90_000,
   );

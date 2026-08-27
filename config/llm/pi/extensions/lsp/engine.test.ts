@@ -16,10 +16,10 @@ import { runAction } from "./actions";
 import type { Diagnostic } from "./client";
 import { diagBlock } from "./diagnostics";
 import { startSession, stopSession } from "./file-events";
-import { handleToolCall, postBashResult, postEditResult } from "./hooks";
+import { bashDiagBlocks, handleToolCall, postBashResult, postEditResult } from "./hooks";
 import { detectLinters } from "./linters";
 import { detectServers } from "./servers";
-import { createState, type EngineState, type LspHost } from "./state";
+import { createState, type DiagnosticsResult, type EngineState, type LspHost } from "./state";
 import { statusReport, toggleDedup, updateStatusData } from "./status";
 
 /** Fixture diagnostic (position-only fields matter for formatting). */
@@ -108,6 +108,51 @@ describe("diagBlock", () => {
     expect(diagBlock(result, "src/a.ts", "")).toBe(
       "[LSP diagnostics (ts): no errors, no warnings]\n  format drift: line 2-4 (biome)",
     );
+  });
+});
+
+describe("bashDiagBlocks", () => {
+  const mk = (over: Partial<DiagnosticsResult> = {}): DiagnosticsResult => ({
+    messages: [],
+    summary: "0 errors, 0 warnings",
+    errored: false,
+    server: "ts",
+    ...over,
+  });
+
+  test("all-clean batch collapses to one line", () => {
+    const { parts, hasIssues } = bashDiagBlocks([
+      { relPath: "a.ts", result: mk() },
+      { relPath: "b.json", result: mk({ server: "json" }) },
+    ]);
+    expect(parts).toEqual(["[LSP diagnostics (ts, json): 2 files clean]"]);
+    expect(hasIssues).toBe(false);
+  });
+
+  test("dirty file keeps a labeled block; clean files collapse", () => {
+    const dirty = mk({ messages: ["src/a.ts:1:1 [error] (ts) nope"], summary: "1 error, 0 warnings", errored: true });
+    const { parts, hasIssues } = bashDiagBlocks([
+      { relPath: "src/a.ts", result: dirty },
+      { relPath: "src/b.ts", result: mk() },
+    ]);
+    expect(parts).toEqual([
+      "[LSP diagnostics (ts) src/a.ts: 1 error, 0 warnings]\nsrc/a.ts:1:1 [error] (ts) nope",
+      "[LSP diagnostics (ts): 1 file clean]",
+    ]);
+    expect(hasIssues).toBe(true);
+  });
+
+  test("drift-only file renders a block without raising an issue", () => {
+    const { parts, hasIssues } = bashDiagBlocks([{ relPath: "src/a.ts", result: mk({ drift: "line 2-4 (biome)" }) }]);
+    expect(parts).toEqual([
+      "[LSP diagnostics (ts) src/a.ts: no errors, no warnings]\n  format drift: line 2-4 (biome)",
+    ]);
+    expect(hasIssues).toBe(false);
+  });
+
+  test("unchanged-collapse lines count as signal", () => {
+    const { hasIssues } = bashDiagBlocks([{ relPath: "a.ts", result: mk({ unchanged: [diag(3, "same")] }) }]);
+    expect(hasIssues).toBe(true);
   });
 });
 
