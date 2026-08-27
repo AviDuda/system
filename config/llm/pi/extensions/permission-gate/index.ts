@@ -5,32 +5,15 @@
  * See the README for details.
  */
 
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   type ExtensionAPI,
   type ExtensionContext,
   type ExtensionUIContext,
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
-// patch's preview (sibling extension): use patch's OWN matcher so normalized
-// edits (arrows, tab↔space) preview correctly. Static import — a dynamic one
-// was version-fragile, and its failure silently allowed every patch (fail-open).
 import { computePatchPreview } from "../patch/preview";
-
-// Deep import: pi doesn't export edit-diff from its package exports map.
-// Use import.meta.resolve to find the package entry, then derive the internal path.
-const piEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
-const piRoot = dirname(dirname(piEntry)); // dist/index.js -> dist -> package root
-const editDiffPath = join(piRoot, "dist", "core", "tools", "edit-diff.js");
-
-type ComputeEditsDiffFn = (
-  path: string,
-  edits: Array<{ oldText?: string; newText?: string }>,
-  cwd: string,
-) => Promise<{ diff: string; firstChangedLine?: number } | { error: string }>;
-
-let _computeEditsDiff: ComputeEditsDiffFn | undefined;
+import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
+import { computeEditPreview } from "./edit-preview";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
  *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */
@@ -39,7 +22,6 @@ function isPatchPreviewUnavailable(r: unknown): r is PatchPreviewUnavailable {
   return r != null && typeof r === "object" && "unavailable" in r;
 }
 
-import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
 import {
   type ConfirmResult,
   type ConfirmUIOptions,
@@ -444,25 +426,12 @@ export default function permissionGate(pi: ExtensionAPI) {
       if (toolName === "edit" && input.edits && Array.isArray(input.edits)) {
         const path = typeof input.path === "string" ? input.path : "";
         const edits = input.edits as Array<{ oldText?: string; newText?: string }>;
-        if (!_computeEditsDiff) {
-          const mod = await import(editDiffPath);
-          _computeEditsDiff = mod.computeEditsDiff as ComputeEditsDiffFn;
-        }
-        const result = await _computeEditsDiff(path, edits, cwd);
+        const result = await computeEditPreview(path, edits, cwd);
+        // {error} = the tool will reject too (unreadable/not-found/duplicate/
+        // overlap/no-change): no styled diff, gate confirms via details body.
         if ("error" in result) return undefined;
         const styled = renderDiff(result.diff);
-        const lines = styled.split("\n");
-        // Find first actual change line in the raw diff (skip --- +++ headers)
-        const rawLines = result.diff.split("\n");
-        let firstChangedLine: number | undefined;
-        for (let i = 0; i < rawLines.length; i++) {
-          const rl = rawLines[i];
-          if ((rl.startsWith("-") || rl.startsWith("+")) && !rl.startsWith("---") && !rl.startsWith("+++")) {
-            firstChangedLine = i;
-            break;
-          }
-        }
-        return { lines, rawDiff: result.diff, firstChangedLine };
+        return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
       }
       if (toolName === "patch" && input.edits && Array.isArray(input.edits)) {
         const path = typeof input.path === "string" ? input.path : "";

@@ -77,10 +77,12 @@ Every confirmation shows a custom TUI with:
 ### Diff preview
 
 For `edit` and `write` tool calls, the dialog shows a unified diff computed from
-the pending changes. Uses pi's `computeEditsDiff` and `renderDiff` for colored
-output with intra-line change highlighting. For `patch`, the diff preview uses
-patch's own matcher (from `patch/preview.ts`) so tolerant matches (Unicode
-arrows, tab↔space) preview correctly.
+the pending changes. For `edit`, matching comes from the vendored matcher in
+`edit-match.ts` (pi's internal equivalent isn't exported through its public
+API) with rendering from pi's public `generateDiffString`; `renderDiff` colors
+the output. For `patch`, the preview uses patch's own matcher (from
+`patch/preview.ts`) so tolerant matches (Unicode arrows, tab↔space) preview
+correctly.
 
 - Compact view (6 lines) starts scrolled to the first change
 - `Ctrl+O` expands to full view (up to 30 lines, scrollable)
