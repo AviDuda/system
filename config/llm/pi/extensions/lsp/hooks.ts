@@ -122,6 +122,13 @@ export async function postBashResult(state: EngineState, cwd: string): Promise<P
   // buffer is TTL-bounded rather than command-bounded: FSEvents delivery
   // latency is unreliable (ms to seconds), so attributing an event to the
   // exact bash that wrote the file would miss late deliveries.
+  // Expire entries older than the reporting window first: nothing prunes the
+  // map between commands, and stale entries would block the fresh-event poll
+  // below (it only runs on an empty map).
+  const now = Date.now();
+  for (const [p, v] of state.recentChanges) {
+    if (now - v.ts > RECENT_CHANGE_TTL_MS) state.recentChanges.delete(p);
+  }
   // Fast commands can beat fs.watch delivery (the raw event lands a few ms
   // after the write) — poll briefly before giving up so `printf > f` is
   // caught. Non-writing commands pay this small wait.
@@ -131,12 +138,10 @@ export async function postBashResult(state: EngineState, cwd: string): Promise<P
       await new Promise((r) => setTimeout(r, 40));
     }
   }
-  const now = Date.now();
   const changed = [...state.recentChanges.entries()]
     .filter(([, v]) => now - v.ts <= RECENT_CHANGE_TTL_MS)
     .map(([abs, v]) => ({ abs, type: v.type }));
   if (changed.length === 0) return null;
-  for (const abs of changed.map((c) => c.abs)) state.recentChanges.delete(abs);
 
   const MAX_BASH_DIAG_FILES = 5;
   const collected: CollectedDiag[] = [];
@@ -156,9 +161,15 @@ export async function postBashResult(state: EngineState, cwd: string): Promise<P
           checkDrift: true,
           timeoutMs: 1500,
         });
-        if (result) collected.push({ relPath: path.relative(cwd, abs), result });
+        if (result) {
+          collected.push({ relPath: path.relative(cwd, abs), result });
+          // Consume only what actually got diagnosed and reported: a failed or
+          // skipped run (server dead, slow to start) keeps its entry so the
+          // next drain retries it instead of silently dropping the change.
+          state.recentChanges.delete(abs);
+        }
       } catch {
-        // Non-fatal per file
+        // Non-fatal per file; the entry stays queued for the next drain
       }
     }),
   );
@@ -223,6 +234,9 @@ export async function postEditResult(
         if (result.errored) anyErrored = true;
         const block = diagBlock(result, relPath, label);
         if (block) diagParts.push(block);
+        // The watcher also records edit-tool writes; drop that entry so the
+        // next bash drain doesn't re-report this file as "changed by bash".
+        state.recentChanges.delete(abs);
       }
     } catch {
       // Non-fatal per file: continue with the rest

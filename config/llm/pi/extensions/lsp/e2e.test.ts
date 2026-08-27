@@ -735,9 +735,13 @@ d("e2e", () => {
       const { state } = startEngineSession(fixture);
       const abs = path.join(fixture, "src.ts");
 
+      // Seed a watcher event for the write: postEditResult must consume it so
+      // the file isn't re-reported as "changed by bash" on the next drain.
+      state.recentChanges.set(abs, { type: WatchChangeType.Changed, ts: Date.now() });
       // Warm the server on this file first (via an edit drain), then simulate
       // a bash command that broke it: a watcher event lands in recentChanges.
       await postEditResult(state, "write", { path: "src.ts" }, fixture, false);
+      expect(state.recentChanges.has(abs)).toBe(false);
       fs.writeFileSync(abs, "export const n: number = 'broken';\n");
       state.recentChanges.set(abs, { type: WatchChangeType.Changed, ts: Date.now() });
 
@@ -746,6 +750,9 @@ d("e2e", () => {
       expect(result?.appended).toContain("[LSP diagnostics (");
       expect(result?.errored).toBe(true);
       expect(result?.notify).toContain("not assignable");
+      // Reported entries are consumed; a failed diagnostics run would keep
+      // them queued for the next drain instead.
+      expect(state.recentChanges.has(abs)).toBe(false);
 
       // Fix the file and drain again: a clean bash batch collapses to one line.
       fs.writeFileSync(abs, "export const n: number = 1;\n");

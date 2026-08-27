@@ -21,6 +21,7 @@ import { detectLinters } from "./linters";
 import { detectServers } from "./servers";
 import { createState, type DiagnosticsResult, type EngineState, type LspHost } from "./state";
 import { statusReport, toggleDedup, updateStatusData } from "./status";
+import { WatchChangeType } from "./watcher";
 
 /** Fixture diagnostic (position-only fields matter for formatting). */
 function diag(line: number, message: string, severity = 1): Diagnostic {
@@ -211,6 +212,25 @@ describe("engine lifecycle", () => {
 
   test("postBashResult drains an empty buffer to null", async () => {
     expect(await postBashResult(state, tmp)).toBeNull();
+  });
+
+  test("postBashResult keeps unserved entries queued instead of dropping them", async () => {
+    // A drain whose diagnostics come back null (no server for the file) must
+    // NOT consume the buffered events — the next drain retries them. (.txt:
+    // no server handles it, so no lazy fallback attaches one.)
+    const f = path.join(tmp, "x.txt");
+    fs.writeFileSync(f, "hi");
+    state.recentChanges.set(f, { type: WatchChangeType.Changed, ts: Date.now() });
+    expect(await postBashResult(state, tmp)).toBeNull();
+    expect(state.recentChanges.has(f)).toBe(true);
+  });
+
+  test("postBashResult purges stale entries so they can't block the fresh-event poll", async () => {
+    const f = path.join(tmp, "x.ts");
+    fs.writeFileSync(f, "export const x = 1;\n");
+    state.recentChanges.set(f, { type: WatchChangeType.Changed, ts: Date.now() - 60_000 });
+    expect(await postBashResult(state, tmp)).toBeNull();
+    expect(state.recentChanges.size).toBe(0);
   });
 
   test("toggleDedup flips the collapse notice", () => {
