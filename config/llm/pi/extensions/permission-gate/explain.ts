@@ -127,6 +127,16 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 
 // ── Block reason ──
 
+/**
+ * Wrap a user-typed confirm-dialog note so models treat it as binding. Same
+ * rendering on allow (appended to the tool result) and block (block reason).
+ * Always emitted last; the note may be multiline and is kept verbatim inside
+ * the brackets.
+ */
+export function userInstruction(note: string): string {
+  return `[Mandatory instruction from the user — act on this now: ${note}]`;
+}
+
 /** Build a block reason from user note + sidecar explanation. */
 export function blockReason(
   note: string,
@@ -147,6 +157,6 @@ export function blockReason(
     lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
   if (tirithNote) lines.push(tirithNote);
-  if (note) lines.push(`[Instruction from the user: ${note}]`);
+  if (note) lines.push(userInstruction(note));
   return lines.join("\n");
 }

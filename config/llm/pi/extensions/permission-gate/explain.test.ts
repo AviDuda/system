@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockReason, describeToolCall, findVerdictLine, parseExplanation } from "./explain";
+import { blockReason, describeToolCall, findVerdictLine, parseExplanation, userInstruction } from "./explain";
 
 // ── describeToolCall ──
 
@@ -204,7 +204,7 @@ describe("findVerdictLine", () => {
 describe("blockReason", () => {
   test("note only for bash", () => {
     expect(blockReason("don't do that", null, "bash")).toBe(
-      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[Instruction from the user: don't do that]",
+      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[Mandatory instruction from the user — act on this now: don't do that]",
     );
   });
 
@@ -218,7 +218,14 @@ describe("blockReason", () => {
   test("classification before note for write", () => {
     const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
     expect(blockReason("be careful", expl, "write")).toBe(
-      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Automated command classification: RISKY \u2014 Modifies config]\n[Instruction from the user: be careful]",
+      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Automated command classification: RISKY \u2014 Modifies config]\n[Mandatory instruction from the user — act on this now: be careful]",
+    );
+  });
+
+  test("userInstruction keeps multiline notes verbatim inside brackets", () => {
+    const note = "first line\nsecond line\n\nfourth line";
+    expect(userInstruction(note)).toBe(
+      "[Mandatory instruction from the user — act on this now: first line\nsecond line\n\nfourth line]",
     );
   });
 

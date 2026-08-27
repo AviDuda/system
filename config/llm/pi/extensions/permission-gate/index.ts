@@ -31,7 +31,7 @@ import {
   type ExplanationProvider,
   type ExplanationResult,
 } from "./confirm-ui";
-import { blockReason, describeToolCall, parseExplanation } from "./explain";
+import { blockReason, describeToolCall, parseExplanation, userInstruction } from "./explain";
 import {
   cacheKey,
   createInitialState,
@@ -751,7 +751,7 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     const parts: string[] = [];
     if (tirith) parts.push(tirith);
-    if (note) parts.push(`[Instruction from the user: ${note}]`);
+    if (note) parts.push(userInstruction(note));
     return {
       content: [...event.content, { type: "text" as const, text: `\n\n${parts.join("\n")}` }],
     };
