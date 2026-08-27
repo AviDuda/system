@@ -24,7 +24,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -46,7 +46,7 @@ interface ORModel {
   name: string;
   canonical_slug?: string;
   context_length: number | null;
-  pricing: { prompt: string; completion: string; input_cache_read?: string };
+  pricing: { prompt: string; completion: string; input_cache_read?: string; input_cache_write?: string };
   architecture: { input_modalities: string[]; output_modalities: string[] };
   top_provider: { context_length?: number | null; max_completion_tokens?: number | null; is_moderated: boolean };
   supported_parameters: string[];
@@ -82,6 +82,8 @@ interface JoinedModel {
   name: string;
   promptPrice: number;
   completionPrice: number;
+  cacheReadPrice: number;
+  cacheWritePrice: number;
   context: number;
   maxOutput: number;
   inputTypes: string[];
@@ -308,6 +310,116 @@ function parsePrice(p: string): number {
   return v * 1_000_000;
 }
 
+/** Price-per-token-string -> $/M; absent/unset fields become NaN. */
+function optPrice(p: string | undefined): number {
+  return p == null ? NaN : parsePrice(p);
+}
+
+// ── Real-workload pricing (your pi sessions, last 30d) ──
+
+const SESSIONS_DIR = join(homedir(), ".pi", "agent", "sessions");
+const WORKLOAD_WINDOW_MS = 1000 * 60 * 60 * 24 * 30;
+
+interface SessionWorkload {
+  input: number; // uncached prompt tokens
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  reqs: number;
+  recordedCost: number;
+  coverMs: number; // span between first and last counted message
+  byModel: Map<string, { reqs: number; cost: number }>; // recorded spend per model id
+}
+
+/** Aggregate token volumes actually served across all pi session files in the
+ * window. Per-message cost totals ride along as the real-spend baseline. */
+function loadSessionWorkload(): SessionWorkload | null {
+  const cutoff = Date.now() - WORKLOAD_WINDOW_MS;
+  let projDirs: string[];
+  try {
+    projDirs = readdirSync(SESSIONS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => join(SESSIONS_DIR, d.name));
+  } catch {
+    return null;
+  }
+  const agg = {
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    reqs: 0,
+    recordedCost: 0,
+    coverMs: 0,
+    byModel: new Map<string, { reqs: number; cost: number }>(),
+  };
+  let minTs = Infinity;
+  let maxTs = 0;
+  for (const dir of projDirs) {
+    let files: string[] = [];
+    try {
+      files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      // unreadable dir — skip
+    }
+    for (const f of files) {
+      const p = join(dir, f);
+      let lines: string[] = [];
+      try {
+        if (statSync(p).mtimeMs < cutoff) continue;
+        lines = readFileSync(p, "utf-8").split("\n");
+      } catch {
+        continue;
+      }
+      for (const line of lines) {
+        if (!line.includes('"usage"')) continue;
+        let e: {
+          type?: string;
+          timestamp?: string;
+          message?: {
+            role?: string;
+            model?: string;
+            usage?: {
+              input?: number;
+              output?: number;
+              cacheRead?: number;
+              cacheWrite?: number;
+              totalTokens?: number;
+              cost?: { total?: number };
+            };
+          };
+        };
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const u = e.message?.role === "assistant" ? e.message?.usage : undefined;
+        if (!u?.totalTokens) continue;
+        agg.input += u.input ?? 0;
+        agg.output += u.output ?? 0;
+        agg.cacheRead += u.cacheRead ?? 0;
+        agg.cacheWrite += u.cacheWrite ?? 0;
+        agg.reqs++;
+        agg.recordedCost += u.cost?.total ?? 0;
+        const mid = e.message?.model ?? "?";
+        const bm = agg.byModel.get(mid) ?? { reqs: 0, cost: 0 };
+        bm.reqs++;
+        bm.cost += u.cost?.total ?? 0;
+        agg.byModel.set(mid, bm);
+        const ts = e.timestamp ? Date.parse(e.timestamp) : NaN;
+        if (Number.isFinite(ts)) {
+          if (ts < minTs) minTs = ts;
+          if (ts > maxTs) maxTs = ts;
+        }
+      }
+    }
+  }
+  if (agg.reqs === 0) return null;
+  agg.coverMs = Number.isFinite(minTs) && maxTs > minTs ? maxTs - minTs : WORKLOAD_WINDOW_MS;
+  return agg;
+}
+
 // ── Formatting helpers ──
 
 function fmtPrice(p: number): string {
@@ -345,7 +457,6 @@ function blend31(promptPerM: number, completionPerM: number): number {
 // Column heat: top third green, middle yellow, rest plain. Thresholds are
 // terciles of the fetched data, not constants — distributions shift.
 type Tier = "g" | "y" | "";
-
 function paint(s: string, tier: Tier): string {
   if (tier === "g") return `${GREEN}${s}${RESET}`;
   if (tier === "y") return `${YELLOW}${s}${RESET}`;
@@ -510,6 +621,22 @@ async function discover(): Promise<void> {
 
   const aaLookup = buildAALookup(aaModels);
 
+  // Your actual pi traffic (last 30d of session logs), used by the You/mo column.
+  const wl = loadSessionWorkload();
+  const wlScale = wl ? WORKLOAD_WINDOW_MS / Math.max(wl.coverMs, 1000 * 60 * 60 * 24) : 1;
+  /** Whole workload served by model m at listed $/M. Cache-read/write fall
+   * back to the input rate when a provider lists no separate price. NaN when
+   * the model's own pricing is dynamic. */
+  const youMonth = (m: JoinedModel): number => {
+    if (!wl) return NaN;
+    const i = m.promptPrice;
+    const o = m.completionPrice;
+    const r = Number.isFinite(m.cacheReadPrice) ? m.cacheReadPrice : i;
+    const w = Number.isFinite(m.cacheWritePrice) ? m.cacheWritePrice : i;
+    if (![i, o, r, w].every(Number.isFinite)) return NaN;
+    return ((wl.input * i + wl.cacheRead * r + wl.cacheWrite * w + wl.output * o) / 1e6) * wlScale;
+  };
+
   // Filter: ZDR-eligible, has pricing, reasonable size
   const candidates: JoinedModel[] = [];
 
@@ -528,6 +655,8 @@ async function discover(): Promise<void> {
       name: m.name,
       promptPrice: parsePrice(m.pricing.prompt),
       completionPrice: parsePrice(m.pricing.completion),
+      cacheReadPrice: optPrice(m.pricing.input_cache_read),
+      cacheWritePrice: optPrice(m.pricing.input_cache_write),
       context: m.context_length ?? 0,
       maxOutput: maxOut,
       inputTypes: m.architecture.input_modalities,
@@ -570,8 +699,13 @@ async function discover(): Promise<void> {
       candidates.map((m) => m.completionPrice),
       true,
     ),
+    cacheR: makeTiers(
+      candidates.map((m) => m.cacheReadPrice),
+      true,
+    ),
     ctx: makeTiers(candidates.map((m) => m.context)),
     value: makeTiers(candidates.map(valueScore)),
+    you: makeTiers(candidates.map(youMonth), true),
   };
 
   const tableRows = candidates
@@ -579,6 +713,7 @@ async function discover(): Promise<void> {
     .map((m) => {
       const v = valueScore(m);
       const blend = blend31(m.promptPrice, m.completionPrice);
+      const cf = youMonth(m);
       return {
         Model: m.orId,
         Coding:
@@ -597,6 +732,10 @@ async function discover(): Promise<void> {
         "Out/M": Number.isFinite(m.completionPrice)
           ? paint(fmtPrice(m.completionPrice), tiers.outPrice(m.completionPrice))
           : "(dynamic)",
+        "CacheR/M": Number.isFinite(m.cacheReadPrice)
+          ? paint(fmtPrice(m.cacheReadPrice), tiers.cacheR(m.cacheReadPrice))
+          : `${DIM}--${RESET}`,
+        "You/mo": Number.isFinite(cf) ? paint(fmtPrice(cf), tiers.you(cf)) : "(dyn)",
         Value: Number.isFinite(blend) && m.aaCoding != null ? paint(v.toFixed(0), tiers.value(v)) : `${DIM}--${RESET}`,
         Ctx: paint(fmtCtx(m.context), tiers.ctx(m.context)),
         "I/O": fmtInput(m.inputTypes),
@@ -604,8 +743,26 @@ async function discover(): Promise<void> {
       };
     });
 
+  if (wl) {
+    const covD = Math.max(1, Math.round(wl.coverMs / 86_400_000));
+    const inTok = wl.input + wl.cacheRead + wl.cacheWrite;
+    const hit = inTok > 0 ? `${((wl.cacheRead / inTok) * 100).toFixed(0)}% cache hit` : "no cached input";
+    console.log(
+      `${DIM}Your pi workload: ${wl.reqs} reqs / ${covD}d, ${hit} — ${humanTokens(wl.input)} uncached in · ${humanTokens(wl.cacheRead)} cached · ${humanTokens(wl.output)} out · recorded $${wl.recordedCost.toFixed(2)} → $${(wl.recordedCost * wlScale).toFixed(2)}/mo. You/mo = that workload on one model.${RESET}`,
+    );
+    const spend = [...wl.byModel.entries()]
+      .map(([id, v]) => ({ id, mo: v.cost * wlScale }))
+      .filter((s) => s.mo > 0)
+      .sort((a, b) => b.mo - a.mo)
+      .slice(0, 3);
+    if (spend.length > 0) {
+      console.log(
+        `${DIM}Top spenders (recorded): ${spend.map((s) => `${s.id} $${s.mo.toFixed(2)}/mo`).join(" · ")}${RESET}`,
+      );
+    }
+  }
   console.log(
-    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models)${RESET}`,
+    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models; CacheR = listed cache-read $/M)${RESET}`,
   );
   console.log(
     Bun.inspect.table(tableRows, [
@@ -615,6 +772,8 @@ async function discover(): Promise<void> {
       "Speed",
       "In/M",
       "Out/M",
+      "You/mo",
+      "CacheR/M",
       "Value",
       "Ctx",
       "I/O",
@@ -662,6 +821,49 @@ async function discover(): Promise<void> {
   if (bestValue) {
     console.log(
       `  Best value: ${CYAN}${bestValue.m.orId}${RESET} (${bestValue.v.toFixed(0)} coding-pts per blended-$, coding=${bestValue.m.aaCoding})`,
+    );
+  }
+
+  // Best value when cache reads dominate spend — long agentic sessions run
+  // most prompt tokens through the cache (e.g. ~85% fleet-wide for V4 Flash).
+  const cachedValued = candidates
+    .map((m) => ({ m, v: m.aaCoding != null && m.cacheReadPrice > 0 ? m.aaCoding / m.cacheReadPrice : NaN }))
+    .filter((x) => Number.isFinite(x.v))
+    .sort((a, b) => b.v - a.v);
+  const bestCached = cachedValued[0];
+  if (bestCached) {
+    console.log(
+      `  Best mostly-cached value: ${CYAN}${bestCached.m.orId}${RESET} (${bestCached.v.toFixed(0)} coding pts per cache-read-$${bestCached.m.promptPrice > bestCached.m.cacheReadPrice * 100 ? `, cache read is ${(bestCached.m.promptPrice / bestCached.m.cacheReadPrice).toFixed(0)}x cheaper than fresh input` : ""})`,
+    );
+  }
+
+  // Cheapest models for your observed traffic mix: top 3 with a quality bar,
+  // then the single cheapest regardless of quality.
+  // "Good quality" = top-third coder on today's list (rank-fraction ≥ 2/3,
+  // same rule the Coding column heat uses) — the bar moves with the frontier.
+  const codingSorted = candidates
+    .map((m) => m.aaCoding)
+    .filter((v): v is number => v != null)
+    .sort((a, b) => a - b);
+  const goodBar =
+    codingSorted.length > 0
+      ? (codingSorted[Math.min(codingSorted.length - 1, Math.ceil(((codingSorted.length - 1) * 2) / 3))] ?? 0)
+      : 0;
+  const mixRanked = candidates
+    .map((m) => ({ m, c: youMonth(m) }))
+    .filter((x) => Number.isFinite(x.c))
+    .sort((a, b) => a.c - b.c);
+  const goodCheap = mixRanked.filter((x) => (x.m.aaCoding ?? 0) >= goodBar).slice(0, 3);
+  if (goodCheap.length > 0) {
+    console.log(`  Cheapest good quality (coding ≥ ${goodBar.toFixed(0)}, top third today) for your mix:`);
+    for (const [i, x] of goodCheap.entries()) {
+      console.log(`    ${i + 1}. ${CYAN}${x.m.orId}${RESET} ~${fmtPrice(x.c)}/mo (coding=${x.m.aaCoding?.toFixed(1)})`);
+    }
+  }
+  const cheapestMix = mixRanked[0];
+  if (cheapestMix) {
+    console.log(
+      `  Cheapest overall for your mix: ${CYAN}${cheapestMix.m.orId}${RESET} (~${fmtPrice(cheapestMix.c)}/mo at listed rates)`,
     );
   }
 
@@ -782,7 +984,7 @@ interface OREndpoint {
   status: number;
   context_length: number;
   is_byok: boolean;
-  pricing: { prompt: string; completion: string; input_cache_read?: string };
+  pricing: { prompt: string; completion: string; input_cache_read?: string; input_cache_write?: string };
   throughput_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
   latency_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
   uptime_last_5m: number | null;
@@ -892,7 +1094,9 @@ function effLines(eff: EffPricing | null): string[] {
     return [`  ${DIM}effective pricing: no routed traffic in window${RESET}`];
   }
   const chr = eff.weightedCacheHitRate != null ? `${(eff.weightedCacheHitRate * 100).toFixed(0)}%` : "?";
-  const head = `  Effective (${RANGE_LABELS[modeRange] ?? modeRange}): ${fmtPrice(eff.weightedInputPrice)}/M in · ${fmtPrice(eff.weightedOutputPrice)}/M out · cache-hit ${chr}`;
+  // weightedInputPrice is the price actually paid per input token — cache hits
+  // billed at the (much lower) cache-read rate are already netted in.
+  const head = `  Effective (${RANGE_LABELS[modeRange] ?? modeRange}): ${fmtPrice(eff.weightedInputPrice)}/M in (${chr} cache-hit, net) · ${fmtPrice(eff.weightedOutputPrice)}/M out`;
   const ps = [...eff.providerSummaries].sort((a, b) => b.totalTokens - a.totalTokens);
   const total = ps.reduce((a, p) => a + p.totalTokens, 0);
   const top = ps
@@ -902,7 +1106,12 @@ function effLines(eff: EffPricing | null): string[] {
         `${p.providerName} ${total > 0 ? ((p.totalTokens / total) * 100).toFixed(0) : "?"}% ($${p.effectiveInputPrice.toFixed(3)}/$${p.effectiveOutputPrice.toFixed(3)})`,
     );
   const more = ps.length - 4 > 0 ? ` (+${ps.length - 4} more)` : "";
-  return [head, `  By volume: ${top.join(" · ")}${more}`];
+  const lines = [head, `  By volume: ${top.join(" · ")}${more}`];
+  const blend = blend31(eff.weightedInputPrice, eff.weightedOutputPrice);
+  if (Number.isFinite(blend)) {
+    lines.push(`  Paid blend ((in)+3(out))/4 at those rates: ${fmtPrice(blend)}/M`);
+  }
+  return lines;
 }
 
 // ZDR is provider-level: each endpoint's provider data policy decides whether
@@ -1040,12 +1249,63 @@ interface EndpointRow {
   Model: string;
   "$in/M": string;
   "$out/M": string;
+  "$cr/M": string;
+  "You/mo": string;
+  "$cw/M": string;
   p50t: string;
   p90t: string;
   p50lat: string;
   up5m: string;
   ctx: string;
   status: string;
+}
+
+const ROW_COLS = [
+  "Provider",
+  "Quant",
+  "ZDR",
+  "Model",
+  "$in/M",
+  "$out/M",
+  "$cr/M",
+  "You/mo",
+  "p50t",
+  "p90t",
+  "p50lat",
+  "up5m",
+  "ctx",
+  "status",
+];
+
+/** Columns for a table whose endpoints may bill cache writes (rare). */
+function rowCols(eps: OREndpoint[]): string[] {
+  const cols = [...ROW_COLS];
+  if (eps.some((e) => e.pricing.input_cache_write != null)) {
+    cols.splice(cols.indexOf("$cr/M") + 1, 0, "$cw/M");
+  }
+  return cols;
+}
+
+// Set by endpoints(): your last-30d pi traffic for endpoint-priced You/mo.
+let workload: SessionWorkload | null = null;
+let workloadScale = 1;
+
+/** Your 30d pi workload priced at one endpoint's listed rates. Cache read
+ * falls back to the input rate when unlisted; cache write likewise. NaN when
+ * the endpoint's input price is dynamic. */
+function youMoOf(e: OREndpoint): number {
+  if (!workload) return NaN;
+  const pin = parsePrice(e.pricing.prompt);
+  const pout = parsePrice(e.pricing.completion);
+  if (!Number.isFinite(pin) || !Number.isFinite(pout)) return NaN;
+  const pcr = optPrice(e.pricing.input_cache_read);
+  const pcw = optPrice(e.pricing.input_cache_write);
+  const r = Number.isFinite(pcr) ? pcr : pin;
+  const w = Number.isFinite(pcw) ? pcw : pin;
+  return (
+    ((workload.input * pin + workload.cacheRead * r + workload.cacheWrite * w + workload.output * pout) / 1e6) *
+    workloadScale
+  );
 }
 
 function applyQuant(eps: OREndpoint[], slugForErr: string): OREndpoint[] {
@@ -1074,6 +1334,8 @@ const isZdrEndpoint =
 interface EndpointTierSet {
   inP: (v: number) => Tier;
   outP: (v: number) => Tier;
+  crP: (v: number) => Tier;
+  youP: (v: number) => Tier;
   t50: (v: number) => Tier;
   t90: (v: number) => Tier;
   lat: (v: number) => Tier;
@@ -1090,6 +1352,14 @@ function endpointTiers(eps: OREndpoint[]): EndpointTierSet {
     ),
     outP: makeTiers(
       eps.map((e) => parsePrice(e.pricing.completion)),
+      true,
+    ),
+    crP: makeTiers(
+      eps.map((e) => optPrice(e.pricing.input_cache_read)),
+      true,
+    ),
+    youP: makeTiers(
+      eps.map((e) => youMoOf(e)),
       true,
     ),
     t50: makeTiers(eps.map((e) => e.throughput_last_30m?.p50 ?? NaN)),
@@ -1120,6 +1390,9 @@ function endpointRows(
     .map((e) => {
       const pin = parsePrice(e.pricing.prompt);
       const pout = parsePrice(e.pricing.completion);
+      const pcr = optPrice(e.pricing.input_cache_read);
+      const pcw = optPrice(e.pricing.input_cache_write);
+      const ymo = youMoOf(e);
       const t = e.throughput_last_30m;
       const l = e.latency_last_30m;
       const statusOk = e.status === 0;
@@ -1131,6 +1404,9 @@ function endpointRows(
         Model: modelShort(e),
         "$in/M": Number.isNaN(pin) ? "(dyn)" : paint(fmtPrice(pin), tiers.inP(pin)),
         "$out/M": Number.isNaN(pout) ? "(dyn)" : paint(fmtPrice(pout), tiers.outP(pout)),
+        "$cr/M": Number.isNaN(pcr) ? `${DIM}--${RESET}` : paint(fmtPrice(pcr), tiers.crP(pcr)),
+        "You/mo": Number.isFinite(ymo) ? paint(fmtPrice(ymo), tiers.youP(ymo)) : "(dyn)",
+        "$cw/M": Number.isNaN(pcw) ? `${DIM}--${RESET}` : fmtPrice(pcw),
         p50t: t?.p50 != null ? paint(t.p50.toFixed(0), tiers.t50(t.p50)) : "--",
         p90t: t?.p90 != null ? paint(t.p90.toFixed(0), tiers.t90(t.p90)) : "--",
         p50lat: l?.p50 != null ? paint(`${l.p50.toFixed(0)}ms`, tiers.lat(l.p50)) : "--",
@@ -1140,21 +1416,6 @@ function endpointRows(
       };
     });
 }
-
-const ROW_COLS = [
-  "Provider",
-  "Quant",
-  "ZDR",
-  "Model",
-  "$in/M",
-  "$out/M",
-  "p50t",
-  "p90t",
-  "p50lat",
-  "up5m",
-  "ctx",
-  "status",
-];
 
 function routingHintLines(filtered: OREndpoint[], zdrInfo: ZdrInfo): string[] {
   const zdrKnown = zdrInfo.tags.size > 0;
@@ -1186,6 +1447,15 @@ function routingHintLines(filtered: OREndpoint[], zdrInfo: ZdrInfo): string[] {
       `  Cheapest healthy: ${CYAN}${cheap.provider_name}/${cheap.tag}${RESET} p50=${cheap.throughput_last_30m.p50?.toFixed(0)} p90=${cheap.throughput_last_30m.p90?.toFixed(0)} tok/s`,
     );
   }
+  const byMix = healthy
+    .map((e) => ({ e, c: youMoOf(e) }))
+    .filter((x) => Number.isFinite(x.c))
+    .sort((a, b) => a.c - b.c)[0];
+  if (byMix && workload) {
+    lines.push(
+      `  Cheapest for your mix: ${CYAN}${byMix.e.provider_name}/${byMix.e.tag}${RESET} ~${fmtPrice(byMix.c)}/mo`,
+    );
+  }
   lines.push(
     `  Median across ${healthy.length} healthy: p50=${median(p50s).toFixed(0)}, p90=${median(p90s).toFixed(0)} tok/s`,
   );
@@ -1212,6 +1482,8 @@ function shortModelName(id: string): string {
 
 async function endpoints(): Promise<void> {
   const slugs = [...new Set(modeEndpointSlugs)];
+  workload = loadSessionWorkload();
+  workloadScale = workload ? WORKLOAD_WINDOW_MS / Math.max(workload.coverMs, 86_400_000) : 1;
   const key = getOpenRouterKey();
   const zdrInfo = await fetchZdrEndpointKeys(key);
 
@@ -1267,10 +1539,24 @@ async function endpoints(): Promise<void> {
     console.log(
       Bun.inspect.table(
         endpointRows(r.eps, zdrInfo, () => "", endpointTiers(r.eps)),
-        ROW_COLS.filter((c) => c !== "Model"),
+        rowCols(r.eps).filter((c) => c !== "Model"),
       ),
     );
 
+    if (workload) {
+      const ym = r.eps
+        .map((e) => ({ e, c: youMoOf(e) }))
+        .filter((x) => Number.isFinite(x.c))
+        .sort((a, b) => a.c - b.c);
+      if (ym.length > 0) {
+        const med = ym[Math.floor(ym.length / 2)]?.c ?? NaN;
+        const worst = ym[ym.length - 1]?.c ?? NaN;
+        const rec = workload.byModel.get(r.id)?.cost ?? 0;
+        console.log(
+          `  Your mix on these endpoints: best ${fmtPrice(ym[0]?.c ?? NaN)}/mo (${ym[0]?.e.provider_name}) · median ${fmtPrice(med)}/mo · worst ${fmtPrice(worst)}/mo · recorded on this model: $${(rec * workloadScale).toFixed(2)}/mo${RESET}`,
+        );
+      }
+    }
     for (const l of effLines(await fetchEffPricing(canon ?? r.slug))) console.log(l);
     const b = benchById.get(r.slug);
     if (b?.coding != null || b?.intel != null) {
@@ -1295,6 +1581,8 @@ async function endpoints(): Promise<void> {
         routable,
         stIn: priceStats(routable.map((e) => parsePrice(e.pricing.prompt))),
         stOut: priceStats(routable.map((e) => parsePrice(e.pricing.completion))),
+        stCr: priceStats(routable.map((e) => optPrice(e.pricing.input_cache_read))),
+        youMed: median(routable.map((e) => youMoOf(e)).filter((v) => Number.isFinite(v))),
         p50med: median(routable.map((e) => e.throughput_last_30m?.p50).filter((v): v is number => v != null)),
         eff: await fetchEffPricing(canon ?? r.slug),
         bench: benchById.get(r.slug),
@@ -1314,6 +1602,8 @@ async function endpoints(): Promise<void> {
               routable_endpoints: a.routable.length,
               listed_input: a.stIn,
               listed_output: a.stOut,
+              listed_cache_read: a.stCr,
+              your_mix_monthly: Number.isFinite(a.youMed) ? { median: a.youMed } : null,
               median_p50_throughput: Number.isNaN(a.p50med) ? null : a.p50med,
               effective: a.eff,
               benchmarks: a.bench ?? null,
@@ -1337,12 +1627,12 @@ async function endpoints(): Promise<void> {
   console.log(
     Bun.inspect.table(
       endpointRows(allEps, zdrInfo, (e) => shortModelName(e.model_id ?? e.name), endpointTiers(allEps)),
-      ROW_COLS,
+      rowCols(allEps),
     ),
   );
 
   console.log(
-    `\n${BOLD}Per model${RESET}  ${DIM}(listed prices over routable non-dynamic endpoints · eff = traffic-weighted ${RANGE_LABELS[modeRange] ?? (modeRange || "today")})${RESET}`,
+    `\n${BOLD}Per model${RESET}  ${DIM}(listed over routable non-dynamic endpoints · eff = traffic-weighted ${RANGE_LABELS[modeRange] ?? (modeRange || "today")}; eff in nets fleet cache hits, Cr med is listed cache-read)${RESET}`,
   );
   const aggTiers = {
     medIn: makeTiers(
@@ -1355,6 +1645,14 @@ async function endpoints(): Promise<void> {
     ),
     medOut: makeTiers(
       agg.map((a) => a.stOut?.med ?? NaN),
+      true,
+    ),
+    medCr: makeTiers(
+      agg.map((a) => a.stCr?.med ?? NaN),
+      true,
+    ),
+    youMed: makeTiers(
+      agg.map((a) => a.youMed),
       true,
     ),
     effIn: makeTiers(
@@ -1381,6 +1679,10 @@ async function endpoints(): Promise<void> {
           "In med": cell(a.stIn, fmtPrice, aggTiers.medIn),
           "In avg": a.stIn ? paint(fmtPrice(a.stIn.avg), aggTiers.avgIn(a.stIn.avg)) : `${DIM}--${RESET}`,
           "Out med": cell(a.stOut, fmtPrice, aggTiers.medOut),
+          "Cr med": cell(a.stCr, fmtPrice, aggTiers.medCr),
+          "You med": Number.isFinite(a.youMed)
+            ? paint(fmtPrice(a.youMed), aggTiers.youMed(a.youMed))
+            : `${DIM}--${RESET}`,
           "Eff in": wIn != null ? paint(fmtPrice(wIn), aggTiers.effIn(wIn)) : `${DIM}--${RESET}`,
           "Cache%": wCache != null ? paint(`${(wCache * 100).toFixed(0)}%`, aggTiers.cache(wCache)) : "--",
           Vol: Number.isFinite(vol) ? paint(humanTokens(vol), aggTiers.vol(vol)) : "--",
@@ -1395,7 +1697,21 @@ async function endpoints(): Promise<void> {
               : `${DIM}${"".padStart(5)}${RESET}`,
         };
       }),
-      ["Model", "N", "In med", "In avg", "Out med", "Eff in", "Cache%", "Vol", "p50t", "Coding", "Intel"],
+      [
+        "Model",
+        "N",
+        "In med",
+        "In avg",
+        "Out med",
+        "Cr med",
+        "You med",
+        "Eff in",
+        "Cache%",
+        "Vol",
+        "p50t",
+        "Coding",
+        "Intel",
+      ],
     ),
   );
 
