@@ -6,6 +6,7 @@
  *   bun run scripts/model-scan.ts --drift       # check current pi.nix config for drift
  *   bun run scripts/model-scan.ts --local       # find trending MLX models via oMLX
  *   bun run scripts/model-scan.ts --model <repo> # estimate specific HF repo (repeatable)
+ *   bun run scripts/model-scan.ts -e a/b [-e c/d] # provider endpoints, cross-model compare on >=2
  *   bun run scripts/model-scan.ts --json        # machine-readable output
  *
  * Data sources:
@@ -13,6 +14,13 @@
  *   - Artificial Analysis /api/v2/data/llms/models (benchmarks, speed)
  *   - oMLX admin API (local MLX models, HF search)
  *   - ~/.pi/agent/models.json (current pi config)
+ *
+ * API reference:
+ *   https://openrouter.ai/openapi.json documents the official API. Frontend-only
+ *   stats endpoints (unofficial): /api/frontend/v1/stats/effective-pricing and
+ *   /listed-pricing — keyed by permaslug (the dated canonical_slug from
+ *   /api/v1/models, NOT the short id: short slugs return HTTP 200 with zeros,
+ *   silently wrong).
  */
 
 import { execSync } from "node:child_process";
@@ -36,12 +44,16 @@ const CYAN = "\x1b[36m";
 interface ORModel {
   id: string;
   name: string;
+  canonical_slug?: string;
   context_length: number | null;
   pricing: { prompt: string; completion: string; input_cache_read?: string };
   architecture: { input_modalities: string[]; output_modalities: string[] };
   top_provider: { context_length?: number | null; max_completion_tokens?: number | null; is_moderated: boolean };
   supported_parameters: string[];
   hugging_face_id: string | null;
+  benchmarks?: {
+    artificial_analysis?: { intelligence_index?: number; coding_index?: number; agentic_index?: number };
+  };
 }
 
 interface AAModel {
@@ -92,7 +104,8 @@ const parsed = parseArgs({
     drift: { type: "boolean", default: false },
     local: { type: "boolean", default: false },
     model: { type: "string", default: [], short: "m", multiple: true },
-    endpoints: { type: "string", default: "", short: "e" },
+    endpoints: { type: "string", default: [], short: "e", multiple: true },
+    range: { type: "string", default: "" },
     quant: { type: "string", default: "" },
     json: { type: "boolean", default: false },
     quiet: { type: "boolean", default: false },
@@ -115,8 +128,11 @@ ${BOLD}OPTIONS${RESET}
   --drift       Check current pi.nix config for price/spec drift
   --local       Find trending MLX models via oMLX admin API
   --model, -m   Estimate specific HF repo (repeatable, e.g. --model mlx-community/Qwen3.6-27B-4bit)
-  --endpoints, -e  Fetch OpenRouter provider endpoints for a model (throughput/latency/pricing)
-  --quant         With --endpoints: comma-separated quantization filter (e.g. fp8,bf16)
+  --endpoints, -e  Fetch OpenRouter provider endpoints for a model (throughput/latency/pricing).
+                  Repeatable and comma-separated: two or more -> cross-model comparison.
+  --range         With --endpoints: window for traffic-weighted effective pricing
+                  (default: today UTC; 1w | 1m | 3m | all)
+  --quant           With --endpoints: comma-separated quantization filter (e.g. fp8,bf16)
   --json        Output machine-readable JSON instead of formatted table
   --quiet       Suppress status messages on stderr
   --verbose, -v Include low-scoring models in output
@@ -124,7 +140,8 @@ ${BOLD}OPTIONS${RESET}
 
 ${BOLD}DATA SOURCES${RESET}
   OpenRouter    /api/v1/models (public) + /api/v1/models/user (ZDR-filtered)
-  AA            /api/v2/data/llms/models (benchmarks, speed, pricing)
+  AA            /api/v2/data/llms/models (benchmarks, speed, pricing) — full
+                evaluation suite documented at https://artificialanalysis.ai/api-reference
   oMLX          Admin API at localhost:8124 (local MLX models, HF search)
   pi.nix        ~/.pi/agent/models.json (current config for drift check)
 `.trim(),
@@ -135,7 +152,20 @@ ${BOLD}DATA SOURCES${RESET}
 const modeDrift = parsed.values.drift;
 const modeLocal = parsed.values.local;
 const modeModels = parsed.values.model;
-const modeEndpoints = parsed.values.endpoints;
+// -e accepts repeats and commas: "-e a/b -e c/d" or "-e a/b,c/d"
+const modeEndpointSlugs = (Array.isArray(parsed.values.endpoints) ? parsed.values.endpoints : [parsed.values.endpoints])
+  .flatMap((s: string) => s.split(","))
+  .map((s: string) => s.trim())
+  .filter(Boolean);
+const modeRange = parsed.values.range;
+if (modeRange && !modeEndpointSlugs.length) {
+  console.error(`${RED}--range only applies to --endpoints${RESET}`);
+  process.exit(1);
+}
+if (modeRange && !["1w", "1m", "3m", "all"].includes(modeRange)) {
+  console.error(`${RED}--range must be one of 1w, 1m, 3m, all (default: today UTC)${RESET}`);
+  process.exit(1);
+}
 const modeJson = parsed.values.json;
 const modeQuiet = parsed.values.quiet;
 const verbose = parsed.values.verbose;
@@ -295,11 +325,6 @@ function fmtScore(v: number | undefined | null, width = 5): string {
   return `${DIM}${s.padStart(width)}${RESET}`;
 }
 
-function fmtSpeed(v: number | undefined | null): string {
-  if (v == null) return `${DIM}   --${RESET}`;
-  return `${CYAN}${v.toFixed(0).padStart(4)}${RESET}`;
-}
-
 function fmtCtx(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(0)}K`;
@@ -309,6 +334,38 @@ function fmtCtx(n: number): string {
 function fmtInput(types: string[]): string {
   if (types.includes("image")) return "txt+img";
   return "txt";
+}
+
+/** AA-style 3:1 blend: (1×input + 3×output)/4. NaN when either side dynamic/free. */
+function blend31(promptPerM: number, completionPerM: number): number {
+  if (!Number.isFinite(promptPerM) || !Number.isFinite(completionPerM)) return NaN;
+  return (promptPerM + 3 * completionPerM) / 4;
+}
+
+// Column heat: top third green, middle yellow, rest plain. Thresholds are
+// terciles of the fetched data, not constants — distributions shift.
+type Tier = "g" | "y" | "";
+
+function paint(s: string, tier: Tier): string {
+  if (tier === "g") return `${GREEN}${s}${RESET}`;
+  if (tier === "y") return `${YELLOW}${s}${RESET}`;
+  return s;
+}
+
+function makeTiers(values: number[], lowerBetter = false): (v: number) => Tier {
+  const scores = values
+    .filter(Number.isFinite)
+    .map((v) => (lowerBetter ? -v : v))
+    .sort((a, b) => a - b);
+  if (scores.length < 3) return () => "";
+  const q = (p: number): number => scores[Math.floor(p * (scores.length - 1))] ?? 0;
+  const t1 = q(1 / 3);
+  const t2 = q(2 / 3);
+  return (v: number): Tier => {
+    if (!Number.isFinite(v)) return "";
+    const n = lowerBetter ? -v : v;
+    return n >= t2 ? "g" : n >= t1 ? "y" : "";
+  };
 }
 
 // ── Local model estimation ──
@@ -495,25 +552,73 @@ async function discover(): Promise<void> {
   }
 
   // ── Print table ──
+  // Every comparable column gets heat tiers at its own terciles.
+  const valueScore = (m: JoinedModel): number => {
+    const b = blend31(m.promptPrice, m.completionPrice);
+    return m.aaCoding != null && Number.isFinite(b) ? m.aaCoding / b : NaN;
+  };
+  const tiers = {
+    coding: makeTiers(candidates.map((m) => m.aaCoding ?? NaN)),
+    intel: makeTiers(candidates.map((m) => m.aaIntel ?? NaN)),
+    speed: makeTiers(candidates.map((m) => m.aaSpeed ?? NaN)),
+    inPrice: makeTiers(
+      candidates.map((m) => m.promptPrice),
+      true,
+    ),
+    outPrice: makeTiers(
+      candidates.map((m) => m.completionPrice),
+      true,
+    ),
+    ctx: makeTiers(candidates.map((m) => m.context)),
+    value: makeTiers(candidates.map(valueScore)),
+  };
+
   const tableRows = candidates
     .filter((m) => (m.aaCoding ?? 0) >= 15 || verbose)
-    .map((m) => ({
-      Model: m.orId,
-      Coding: fmtScore(m.aaCoding),
-      Intel: fmtScore(m.aaIntel),
-      Speed: fmtSpeed(m.aaSpeed),
-      "In/M": fmtPrice(m.promptPrice),
-      "Out/M": fmtPrice(m.completionPrice),
-      Ctx: fmtCtx(m.context),
-      "I/O": fmtInput(m.inputTypes),
-      Tools: `${m.hasTools ? `${GREEN}✓${RESET}` : `${DIM}✗${RESET}`}${m.hasReasoning ? ` ${CYAN}R${RESET}` : ""}`,
-    }));
+    .map((m) => {
+      const v = valueScore(m);
+      const blend = blend31(m.promptPrice, m.completionPrice);
+      return {
+        Model: m.orId,
+        Coding:
+          m.aaCoding != null
+            ? paint(m.aaCoding.toFixed(1).padStart(5), tiers.coding(m.aaCoding))
+            : `${DIM}${"".padStart(5)}${RESET}`,
+        Intel:
+          m.aaIntel != null
+            ? paint(m.aaIntel.toFixed(1).padStart(5), tiers.intel(m.aaIntel))
+            : `${DIM}${"".padStart(5)}${RESET}`,
+        Speed:
+          m.aaSpeed != null ? paint(m.aaSpeed.toFixed(0).padStart(4), tiers.speed(m.aaSpeed)) : `${DIM}   --${RESET}`,
+        "In/M": Number.isFinite(m.promptPrice)
+          ? paint(fmtPrice(m.promptPrice), tiers.inPrice(m.promptPrice))
+          : "(dynamic)",
+        "Out/M": Number.isFinite(m.completionPrice)
+          ? paint(fmtPrice(m.completionPrice), tiers.outPrice(m.completionPrice))
+          : "(dynamic)",
+        Value: Number.isFinite(blend) && m.aaCoding != null ? paint(v.toFixed(0), tiers.value(v)) : `${DIM}--${RESET}`,
+        Ctx: paint(fmtCtx(m.context), tiers.ctx(m.context)),
+        "I/O": fmtInput(m.inputTypes),
+        Tools: `${m.hasTools ? `${GREEN}✓${RESET}` : `${DIM}✗${RESET}`}${m.hasReasoning ? ` ${CYAN}R${RESET}` : ""}`,
+      };
+    });
 
   console.log(
     `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models)${RESET}`,
   );
   console.log(
-    Bun.inspect.table(tableRows, ["Model", "Coding", "Intel", "Speed", "In/M", "Out/M", "Ctx", "I/O", "Tools"]),
+    Bun.inspect.table(tableRows, [
+      "Model",
+      "Coding",
+      "Intel",
+      "Speed",
+      "In/M",
+      "Out/M",
+      "Value",
+      "Ctx",
+      "I/O",
+      "Tools",
+    ]),
   );
 
   // ── Highlights ──
@@ -545,6 +650,18 @@ async function discover(): Promise<void> {
         `  Fastest decent quality: ${CYAN}${fastest.orId}${RESET} (${fastest.aaSpeed} tok/s, coding=${fastest.aaCoding})`,
       );
     }
+  }
+
+  // Best value overall: coding index per blended 3:1 dollar.
+  const valuedModels = candidates
+    .map((m) => ({ m, v: m.aaCoding != null ? m.aaCoding / blend31(m.promptPrice, m.completionPrice) : NaN }))
+    .filter((x) => Number.isFinite(x.v))
+    .sort((a, b) => b.v - a.v);
+  const bestValue = valuedModels[0];
+  if (bestValue) {
+    console.log(
+      `  Best value: ${CYAN}${bestValue.m.orId}${RESET} (${bestValue.v.toFixed(0)} coding-pts per blended-$, coding=${bestValue.m.aaCoding})`,
+    );
   }
 
   // 1M context with benchmarks
@@ -672,6 +789,121 @@ interface OREndpoint {
   uptime_last_1d: number | null;
 }
 
+type ZdrInfo = Awaited<ReturnType<typeof fetchZdrEndpointKeys>>;
+
+interface EndpointFetch {
+  slug: string;
+  id: string;
+  name: string;
+  eps: OREndpoint[];
+}
+
+const RANGE_LABELS: Record<string, string> = {
+  "": "today",
+  "1w": "7 days",
+  "1m": "30 days",
+  "3m": "90 days",
+  all: "all time",
+};
+
+interface EffProviderSummary {
+  endpointId: string;
+  providerName: string;
+  providerSlug: string;
+  effectiveInputPrice: number;
+  effectiveOutputPrice: number;
+  cacheHitRate: number;
+  totalTokens: number;
+}
+
+// Traffic-weighted "price actually paid" per $/M from OpenRouter's frontend
+// stats API (unofficial — not in openapi.json). Prices are $/M. Empty
+// providerSummaries = no routed traffic in the window (typical for brand-new
+// or zero-demand models).
+interface EffPricing {
+  weightedInputPrice: number;
+  weightedOutputPrice: number;
+  weightedCacheHitRate: number;
+  providerSummaries: EffProviderSummary[];
+}
+
+async function fetchEffPricing(permaslug: string): Promise<EffPricing | null> {
+  const cacheKey = `or-effp-${permaslug.replace(/\//g, "__")}${modeRange ? `-${modeRange}` : ""}`;
+  const cached = readCache<EffPricing>(cacheKey, ENDPOINT_CACHE_TTL);
+  if (cached) return cached;
+  try {
+    const url = `https://openrouter.ai/api/frontend/v1/stats/effective-pricing?permaslug=${encodeURIComponent(permaslug)}&shape=v7&variant=standard${modeRange ? `&range=${modeRange}` : ""}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      process.stderr.write(`${YELLOW}Warning: effective-pricing HTTP ${res.status} for ${permaslug}${RESET}\n`);
+      return null;
+    }
+    const json = (await res.json()) as { data?: EffPricing; error?: unknown };
+    const d = json.data;
+    if (!d || !Array.isArray(d.providerSummaries)) {
+      process.stderr.write(`${YELLOW}Warning: unexpected effective-pricing payload for ${permaslug}${RESET}\n`);
+      return null;
+    }
+    writeCache(cacheKey, d);
+    return d;
+  } catch {
+    process.stderr.write(`${YELLOW}Warning: effective-pricing unreachable for ${permaslug}${RESET}\n`);
+    return null;
+  }
+}
+
+function median(xs: number[]): number {
+  if (xs.length === 0) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)] ?? NaN;
+}
+
+function mean(xs: number[]): number {
+  return xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+}
+
+function humanTokens(t: number): string {
+  if (t >= 1e12) return `${(t / 1e12).toFixed(1)}T`;
+  if (t >= 1e9) return `${(t / 1e9).toFixed(1)}B`;
+  if (t >= 1e6) return `${(t / 1e6).toFixed(1)}M`;
+  return `${Math.round(t)}`;
+}
+
+/** Price stats over finite ($>0) entries only; free/dynamic excluded upstream. */
+function priceStats(values: number[]): { med: number; avg: number; n: number } | null {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length === 0) return null;
+  return { med: median(finite), avg: mean(finite), n: finite.length };
+}
+
+/** Routable-for-us endpoints: up, and ZDR-compliant when the ZDR list loaded. */
+function pickRoutable(eps: OREndpoint[], zdrInfo: ZdrInfo): OREndpoint[] {
+  const zdrKnown = zdrInfo.tags.size > 0;
+  const isZdr = (e: OREndpoint): boolean =>
+    (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
+  return eps.filter((e) => e.status === 0 && (!zdrKnown || isZdr(e)));
+}
+
+/** "Effective pricing" summary lines; empty summaries = no traffic → say so. */
+function effLines(eff: EffPricing | null): string[] {
+  if (!eff) return [`  ${DIM}effective pricing: unavailable${RESET}`];
+  if (eff.providerSummaries.length === 0) {
+    return [`  ${DIM}effective pricing: no routed traffic in window${RESET}`];
+  }
+  const chr = eff.weightedCacheHitRate != null ? `${(eff.weightedCacheHitRate * 100).toFixed(0)}%` : "?";
+  const head = `  Effective (${RANGE_LABELS[modeRange] ?? modeRange}): ${fmtPrice(eff.weightedInputPrice)}/M in · ${fmtPrice(eff.weightedOutputPrice)}/M out · cache-hit ${chr}`;
+  const ps = [...eff.providerSummaries].sort((a, b) => b.totalTokens - a.totalTokens);
+  const total = ps.reduce((a, p) => a + p.totalTokens, 0);
+  const top = ps
+    .slice(0, 4)
+    .map(
+      (p) =>
+        `${p.providerName} ${total > 0 ? ((p.totalTokens / total) * 100).toFixed(0) : "?"}% ($${p.effectiveInputPrice.toFixed(3)}/$${p.effectiveOutputPrice.toFixed(3)})`,
+    );
+  const more = ps.length - 4 > 0 ? ` (+${ps.length - 4} more)` : "";
+  return [head, `  By volume: ${top.join(" · ")}${more}`];
+}
+
 // ZDR is provider-level: each endpoint's provider data policy decides whether
 // prompts are retained. /endpoints/zdr returns every endpoint that survives
 // ZDR enforcement; we index by (model_id, tag) with a tag-only fallback.
@@ -721,21 +953,18 @@ async function fetchZdrEndpointKeys(key: string): Promise<{ zdr: Set<string>; ta
   return { zdr: new Set(pairs), tags: new Set(tags) };
 }
 
-async function endpoints(): Promise<void> {
-  const slug = modeEndpoints;
+async function fetchModelEndpoints(slug: string, key: string): Promise<EndpointFetch> {
+  const cacheKey = `or-endpoints-${slug.replace(/\//g, "__")}`;
+  const cached = readCache<EndpointFetch>(cacheKey, ENDPOINT_CACHE_TTL);
+  if (cached?.eps?.length) {
+    if (!modeQuiet) process.stderr.write(`${DIM}Using cached endpoints for ${slug}${RESET}\n`);
+    return cached;
+  }
   const [author, model] = slug.split("/");
   if (!author || !model) {
-    console.error(`${RED}--endpoints expects "author/slug" (e.g. deepseek/deepseek-v4-flash-0731)${RESET}`);
-    process.exit(1);
+    throw new Error(`-e expects "author/slug", got "${slug}" (e.g. deepseek/deepseek-v4-flash-0731)`);
   }
-
-  const key = getOpenRouterKey();
   const url = `https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(model)}/endpoints`;
-  const quantFilter = parsed.values.quant
-    ? (parsed.values.quant as string).split(",").map((s) => s.trim().toLowerCase())
-    : null;
-
-  const zdrInfo = await fetchZdrEndpointKeys(key);
 
   if (!modeQuiet) process.stderr.write(`${DIM}Fetching endpoints for ${slug}...${RESET}\n`);
   let res: Response;
@@ -782,8 +1011,8 @@ async function endpoints(): Promise<void> {
     "context_length",
     "status",
   ] as const;
-  const eps = d.endpoints as OREndpoint[];
-  for (const [i, e] of eps.entries()) {
+  const epsAll = d.endpoints as OREndpoint[];
+  for (const [i, e] of epsAll.entries()) {
     const missing = required.filter((k) => !(k in e));
     if (missing.length > 0) {
       throw new Error(`endpoint[${i}] (${e.name ?? "?"}) missing fields: ${missing.join(", ")}`);
@@ -798,49 +1027,58 @@ async function endpoints(): Promise<void> {
     }
   }
 
-  const hasPerf = eps.some((e) => e.throughput_last_30m != null);
-  if (!hasPerf) {
-    process.stderr.write(
-      `${YELLOW}Warning: all endpoint throughput/latency stats are null — percentiles require an authenticated API key (this key appears unauthenticated for this call).${RESET}\n`,
+  const fetched: EndpointFetch = { slug, id: d.id ?? slug, name: d.name ?? "", eps: epsAll };
+  writeCache(cacheKey, fetched);
+  return fetched;
+}
+
+interface EndpointRow {
+  Provider: string;
+  Quant: string;
+  ZDR: string;
+  Model: string;
+  "$in/M": string;
+  "$out/M": string;
+  p50t: string;
+  p90t: string;
+  p50lat: string;
+  up5m: string;
+  ctx: string;
+  status: string;
+}
+
+function applyQuant(eps: OREndpoint[], slugForErr: string): OREndpoint[] {
+  const q = parsed.values.quant.trim();
+  const quantFilter = q ? q.split(",").map((s) => s.trim().toLowerCase()) : null;
+  if (!quantFilter) return eps;
+  const filtered = eps.filter((e) => e.quantization != null && quantFilter.includes(e.quantization.toLowerCase()));
+  if (filtered.length === 0) {
+    throw new Error(
+      `--quant ${quantFilter.join(",")} matches no endpoints for ${slugForErr} (available: ${[...new Set(eps.map((e) => e.quantization ?? "unknown"))].sort().join(", ")})`,
     );
   }
+  if (!modeQuiet) {
+    process.stderr.write(
+      `${DIM}Quant filter (${quantFilter.join(",")}): ${eps.length} → ${filtered.length} endpoints${RESET}\n`,
+    );
+  }
+  return filtered;
+}
 
-  const isZdr = (e: OREndpoint): boolean =>
+const isZdrEndpoint =
+  (zdrInfo: ZdrInfo) =>
+  (e: OREndpoint): boolean =>
     (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
 
-  let filtered = eps;
-  if (quantFilter && quantFilter.length > 0) {
-    const before = filtered.length;
-    filtered = filtered.filter((e) => e.quantization != null && quantFilter.includes(e.quantization.toLowerCase()));
-    if (!modeQuiet && filtered.length !== before) {
-      process.stderr.write(
-        `${DIM}Quant filter (${quantFilter.join(",")}): ${before} → ${filtered.length} endpoints${RESET}\n`,
-      );
-    }
-    if (filtered.length === 0) {
-      throw new Error(
-        `--quant ${quantFilter.join(",")} matches no endpoints for ${slug} (available: ${[...new Set(eps.map((e) => e.quantization ?? "unknown"))].sort().join(", ")})`,
-      );
-    }
-  }
-
-  interface Row {
-    Provider: string;
-    Quant: string;
-    ZDR: string;
-    "$in/M": string;
-    "$out/M": string;
-    p50t: string;
-    p90t: string;
-    p50lat: string;
-    up5m: string;
-    ctx: string;
-    status: string;
-  }
-
+function endpointRows(filtered: OREndpoint[], zdrInfo: ZdrInfo, modelShort: (e: OREndpoint) => string): EndpointRow[] {
   const zdrKnown = zdrInfo.tags.size > 0;
-  const rows: Row[] = filtered
-    .sort((a, b) => parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt))
+  const isZdr = isZdrEndpoint(zdrInfo);
+  return filtered
+    .slice()
+    .sort(
+      (a, b) =>
+        a.provider_name.localeCompare(b.provider_name) || parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt),
+    )
     .map((e) => {
       const pin = parsePrice(e.pricing.prompt);
       const pout = parsePrice(e.pricing.completion);
@@ -852,6 +1090,7 @@ async function endpoints(): Promise<void> {
         Provider: `${e.provider_name}${e.is_byok ? ` ${YELLOW}(BYOK)${RESET}` : ""}`,
         Quant: e.quantization ?? "-",
         ZDR: zdrKnown ? (zdr ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`) : "",
+        Model: modelShort(e),
         "$in/M": Number.isNaN(pin) ? "(dyn)" : fmtPrice(pin),
         "$out/M": Number.isNaN(pout) ? "(dyn)" : fmtPrice(pout),
         p50t: t?.p50 != null ? `${CYAN}${t.p50.toFixed(0)}${RESET}` : "--",
@@ -862,14 +1101,186 @@ async function endpoints(): Promise<void> {
         status: statusOk ? `${GREEN}ok${RESET}` : `${RED}${e.status}${RESET}`,
       };
     });
+}
+
+const ROW_COLS = [
+  "Provider",
+  "Quant",
+  "ZDR",
+  "Model",
+  "$in/M",
+  "$out/M",
+  "p50t",
+  "p90t",
+  "p50lat",
+  "up5m",
+  "ctx",
+  "status",
+];
+
+function routingHintLines(filtered: OREndpoint[], zdrInfo: ZdrInfo): string[] {
+  const zdrKnown = zdrInfo.tags.size > 0;
+  const isZdr = isZdrEndpoint(zdrInfo);
+  const healthyBase = filtered.filter((e) => e.status === 0 && e.throughput_last_30m != null);
+  const healthy = zdrKnown ? healthyBase.filter(isZdr) : healthyBase;
+  const lines: string[] = [];
+  if (healthyBase.length > 0 && zdrKnown && healthy.length === 0) {
+    lines.push(
+      `\n${YELLOW}Warning: no ZDR-compliant healthy endpoints with throughput stats — with zdr=true in pi.nix, none of these could actually be used.${RESET}`,
+    );
+  }
+  if (healthy.length === 0) {
+    if (lines.length > 0) return lines;
+    return [`\n${YELLOW}No healthy endpoints with throughput stats — cannot suggest a routing floor.${RESET}`];
+  }
+  const cheap = [...healthy].sort((a, b) => parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt))[0];
+  const p50s = healthy
+    .map((e) => e.throughput_last_30m?.p50)
+    .filter((v): v is number => v != null)
+    .sort((a, b) => a - b);
+  const p90s = healthy
+    .map((e) => e.throughput_last_30m?.p90)
+    .filter((v): v is number => v != null)
+    .sort((a, b) => a - b);
+  lines.push(`\n${BOLD}Routing hints${RESET}`);
+  if (cheap?.throughput_last_30m) {
+    lines.push(
+      `  Cheapest healthy: ${CYAN}${cheap.provider_name}/${cheap.tag}${RESET} p50=${cheap.throughput_last_30m.p50?.toFixed(0)} p90=${cheap.throughput_last_30m.p90?.toFixed(0)} tok/s`,
+    );
+  }
+  lines.push(
+    `  Median across ${healthy.length} healthy: p50=${median(p50s).toFixed(0)}, p90=${median(p90s).toFixed(0)} tok/s`,
+  );
+  const floor = { p50: Math.round(median(p50s) * 0.8), p90: Math.round(median(p90s) * 0.8) };
+  lines.push(`  Suggested preferred_min_throughput (80% of median): ${JSON.stringify(floor)}`);
+  const demoted = healthy.filter(
+    (e) =>
+      (e.throughput_last_30m?.p90 != null && e.throughput_last_30m?.p90 < floor.p90) ||
+      (e.throughput_last_30m?.p50 != null && e.throughput_last_30m?.p50 < floor.p50),
+  );
+  lines.push(
+    demoted.length > 0
+      ? `  Would demote: ${demoted.map((e) => e.provider_name).join(", ")}`
+      : `  Nobody demoted at that floor — all healthy endpoints keep preferred status`,
+  );
+  return lines;
+}
+
+// ── Endpoints orchestration (single & cross-model) ──
+
+function shortModelName(id: string): string {
+  return (id.includes("/") ? id.split("/").pop() : id) ?? id;
+}
+
+async function endpoints(): Promise<void> {
+  const slugs = [...new Set(modeEndpointSlugs)];
+  const key = getOpenRouterKey();
+  const zdrInfo = await fetchZdrEndpointKeys(key);
+
+  // canonical_slug + embedded AA benchmarks come from the public models list.
+  const canonBySlug = new Map<string, string>();
+  const benchById = new Map<string, { coding?: number; intel?: number }>();
+  try {
+    for (const m of await fetchORModels()) {
+      canonBySlug.set(m.id, m.canonical_slug ?? m.id);
+      const aa = m.benchmarks?.artificial_analysis;
+      if (aa) {
+        benchById.set(m.id, { coding: aa.coding_index, intel: aa.intelligence_index });
+      }
+    }
+  } catch {
+    // public list unavailable → fall back to short slug for stats (may be zeros), no benchmarks
+  }
+
+  const results = await Promise.all(
+    slugs.map(async (s) => {
+      const r = await fetchModelEndpoints(s, key);
+      r.eps = applyQuant(r.eps, s);
+      return r;
+    }),
+  );
+
+  if (results.length === 1) {
+    const r = results[0];
+    if (!r) return;
+    const canon = canonBySlug.get(r.slug);
+
+    if (modeJson) {
+      console.log(
+        JSON.stringify(
+          {
+            model: r.id,
+            canonical_slug: canon ?? null,
+            benchmarks: benchById.get(r.slug) ?? null,
+            zdrKnown: zdrInfo.tags.size > 0 ? [...zdrInfo.tags].sort() : null,
+            effective_pricing: await fetchEffPricing(canon ?? r.slug),
+            endpoints: r.eps,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    console.log(
+      `\n${BOLD}${r.id} — ${r.name}${RESET}  ${DIM}(${r.eps.length} endpoints, provider-sorted${parsed.values.quant.trim() ? `, quant=${parsed.values.quant.trim()}` : ""})${RESET}`,
+    );
+    console.log(
+      Bun.inspect.table(
+        endpointRows(r.eps, zdrInfo, () => ""),
+        ROW_COLS.filter((c) => c !== "Model"),
+      ),
+    );
+
+    for (const l of effLines(await fetchEffPricing(canon ?? r.slug))) console.log(l);
+    const b = benchById.get(r.slug);
+    if (b?.coding != null || b?.intel != null) {
+      const parts = [
+        b.coding != null ? `coding=${b.coding}` : null,
+        b.intel != null ? `intel=${b.intel}` : null,
+      ].filter(Boolean);
+      console.log(`  Benchmarks (OpenRouter-embedded): ${parts.join(" ")}`);
+    }
+    for (const l of routingHintLines(r.eps, zdrInfo)) console.log(l);
+    return;
+  }
+
+  // ── Cross-model comparison (≥2 slugs) ──
+
+  const agg = await Promise.all(
+    results.map(async (r) => {
+      const routable = pickRoutable(r.eps, zdrInfo);
+      const canon = canonBySlug.get(r.slug);
+      return {
+        r,
+        routable,
+        stIn: priceStats(routable.map((e) => parsePrice(e.pricing.prompt))),
+        stOut: priceStats(routable.map((e) => parsePrice(e.pricing.completion))),
+        p50med: median(routable.map((e) => e.throughput_last_30m?.p50).filter((v): v is number => v != null)),
+        eff: await fetchEffPricing(canon ?? r.slug),
+        bench: benchById.get(r.slug),
+      };
+    }),
+  );
 
   if (modeJson) {
     console.log(
       JSON.stringify(
         {
-          model: d.id ?? slug,
-          zdrKnown: zdrKnown ? [...zdrInfo.tags].sort() : null,
-          endpoints: filtered.map((e) => ({ ...e, zdr_compliant: isZdr(e) })),
+          range: RANGE_LABELS[modeRange] ?? (modeRange || "today"),
+          models: results.map((r) => ({ id: r.id, slug: r.slug, name: r.name, endpoints: r.eps })),
+          comparison: {
+            per_model: agg.map((a) => ({
+              slug: a.r.slug,
+              routable_endpoints: a.routable.length,
+              listed_input: a.stIn,
+              listed_output: a.stOut,
+              median_p50_throughput: Number.isNaN(a.p50med) ? null : a.p50med,
+              effective: a.eff,
+              benchmarks: a.bench ?? null,
+            })),
+          },
         },
         null,
         2,
@@ -879,74 +1290,78 @@ async function endpoints(): Promise<void> {
   }
 
   console.log(
-    `\n${BOLD}${d.id ?? slug} — ${d.name ?? ""}${RESET}  ${DIM}(${filtered.length} endpoints, price-sorted${quantFilter ? `, quant=${quantFilter.join(",")}` : ""})${RESET}`,
-  );
-  console.log(
-    Bun.inspect.table(rows, [
-      "Provider",
-      "Quant",
-      "ZDR",
-      "$in/M",
-      "$out/M",
-      "p50t",
-      "p90t",
-      "p50lat",
-      "up5m",
-      "ctx",
-      "status",
-    ]),
+    `\n${BOLD}${results.map((r) => r.slug).join(" vs ")}${RESET}  ${DIM}(${agg.reduce((n, a) => n + a.routable.length, 0)} routable endpoints, provider-sorted${parsed.values.quant.trim() ? `, quant=${parsed.values.quant.trim()}` : ""})${RESET}`,
   );
 
-  // Routing hints. When ZDR info is known, only ZDR-compliant endpoints are
-  // usable (pi sends zdr=true), so the floor must be computed over those.
-  const healthyBase = filtered.filter((e) => e.status === 0 && e.throughput_last_30m != null);
-  const healthy = zdrKnown ? healthyBase.filter(isZdr) : healthyBase;
-  if (healthyBase.length > 0 && zdrKnown && healthy.length === 0) {
-    console.log(
-      `\n${YELLOW}Warning: no ZDR-compliant healthy endpoints with throughput stats — with zdr=true in pi.nix, none of these could actually be used.${RESET}`,
-    );
-  }
-  if (healthy.length > 0) {
-    const cheap = [...healthy].sort((a, b) => parsePrice(a.pricing.prompt) - parsePrice(b.pricing.prompt))[0];
-    const p50s = healthy
-      .map((e) => e.throughput_last_30m?.p50)
-      .filter((v): v is number => v != null)
-      .sort((a, b) => a - b);
-    const p90s = healthy
-      .map((e) => e.throughput_last_30m?.p90)
-      .filter((v): v is number => v != null)
-      .sort((a, b) => a - b);
-    const med = (xs: number[]) => (xs.length > 0 ? (xs[Math.floor(xs.length / 2)] ?? 0) : 0);
-    console.log(`\n${BOLD}Routing hints${RESET}`);
-    if (cheap?.throughput_last_30m) {
+  // Merged view. Same-provider rows land adjacent, so one provider's pricing of
+  // both models is directly comparable down a column.
+  console.log(
+    Bun.inspect.table(
+      endpointRows(
+        results.flatMap((r) => r.eps),
+        zdrInfo,
+        (e) => shortModelName(e.model_id ?? e.name),
+      ),
+      ROW_COLS,
+    ),
+  );
+
+  console.log(
+    `\n${BOLD}Per model${RESET}  ${DIM}(listed prices over routable non-dynamic endpoints · eff = traffic-weighted ${RANGE_LABELS[modeRange] ?? (modeRange || "today")})${RESET}`,
+  );
+  const cell = (s: ReturnType<typeof priceStats>, f: (x: number) => string): string =>
+    s ? f(s.med) : `${DIM}--${RESET}`;
+  console.log(
+    Bun.inspect.table(
+      agg.map((a) => {
+        const wIn = a.eff?.weightedInputPrice;
+        const wCache = a.eff?.weightedCacheHitRate;
+        return {
+          Model: shortModelName(a.r.id),
+          N: a.routable.length,
+          "In med": cell(a.stIn, fmtPrice),
+          "In avg": a.stIn ? fmtPrice(a.stIn.avg) : `${DIM}--${RESET}`,
+          "Out med": cell(a.stOut, fmtPrice),
+          "Eff in": wIn != null ? fmtPrice(wIn) : `${DIM}--${RESET}`,
+          "Cache%": wCache != null ? `${(wCache * 100).toFixed(0)}%` : "--",
+          Vol: a.eff ? humanTokens(a.eff.providerSummaries.reduce((t, p) => t + p.totalTokens, 0)) : "--",
+          p50t: Number.isNaN(a.p50med) ? `${DIM}--${RESET}` : a.p50med.toFixed(0),
+          Coding: a.bench?.coding != null ? fmtScore(a.bench.coding) : `${DIM}--${RESET}`,
+          Intel: a.bench?.intel != null ? fmtScore(a.bench.intel) : `${DIM}--${RESET}`,
+        };
+      }),
+      ["Model", "N", "In med", "In avg", "Out med", "Eff in", "Cache%", "Vol", "p50t", "Coding", "Intel"],
+    ),
+  );
+
+  const pooledIn = priceStats(agg.flatMap((a) => a.routable.map((e) => parsePrice(e.pricing.prompt))));
+  const pricedN = agg.reduce(
+    (n, a) => n + a.routable.filter((e) => Number.isFinite(parsePrice(e.pricing.prompt))).length,
+    0,
+  );
+  const dynN = agg.reduce((n, a) => n + a.routable.length, 0) - pricedN;
+  console.log(
+    `  Pooled listed in-price: ${pooledIn ? `med ${fmtPrice(pooledIn.med)}, avg ${fmtPrice(pooledIn.avg)} (${pricedN} endpoints)` : "no priced endpoints"}${dynN > 0 ? ` · ${dynN} free/dynamic excluded` : ""}`,
+  );
+
+  // Value: benchmark points per median listed input-dollar (OR-embedded coding index).
+  const valued = agg
+    .flatMap((a) => {
+      if (a.bench?.coding == null || !a.stIn) return [];
+      return [{ slug: a.r.slug, coding: a.bench.coding, medIn: a.stIn.med }];
+    })
+    .map((v) => ({ ...v, ratio: v.medIn > 0 ? v.coding / v.medIn : Infinity }))
+    .sort((a, b) => b.ratio - a.ratio);
+  if (valued.length >= 2) {
+    console.log(`\n${BOLD}Value (coding pts ÷ median listed-in)${RESET}`);
+    for (const v of valued) {
+      const ratio = v.ratio === Infinity ? "free" : `${v.ratio.toFixed(0)} pts/$`;
       console.log(
-        `  Cheapest healthy: ${CYAN}${cheap.provider_name}/${cheap.tag}${RESET} p50=${cheap.throughput_last_30m.p50?.toFixed(0)} p90=${cheap.throughput_last_30m.p90?.toFixed(0)} tok/s`,
+        `  ${CYAN}${shortModelName(v.slug)}${RESET}  coding=${v.coding.toFixed(1)}  med-in ${fmtPrice(v.medIn)}  → ${ratio}`,
       );
     }
-    console.log(
-      `  Median across ${healthy.length} healthy: p50=${med(p50s).toFixed(0)}, p90=${med(p90s).toFixed(0)} tok/s`,
-    );
-    const floor = {
-      p50: Math.round(med(p50s) * 0.8),
-      p90: Math.round(med(p90s) * 0.8),
-    };
-    console.log(`  Suggested preferred_min_throughput (80% of median): ${JSON.stringify(floor)}`);
-    const demoted = healthy.filter(
-      (e) =>
-        (e.throughput_last_30m?.p90 != null && e.throughput_last_30m?.p90 < floor.p90) ||
-        (e.throughput_last_30m?.p50 != null && e.throughput_last_30m?.p50 < floor.p50),
-    );
-    if (demoted.length > 0) {
-      console.log(`  Would demote: ${demoted.map((e) => e.provider_name).join(", ")}`);
-    } else {
-      console.log(`  Nobody demoted at that floor — all healthy endpoints keep preferred status`);
-    }
-  } else {
-    console.log(`\n${YELLOW}No healthy endpoints with throughput stats — cannot suggest a routing floor.${RESET}`);
   }
 }
-
-// ── Local mode ──
 
 async function local(): Promise<void> {
   const omlxBase = "http://127.0.0.1:8124/admin/api";
@@ -1528,7 +1943,7 @@ async function modelQuery(): Promise<void> {
 async function main(): Promise<void> {
   if (modeDrift) {
     await drift();
-  } else if (modeEndpoints) {
+  } else if (modeEndpointSlugs.length > 0) {
     await endpoints();
   } else if (modeModels.length > 0) {
     await modelQuery();
