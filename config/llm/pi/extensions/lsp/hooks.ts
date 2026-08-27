@@ -7,6 +7,7 @@
  */
 
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import {
@@ -45,7 +46,12 @@ export function handleToolCall(state: EngineState, toolName: string, input: unkn
   // first interactive LSP call is already warm. Best-effort, never blocks.
   if (toolName === "read") {
     const p = (input as { path?: string } | undefined)?.path;
-    if (p) void warmRead(state, path.resolve(cwd, p));
+    if (p) {
+      const expanded = p === "~" || p.startsWith("~/") ? path.join(homedir(), p.slice(1)) : p;
+      // Swallow everything: a bad path (ENOENT etc.) must never surface as an
+      // unhandled rejection — warming is opportunistic by definition.
+      void warmRead(state, path.resolve(cwd, expanded)).catch(() => {});
+    }
     return;
   }
 
