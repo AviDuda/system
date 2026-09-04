@@ -1,11 +1,16 @@
 ---
 name: avi-manage-skills
-description: Create or edit agent skills in config/llm/skills/. Triggers when user wants to "create a skill", "add a skill", "make a new skill", "edit [name] skill", "update [name]", "change the [name] skill", "write a skill", or needs guidance on skill structure, description writing, progressive disclosure, or skill design. Follows the Agent Skills standard (compatible with Claude Code, Codex, pi).
+description: Create or edit agent skills - global skills in the ~/system repo (config/llm/skills) or project-local skills (.agents/skills/). Triggers when user wants to "create a skill", "add a skill", "make a new skill", "edit [name] skill", "update [name]", "change the [name] skill", "write a skill", or needs guidance on skill structure, description writing, progressive disclosure, or skill design. Follows the Agent Skills standard (compatible with Claude Code, Codex, pi).
 ---
 
 # Avi Manage Skills
 
-Create and edit skills for config/llm/skills/. Each skill is a directory with SKILL.md following the Agent Skills specification.
+Create and edit agent skills. Each skill is a directory with SKILL.md following the Agent Skills specification. Two targets exist:
+
+- **Global** — source of truth is the ~/system repo at `config/llm/skills/<name>/`; home-manager deploys it to `~/.pi/agent/skills` (nix-store symlinks). Edit the repo source, never the deployed copy (nix store is read-only); changes go live on the next home-manager switch. Commit per ~/system conventions.
+- **Project-local** — `<project>/.agents/skills/<name>/SKILL.md`, the cross-harness standard location (Claude Code and Codex read it too). pi loads project skills only after the project is trusted. Always use the `<name>/SKILL.md` directory shape — bare root `.md` files in `.agents/skills/` are ignored. Commit in the project repo per its conventions.
+
+Ask which target when ambiguous. Heuristic: the skill is about one project's domain or machinery → project-local; it would make sense in any repo → global.
 
 ## Workflow
 
@@ -17,7 +22,7 @@ Create and edit skills for config/llm/skills/. Each skill is a directory with SK
    - Does it need executable scripts, or just instructions?
    - Any reference materials to include?
 
-2. **Create directory**: `mkdir -p config/llm/skills/{name}/{references,scripts}` (only create subdirs that are needed)
+2. **Create the directory in the chosen target**: `mkdir -p <target>/<name>` plus `references/` and `scripts/` subdirs (only create subdirs that are needed)
 
 3. **Draft SKILL.md** with:
    - YAML frontmatter (name + description)
@@ -28,7 +33,7 @@ Create and edit skills for config/llm/skills/. Each skill is a directory with SK
 
 ### Edit Mode
 
-1. Read the existing SKILL.md and any referenced files
+1. Read the existing SKILL.md and any referenced files (from the global source or the project path — for global skills, edit the ~/system source, not the deployed nix-store symlink)
 2. Make changes per user request
 3. Preserve existing structure (references/, scripts/) unless restructuring is needed
 
@@ -101,4 +106,4 @@ The bad example gives the agent no way to distinguish this from other skills. Se
 
 ## Examples
 
-Check existing skills in this directory for patterns: knowledge-reference skills (dioxus-guidelines), workflow skills (refactor-split), configuration skills (rust-lint-config). Use them as references when drafting new skills.
+Check existing skills for patterns — global: knowledge-reference skills (dioxus-guidelines), workflow skills (refactor-split), configuration skills (rust-lint-config); project-local: any repo's `.agents/skills/`. Use them as references when drafting new skills.
