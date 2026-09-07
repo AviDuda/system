@@ -201,6 +201,33 @@ export function cookedToText(cooked: string): string {
     .replace(/<li[^>]*>/gi, "- ")
     .replace(/<\/(?:p|div|li|blockquote|h[1-6]|tr|pre)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
+    // Lightbox meta ("image650×454 8.19 KB") is display chrome, not content.
+    .replace(/<div[^>]*class="[^"]*\bmeta\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
+    // Lightbox anchors wrap content images; keep the image, drop the wrapper
+    // (its href is the full-size version of the img src). Stray </a> is
+    // removed by the generic tag strip below.
+    .replace(/<a[^>]*class="[^"]*\blightbox\b[^"]*"[^>]*>/gi, "")
+    // Images → markdown placeholders (src, alt, dimensions). Without this
+    // they vanish entirely; screenshots/gifs in posts are real content.
+    .replace(/<img[^>]*>/gi, (img) => {
+      if (/class="[^"]*\bavatar/.test(img)) return "";
+      if (/class="[^"]*\bemoji\b/.test(img)) return img.match(/\balt="([^"]*)"/)?.[1] ?? "";
+      const src = img.match(/\bsrc="([^"]*)"/)?.[1];
+      if (!src) return "";
+      const alt = img.match(/\balt="([^"]*)"/)?.[1]?.replace(/&quot;/g, '"') || "image";
+      const w = img.match(/\bwidth="(\d+)"/)?.[1];
+      const h = img.match(/\bheight="(\d+)"/)?.[1];
+      const dims = w && h ? `|${w}x${h}` : "";
+      return `\n![${alt}${dims}](${src})\n`;
+    })
+    // Inline links → markdown, so hrefs survive the tag strip (oneboxes are
+    // handled above; this covers normal links). Fragment-only hrefs are
+    // heading anchors (Discourse <a name href="#...">) — keep just the text.
+    .replace(/<a\s[^>]*?\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m: string, href: string, inner: string) => {
+      if (href.startsWith("#")) return inner;
+      const label = inner.replace(/<[^>]+>/g, "").trim() || href;
+      return `[${label}](${href})`;
+    })
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")

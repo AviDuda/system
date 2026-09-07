@@ -166,6 +166,44 @@ describe("cookedToText", () => {
   test("trailing whitespace and blank-line runs are collapsed", () => {
     expect(cookedToText("<p>a</p>\u00a0\u00a0<br>  \n\n\n<p>b</p>")).toBe("a\n\nb");
   });
+
+  test("content images become markdown placeholders with dimensions", () => {
+    const cooked =
+      '<p>demo</p><div class="lightbox-wrapper"><a class="lightbox" href="https://fz.com/full.png">' +
+      '<img src="https://fz.com/thumb.png" alt="image" width="690" height="412"></a>' +
+      '<div class="meta"><span class="filename">image</span><span class="informations">690×412</span></div></div>';
+    expect(cookedToText(cooked)).toBe("demo\n\n![image|690x412](https://fz.com/thumb.png)");
+  });
+
+  test("animated gif placeholder keeps its alt", () => {
+    expect(cookedToText('<p><img src="https://fz.com/demo.gif" alt="chrome_demo" width="674" height="499"></p>')).toBe(
+      "![chrome_demo|674x499](https://fz.com/demo.gif)",
+    );
+  });
+
+  test("emoji images collapse to their alt glyph, avatars to nothing", () => {
+    expect(
+      cookedToText(
+        '<p>hi <img class="emoji" alt="😎" src="https://fz.com/e.png"> <img class="onebox-avatar-inline" src="https://fz.com/a.png" width="20" height="20"></p>',
+      ),
+    ).toBe("hi 😎");
+  });
+
+  test("inline links keep their href as markdown", () => {
+    expect(cookedToText('<p>see <a href="https://fz.com/t/x/1">the thread</a> for detail</p>')).toBe(
+      "see [the thread](https://fz.com/t/x/1) for detail",
+    );
+  });
+
+  test("heading anchor links collapse to their text", () => {
+    expect(cookedToText('<h2><a name="h2-demo-1" href="#h2-demo-1"></a>Demo heading</h2>')).toBe("Demo heading");
+  });
+
+  test("link label strips nested tags", () => {
+    expect(cookedToText('<a href="https://fz.com/x"><strong>bold</strong> label</a>')).toBe(
+      "[bold label](https://fz.com/x)",
+    );
+  });
 });
 
 describe("mergePosts", () => {
