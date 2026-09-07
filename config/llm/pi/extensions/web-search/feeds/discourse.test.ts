@@ -270,6 +270,40 @@ describe("renderDiscourse", () => {
     const md = renderDiscourse(topic, "forum.example.com", 2);
     expect(md).toContain("2 more posts not fetched");
   });
+
+  test("shows post date, edit date, and accepted-answer marker", () => {
+    const md = renderDiscourse(
+      {
+        title: "Solved thread",
+        posts_count: 2,
+        post_stream: {
+          stream: [1, 2],
+          posts: [
+            {
+              post_number: 1,
+              username: "erin",
+              cooked: "<p>problem</p>",
+              score: 2,
+              created_at: "2026-08-01T10:00:00.000Z",
+            },
+            {
+              post_number: 2,
+              username: "finn",
+              cooked: "<p>solution</p>",
+              score: 6,
+              created_at: "2026-08-02T09:00:00.000Z",
+              updated_at: "2026-08-04T11:00:00.000Z",
+              accepted_answer: true,
+            },
+          ],
+        },
+      },
+      "forum.example.com",
+      2,
+    );
+    expect(md).toContain("(#1, 2026-08-01, 2 pts)");
+    expect(md).toContain("(#2, 2026-08-02, edited 2026-08-04, 6 pts, ✓ accepted)");
+  });
 });
 
 describe("renderCategoryList", () => {

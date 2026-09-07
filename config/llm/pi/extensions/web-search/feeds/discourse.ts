@@ -140,6 +140,12 @@ export interface DiscoursePost {
   cooked: string;
   score?: number;
   reply_to_post_number?: number | null;
+  /** ISO timestamp of post creation (topic JSON always provides it). */
+  created_at?: string;
+  /** ISO timestamp of the last edit; differs from created_at only when edited. */
+  updated_at?: string;
+  /** True on the community-confirmed solution (Solved plugin), else false/absent. */
+  accepted_answer?: boolean;
 }
 
 export interface DiscourseTopic {
@@ -195,12 +201,6 @@ export function cookedToText(cooked: string): string {
       const label = link[2].replace(/<[^>]+>/g, "").trim() || "link";
       return `<p>[${label}](${link[1]})</p>`;
     })
-    .replace(/<pre[^>]*>\s*<code[^>]*>/gi, "\n```\n")
-    .replace(/<\/code>\s*<\/pre>/gi, "\n```\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<li[^>]*>/gi, "- ")
-    .replace(/<\/(?:p|div|li|blockquote|h[1-6]|tr|pre)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
     // Lightbox meta ("image650×454 8.19 KB") is display chrome, not content.
     .replace(/<div[^>]*class="[^"]*\bmeta\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
     // Lightbox anchors wrap content images; keep the image, drop the wrapper
@@ -228,6 +228,12 @@ export function cookedToText(cooked: string): string {
       const label = inner.replace(/<[^>]+>/g, "").trim() || href;
       return `[${label}](${href})`;
     })
+    .replace(/<pre[^>]*>\s*<code[^>]*>/gi, "\n```\n")
+    .replace(/<\/code>\s*<\/pre>/gi, "\n```\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<\/(?:p|div|li|blockquote|h[1-6]|tr|pre)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -275,7 +281,12 @@ export function renderDiscourse(topic: DiscourseTopic, host: string, renderedCou
   for (const p of posts) {
     const score = Math.round(p.score ?? 0);
     const reply = p.reply_to_post_number != null ? `, ↩ #${p.reply_to_post_number}` : "";
-    lines.push(`- **${p.username}** (#${p.post_number}, ${score} pts${reply}): ${cookedToText(p.cooked)}`);
+    const date = postDate(p.created_at);
+    const edited = postEdited(p.created_at, p.updated_at);
+    const accepted = p.accepted_answer ? ", ✓ accepted" : "";
+    lines.push(
+      `- **${p.username}** (#${p.post_number}${date}${edited}, ${score} pts${reply}${accepted}): ${cookedToText(p.cooked)}`,
+    );
   }
 
   if (renderedCount < topic.posts_count) {
@@ -289,6 +300,18 @@ export function tagNames(tags: (string | { name?: string; slug?: string })[] | u
   return (tags ?? [])
     .map((t) => (typeof t === "string" ? t : (t.name ?? t.slug)))
     .filter((t): t is string => Boolean(t));
+}
+
+/** Post creation date as YYYY-MM-DD, or "" when the post has no timestamp. */
+export function postDate(createdAt: string | undefined): string {
+  const day = createdAt?.slice(0, 10);
+  return day ? `, ${day}` : "";
+}
+
+/** ", edited YYYY-MM-DD" when the post was edited on a later day, else "". */
+export function postEdited(createdAt: string | undefined, updatedAt: string | undefined): string {
+  if (!createdAt || !updatedAt || updatedAt.slice(0, 10) <= createdAt.slice(0, 10)) return "";
+  return `, edited ${updatedAt.slice(0, 10)}`;
 }
 
 /** Render a category topic list: one bullet per topic with its /t/ path (the
